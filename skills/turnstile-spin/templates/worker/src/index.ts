@@ -28,7 +28,7 @@ export const WORKER_VERSION = '1.0.0';
 
 function corsHeaders(env: Env): Record<string, string> {
 	return {
-		'Access-Control-Allow-Origin': env.ALLOWED_ORIGIN || '*',
+		...(env.ALLOWED_ORIGIN ? { 'Access-Control-Allow-Origin': env.ALLOWED_ORIGIN } : {}),
 		'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
 		'Access-Control-Allow-Headers': 'Content-Type, Idempotency-Key',
 		'Access-Control-Max-Age': '86400',
@@ -121,10 +121,9 @@ async function handleSiteverify(request: Request, env: Env): Promise<Response> {
 			idempotencyKeyPresent: !!parsed.idempotency_key,
 		});
 
-		// Per spec, return 200 even on validation failure — callers should check
-		// response.success, not the HTTP status. (Matches Cloudflare's own
-		// siteverify behavior; the Worker is a thin proxy.)
-		return jsonResponse(response, 200, env);
+		// Token rejection is a successful verification request; upstream HTTP errors are not.
+		const status = upstreamStatus >= 200 && upstreamStatus < 300 ? 200 : upstreamStatus === 504 ? 504 : 502;
+		return jsonResponse(response, status, env);
 	} catch (err) {
 		if (err instanceof SiteverifyError) {
 			const body = errorResponse(err.code, Date.now() - startedAt, WORKER_VERSION);

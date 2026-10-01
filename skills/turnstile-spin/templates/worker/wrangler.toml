@@ -4,7 +4,7 @@ compatibility_date = "2026-05-01"
 compatibility_flags = ["nodejs_compat"]
 
 # Serve the post-deploy form (public/post-deploy.html) as a static asset.
-# After deploy, customers land on /post-deploy.html with their Worker URL
+# After deploy, customers land on /post-deploy with their Worker URL
 # prefilled, and can create a Turnstile widget without leaving the flow.
 [assets]
 directory = "./public"
@@ -18,8 +18,8 @@ enabled = true
 [vars]
 # CORS allowed origin. Override per-environment.
 # In production, set this to your customer-facing domain (e.g. "https://example.com").
-# Leaving as "*" for development; production deploys MUST set this explicitly.
-ALLOWED_ORIGIN = "*"
+# Empty disables cross-origin browser access. Set an explicit domain before use.
+ALLOWED_ORIGIN = ""
 
 # Optional: defense against cross-site token replay. If set, the Worker
 # rejects siteverify responses whose hostname doesn't match. Set this to

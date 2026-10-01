@@ -8,8 +8,8 @@
 export interface Env {
 	/** Turnstile secret key. Set via `wrangler secret put TURNSTILE_SECRET_KEY`. */
 	TURNSTILE_SECRET_KEY: string;
-	/** CORS allowed origin. Default "*" for dev; must be set explicitly for prod. */
-	ALLOWED_ORIGIN: string;
+	/** CORS allowed origin. Empty or absent disables cross-origin browser access. */
+	ALLOWED_ORIGIN?: string;
 	/**
 	 * Optional. If set, the Worker rejects siteverify responses whose `hostname`
 	 * does not match this value. Defends against cross-site token replay.

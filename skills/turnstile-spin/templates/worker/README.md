@@ -1,12 +1,13 @@
 # turnstile-siteverify (Worker template)
 
-The managed siteverify Worker template that ships inside the [Turnstile Spin](https://developers.cloudflare.com/turnstile/spin/) skill. The Spin agent deploys this template into the user's Cloudflare account as the backend for `siteverify` token validation.
+A standalone Cloudflare Turnstile validation Worker maintained by Agent Platform.
+The original Cloudflare MIT license is retained. This import includes the Worker
+and its tests; it does not include the surrounding deployment skill or scripts.
 
-You are reading this either because the Spin skill copied it into your project directory, or because you navigated to `cloudflare/skills/skills/turnstile-spin/templates/worker/` directly.
+## Manual deployment
 
-## Manual deploy and recovery
-
-Before creating a widget, call `scripts/worker-deploy.sh --preflight-only --name <approved-worker-name>` with the same selected account and approved executables (no `WIDGET_SECRET` needed). Proceed with widget creation only on `status: ok`; both `name_conflict` and `worker_lookup_failed` stop all mutations. The actual deploy repeats the lookup because the first check is not an atomic reservation.
+Choose the target account and an unused Worker name, configure the allowed origin
+and optional expected hostname, then use an approved Wrangler installation.
 
 This template requires Node 24 (or Node 26+); its pinned Vitest release does not support Node 20. Approve an absolute, preinstalled Wrangler executable outside this project and verify its version before any credential-bearing command.
 
@@ -87,7 +88,7 @@ On validation failure, `success` is `false` and `error-codes` lists the reasons.
 | `timeout-or-duplicate`     | Token expired (>5min) or already validated                          |
 | `invalid-content-type`     | Body content-type was not JSON or form-encoded                      |
 | `upstream-unreachable`     | Could not reach `challenges.cloudflare.com`                         |
-| `upstream-timeout`         | Upstream took longer than 5 seconds                                 |
+| `upstream-timeout`         | Upstream timed out: 5 seconds per attempt, at most two attempts                                 |
 | `hostname-mismatch`        | `EXPECTED_HOSTNAME` is set and the response hostname did not match  |
 | `bad-request`              | Generic catch-all for malformed input                               |
 | `internal-error`           | Unhandled error in the Worker                                       |
@@ -97,7 +98,7 @@ On validation failure, `success` is `false` and `error-codes` lists the reasons.
 | Variable                | Type    | Default   | Purpose                                                             |
 | ----------------------- | ------- | --------- | ------------------------------------------------------------------- |
 | `TURNSTILE_SECRET_KEY`  | secret  | (required)| Widget secret. Set via `wrangler secret put TURNSTILE_SECRET_KEY`.  |
-| `ALLOWED_ORIGIN`        | var     | `*`       | CORS allowed origin. Lock down to your customer-facing domain.      |
+| `ALLOWED_ORIGIN`        | var     | empty       | CORS allowed origin. Empty disables cross-origin browser access; set your domain.      |
 | `EXPECTED_HOSTNAME`     | var     | (unset)   | If set, reject siteverify responses where `hostname` differs.       |
 | `LOG_LEVEL`             | var     | `info`    | One of `debug`, `info`, `warn`, `error`. Filters structured logs.   |
 
@@ -147,7 +148,6 @@ After the first deploy, before pointing real traffic:
 npm test                   # unit tests, mocks fetch
 npm run test:integration   # hits real siteverify with test secrets
 npm run typecheck
-npm run openapi:lint
 ```
 
 Cloudflare's documented test secrets:
@@ -173,7 +173,6 @@ test/
 └── validation.test.ts    # Validation surface (health, hostname, structured errors)
 public/
 └── post-deploy.html  # Post-deploy form for the Deploy button path
-openapi.yaml          # OpenAPI 3.1 spec
 wrangler.toml         # Worker config
 ```
 

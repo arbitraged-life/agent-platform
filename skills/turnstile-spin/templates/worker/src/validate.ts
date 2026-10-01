@@ -43,7 +43,7 @@ export async function validate(req: SiteverifyRequest, env: Env, workerVersion: 
 			const result = await fetchWithTimeout(SITEVERIFY_URL, body, UPSTREAM_TIMEOUT_MS);
 			const durationMs = Date.now() - start;
 			if (result.status >= 200 && result.status < 300) {
-				const data = (await result.json()) as SiteverifyResponse;
+				const data = result.data as SiteverifyResponse;
 				data._worker = {
 					duration_ms: durationMs,
 					worker_version: workerVersion,
@@ -63,7 +63,7 @@ export async function validate(req: SiteverifyRequest, env: Env, workerVersion: 
 			}
 			if (!RETRY_ON_STATUSES.has(result.status) || attempt === 1) {
 				// Preserve upstream diagnostics while enforcing failure for non-2xx responses.
-				const data = (await result.json().catch(() => ({}))) as Partial<SiteverifyResponse>;
+				const data = result.data as Partial<SiteverifyResponse>;
 				const response: SiteverifyResponse = {
 					...data,
 					success: false,
@@ -85,15 +85,20 @@ export async function validate(req: SiteverifyRequest, env: Env, workerVersion: 
 	throw new SiteverifyError(502, 'upstream-unreachable', `Upstream siteverify unreachable: ${String(lastErr)}`);
 }
 
-async function fetchWithTimeout(url: string, body: FormData, timeoutMs: number): Promise<Response> {
+async function fetchWithTimeout(url: string, body: FormData, timeoutMs: number): Promise<{ status: number; data: unknown }> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
 	try {
-		return await fetch(url, {
+		const response = await fetch(url, {
 			method: 'POST',
 			body,
 			signal: controller.signal,
 		});
+		const data = await response.json().catch((error: unknown) => {
+			if (response.ok || controller.signal.aborted) throw error;
+			return {};
+		});
+		return { status: response.status, data };
 	} finally {
 		clearTimeout(timer);
 	}

@@ -219,6 +219,7 @@ describe('security regressions', () => {
 		const res = await worker.fetch(new Request('https://w/', {
 			method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: 'fixture' }),
 		}), ENV);
+		expect(res.status).toBe(502);
 		expect((await res.json() as { success: boolean }).success).toBe(false);
 	});
 
@@ -233,5 +234,38 @@ describe('security regressions', () => {
 		expect(serialized).toContain('"cdata_present":true');
 		expect(serialized).not.toContain('private-fixture-value');
 		expect(serialized).not.toContain('cdata_value');
+	});
+});
+
+
+describe('CORS configuration', () => {
+	it('does not grant browser cross-origin access without an explicit origin', async () => {
+		const response = await worker.fetch(new Request('https://w/health'), { TURNSTILE_SECRET_KEY: 'fixture' });
+		expect(response.headers.has('Access-Control-Allow-Origin')).toBe(false);
+	});
+	it('preserves an explicitly configured browser origin', async () => {
+		const response = await worker.fetch(new Request('https://w/health'), { ...ENV, ALLOWED_ORIGIN: 'https://example.com' });
+		expect(response.headers.get('Access-Control-Allow-Origin')).toBe('https://example.com');
+	});
+});
+
+
+describe('upstream response deadline', () => {
+	afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+	it('bounds stalled response bodies across both attempts', async () => {
+		vi.useFakeTimers();
+		const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+			const stream = new ReadableStream({ start(controller) {
+				init?.signal?.addEventListener('abort', () => controller.error(new DOMException('Timed out', 'AbortError')));
+			} });
+			return new Response(stream, { status: 200 });
+		});
+		const pending = worker.fetch(new Request('https://w/', {
+			method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: 'fixture' }),
+		}), ENV);
+		await vi.advanceTimersByTimeAsync(10001);
+		const response = await pending;
+		expect(response.status).toBe(504);
+		expect(upstream).toHaveBeenCalledTimes(2);
 	});
 });
