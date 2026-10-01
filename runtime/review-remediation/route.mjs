@@ -3,7 +3,7 @@ import { eligibleEvent, eligiblePR } from './policy.mjs';
 export async function routeEvent(name,event,policy,api) {
   if (name === 'workflow_dispatch') {
     if (!policy.authorIds?.includes(event.sender?.id)) return [];
-    if (!/^[1-9][0-9]*$/.test(event.inputs?.pr??'') ||
+    if (!/^[1-9][0-9]*$/.test(event.inputs?.pr??'') || !Number.isSafeInteger(Number(event.inputs?.pr)) ||
         !['inspect','remediate','finalize'].includes(event.inputs?.mode)) throw new Error('Invalid manual dispatch');
     return [{pr:Number(event.inputs.pr),mode:event.inputs.mode}];
   }

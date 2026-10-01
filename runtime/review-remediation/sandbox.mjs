@@ -35,7 +35,7 @@ export function changedFiles(before, after) {
       if (a?.type !== 'file' && a?.content === b?.content) continue;
     }
     if ((a && a.type !== 'file') || (b && b.type !== 'file') || a?.binary || b?.binary ||
-        (a && b && a.mode !== b.mode)) throw new Error(`special, binary or mode-only change: ${path}`);
+        (a && b && a.mode !== b.mode) || (!a && b?.mode)) throw new Error(`special, binary or mode-only change: ${path}`);
     changes.push({path,type:'file',content:b?.content ?? null});
   }
   return changes;
@@ -57,14 +57,20 @@ export function runCommand(command,args,{timeoutMs=30000,env={},input='',maxOutp
   });
 }
 
+function mountPath(value) {
+  const path=resolve(value);
+  if(/[\r\n,"]/.test(path))throw new Error('Unsupported Docker mount path');
+  return path;
+}
+
 export function boxArgs(image,root,command,{name,readonly=false,network,verifierDir,env={}}={}) {
   const args=['run','--rm','--init','-i','--name',name,'--read-only','--cap-drop=ALL',
     '--security-opt=no-new-privileges','--pids-limit=256','--memory=2g','--cpus=2',
     '--user',`${process.getuid?.()??1000}:${process.getgid?.()??1000}`,
     '--tmpfs','/tmp:rw,nosuid,nodev,size=512m','-e','HOME=/tmp/home',
-    '--mount',`type=bind,src=${resolve(root)},dst=/workspace${readonly?',readonly':''}`];
+    '--mount',`type=bind,src=${mountPath(root)},dst=/workspace${readonly?',readonly':''}`];
   if(network)args.push(`--network=${network}`);
-  if(verifierDir)args.push('--mount',`type=bind,src=${resolve(verifierDir)},dst=/verifier,readonly`);
+  if(verifierDir)args.push('--mount',`type=bind,src=${mountPath(verifierDir)},dst=/verifier,readonly`);
   for(const key of Object.keys(env)) {
     if(!/^[A-Z][A-Z0-9_]*$/.test(key))throw new Error('invalid environment name');
     args.push('-e',key);
@@ -106,7 +112,7 @@ export async function runWithInferenceProxy(image,root,command,{proxyEnvironment
       '--security-opt=no-new-privileges','--pids-limit=64','--memory=256m','--cpus=1',
       '--user',`${process.getuid?.()??1000}:${process.getgid?.()??1000}`,'--network=bridge',
       '--tmpfs','/tmp:rw,nosuid,nodev,size=64m',
-      '--mount',`type=bind,src=${resolve(controllerDir)},dst=/controller,readonly`];
+      '--mount',`type=bind,src=${mountPath(controllerDir)},dst=/controller,readonly`];
     for(const key of Object.keys(proxyEnvironment))args.push('-e',key);
     await docker([...args,image,'node','/controller/inference-proxy.mjs'],{env:proxyEnvironment});
     await docker(['network','connect','--alias','inference',network,proxy]);

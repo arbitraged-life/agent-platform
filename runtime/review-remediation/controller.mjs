@@ -88,7 +88,7 @@ export async function remediate({api, policy, executor, number, apply=false}) {
           record.stage='publish';
           const current = await api.rest(`/repos/${policy.repository}/pulls/${number}`);
           const fresh = (await api.threads(policy.repository,number)).map(t=>visibleThread(t,identity,api.signingKeys));
-          const matching = fresh.filter(t=>threads.some(old=>old.id===t.id));
+          const matching = selectThreads(fresh,policy);
           if (!eligiblePR(current,policy) || current.head.sha!==pr.head.sha || fingerprint(current,matching)!==key)
             throw new Error('PR or discussion changed during remediation');
           const commit = await api.publish(policy.repository,pr.head.ref,pr.head.sha,changes);
@@ -123,13 +123,23 @@ export async function finalize({api,policy,number}) {
       const current=await api.rest(`/repos/${policy.repository}/pulls/${number}`);
       const rawThread=(await api.threads(policy.repository,number)).find(t=>t.id===proof.threadId);
       const thread=rawThread && visibleThread(rawThread,identity,api.signingKeys);
-      if (!thread || !canResolve(current,thread,proof,checks,policy)) continue;
+      if (!thread) continue;
       const body=`Addressed in ${proof.headSha}. Independent verifier \`${proof.verifier}\` failed before the change and passed afterward; required CI passed for this exact commit.\n\n`+
         seal({type:'resolution',threadId:thread.id,headSha:proof.headSha},api.signingKeys[0]);
       const alreadyReplied=rawThread.comments.some(c=>{
         const receipt=c.user.id===identity.id && unseal(c.body,api.signingKeys);
         return receipt?.verified && receipt.data.type==='resolution' && receipt.data.threadId===thread.id && receipt.data.headSha===proof.headSha;
       });
+      // A confirmed resolution may precede a failed ledger PATCH. Recover only
+      // from our authenticated receipt with the same head, discussion and checks.
+      if(thread.isResolved) {
+        if(alreadyReplied && canResolve(current,{...thread,isResolved:false},proof,checks,policy)) {
+          proof.resolved=true;resolved++;
+          await update(api,policy.repository,entry.commentId,record);
+        }
+        continue;
+      }
+      if(!canResolve(current,thread,proof,checks,policy))continue;
       if(!alreadyReplied)await api.rest(`/repos/${policy.repository}/pulls/${number}/comments/${proof.rootCommentId}/replies`,'POST',{body});
       const last=await api.rest(`/repos/${policy.repository}/pulls/${number}`);
       const lastThread=(await api.threads(policy.repository,number)).map(t=>visibleThread(t,identity,api.signingKeys)).find(t=>t.id===proof.threadId);

@@ -131,3 +131,37 @@ test('corrupt controller receipts cannot silently reset attempt history',async()
  await assert.rejects(()=>remediate({...f,number:7,apply:false}),/receipt/i);
  assert.equal(f.counts().agentCalls,0);
 });
+
+test('publication stops when selected feedback is resolved, truncated, or expanded',async()=>{
+  for(const change of ['resolved','truncated','added']) {
+    const f=fixture(),original=f.executor.run;
+    f.executor.run=async()=>{
+      const result=await original();
+      if(change==='resolved')f.thread.isResolved=true;
+      if(change==='truncated')f.thread.truncated=true;
+      if(change==='added')f.api.threads=async()=>[structuredClone(f.thread),{...structuredClone(f.thread),id:'T2'}];
+      return result;
+    };
+    assert.equal((await remediate({...f,number:7,apply:true})).status,'failed');
+    assert.equal(f.counts().published,0);
+  }
+});
+
+test('authenticated resolution receipt recovers a failed ledger update without resolving twice',async()=>{
+  const f=fixture();await remediate({...f,number:7,apply:true});f.green();
+  const rest=f.api.rest,resolve=f.api.resolve;
+  let unavailable=true,resolutions=0;
+  f.api.resolve=async(...args)=>{resolutions++;await resolve(...args);};
+  f.api.rest=async(path,method,body)=>{
+    if(method==='POST' && path.endsWith('/replies'))
+      f.thread.comments.push({id:444,user:{id:99},body:body.body});
+    if(method==='PATCH' && f.thread.isResolved && unavailable)throw new Error('ledger unavailable');
+    return rest(path,method,body);
+  };
+  await assert.rejects(()=>finalize({...f,number:7}),/ledger unavailable/);
+  assert.equal(f.thread.isResolved,true);
+  unavailable=false;
+  assert.equal((await finalize({...f,number:7})).resolved,1);
+  assert.equal(resolutions,1);
+  assert.equal((await finalize({...f,number:7})).resolved,0);
+});

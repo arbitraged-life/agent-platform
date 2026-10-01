@@ -1,6 +1,7 @@
 from importlib.machinery import SourceFileLoader
 from importlib.util import spec_from_loader, module_from_spec
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -15,12 +16,38 @@ class BoundaryTests(unittest.TestCase):
     def test_relative_imports_are_resolved_against_the_containing_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            file = root / 'entry.mjs'
+            file = root / 'nested' / 'entry.mjs'
+            file.parent.mkdir()
             with patch.object(validation, 'ROOT', root):
-                file.write_text("import '../private/module.mjs';\n")
+                file.write_text("import '../../private/module.mjs';\n")
                 self.assertTrue(validation.boundaries([file]))
-                file.write_text("import './runtime/module.mjs';\n")
+                file.write_text("import '../runtime/module.mjs';\n")
                 self.assertEqual(validation.boundaries([file]), [])
+
+    def test_environment_variants_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ['.env', '.env.local', '.env.production']:
+                file = root / name
+                file.write_text('CONFIG=value')
+                self.assertTrue(validation.boundaries([file], root))
+
+    def test_index_is_checked_even_when_worktree_differs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            file = root / 'example.txt'
+            file.write_text('-----BEGIN ' + 'PRIVATE KEY-----')
+            subprocess.run(['git', '-C', str(root), 'add', 'example.txt'], check=True)
+            file.write_text('safe working copy')
+            with patch.object(validation, 'ROOT', root):
+                with self.assertRaisesRegex(SystemExit, 'private key'):
+                    validation.lint_index()
+                file.unlink()
+                with self.assertRaisesRegex(SystemExit, 'private key'):
+                    validation.lint_index()
+                subprocess.run(['git', '-C', str(root), 'rm', '--cached', '-f', 'example.txt'], check=True, capture_output=True)
+                validation.lint_index()
 
     def test_local_and_floating_package_dependencies_fail(self):
         with tempfile.TemporaryDirectory() as tmp:

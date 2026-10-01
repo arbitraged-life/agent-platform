@@ -148,7 +148,7 @@ export async function resolveProfile(policy, task) {
  check(await realpath(top.trim())===workspace,'workspace must be the repository/worktree root');
  if(profile.requires_isolated_worktree) {
   const {stdout:branch}=await exec('git',['-C',workspace,'branch','--show-current'],{timeout:10000});
-  check(branch.trim() && !['main','master',...policy.protected_branches].includes(branch.trim()),'Writes require a non-protected feature branch');
+  check(branch.trim() && !['main','master',...(policy.protected_branches??[])].includes(branch.trim()),'Writes require a non-protected feature branch');
   const {stdout:dir}=await exec('git',['-C',workspace,'rev-parse','--git-dir'],{timeout:10000});
   const {stdout:common}=await exec('git',['-C',workspace,'rev-parse','--git-common-dir'],{timeout:10000});
   const {stdout:superproject}=await exec('git',['-C',workspace,'rev-parse','--show-superproject-working-tree'],{timeout:10000});

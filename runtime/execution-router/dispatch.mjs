@@ -82,14 +82,14 @@ export async function runPrepared(policy,id,approval={}) {
   const running={...state,status:'running',started_at:now(),heartbeat_at:now(),approval_ref:approval.approval_ref,supervisor_pid:process.pid,verified:false};
   await json(path.join(dir,'status.json'),running);started=true;
   await event(dir,'started',{task_id:id,profile:task.profile,approval_ref:approval.approval_ref});
-  const latestExecutable=await executableIdentity(profile);
-  if(digest(latestExecutable)!==digest(state.executable_identity))throw new Error('Prepared executable changed; prepare a new handoff');
   // Doctor can take seconds: bind the exact branch and workspace bytes again under the lock before spawn.
   await resolveProfile(policy,task);
   if((await workspaceFingerprint(workspace,policy.state_dir)).digest!==state.workspace_fingerprint.digest)throw new Error('Prepared workspace changed before launch; prepare a new handoff');
   if(Date.parse(state.expires_at)<=Date.now())throw new Error('Prepared approval expired before launch');
   let childError;
-  child=spawn(profile.executable,args,{cwd:workspace,env:cleanEnvironment(),shell:false,detached:process.platform!=='win32',stdio:['pipe','pipe','pipe']});
+  const latestExecutable=await executableIdentity(profile);
+  if(digest(latestExecutable)!==digest(state.executable_identity))throw new Error('Prepared executable changed; prepare a new handoff');
+  child=spawn(latestExecutable.path,args,{cwd:workspace,env:cleanEnvironment(),shell:false,detached:process.platform!=='win32',stdio:['pipe','pipe','pipe']});
   const finished=new Promise(resolve=>{child.on('error',err=>{closed=true;childError=err;resolve({code:null,signal:null});});child.on('close',(code,signal)=>{closed=true;resolve({code,signal});});});
   const terminate=reason=>{if(closed||finalized||stopReason)return;stopReason=reason;try{stopChild(child);}catch(error){ioError??=error;}hardKill=setTimeout(()=>{try{killChild(child);}catch(error){ioError??=error;}},2000);};
   terminateOwned=terminate;

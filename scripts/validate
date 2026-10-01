@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -15,29 +16,30 @@ def source_files():
     return [ROOT / name for name in names.split('\0') if name]
 
 
-def boundaries(files):
+def boundaries(files, root=None):
+    root = root or ROOT
     failures = []
     for path in files:
-        relative = path.relative_to(ROOT)
+        relative = path.relative_to(root)
         if path.is_symlink():
             failures.append(f'{relative}: release sources cannot be symlinks')
             continue
-        if path.name == '.env' or path.suffix in ['.pem', '.key']:
+        if (path.name == '.env' or path.name.startswith('.env.')) or path.suffix in ['.pem', '.key']:
             failures.append(f'{relative}: credential-shaped file')
         data = path.read_bytes()
         if b'\0' in data:
             failures.append(f'{relative}: binary asset needs an explicit publication review')
             continue
         text = data.decode('utf-8')
-        if re.search(r'(?:/Users|/home)/[^/\s]+/', text):
+        if re.search(r'(?:/(?:Users|home)/[^/\s]+(?:/|(?=\s|$))|[A-Za-z]:[\\/]Users[\\/][^\\/\s]+)', text):
             failures.append(f'{relative}: absolute user-directory reference')
         if re.search(r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----', text):
             failures.append(f'{relative}: private key')
         if path.suffix in ['.mjs', '.js', '.ts']:
             for match in re.finditer(r'(?:from\s*|import\s*\(\s*|import\s+)[\x22\x27](\.[^\x22\x27]+)[\x22\x27]', text):
-                if not (path.parent / match[1]).resolve().is_relative_to(ROOT.resolve()):
+                if not (path.parent / match[1]).resolve().is_relative_to(root.resolve()):
                     failures.append(f'{relative}: import escapes public package boundary')
-        if path.suffix in ['.yml', '.yaml'] and '.github/workflows' in str(relative):
+        if path.suffix in ['.yml', '.yaml'] and relative.parts[:2] == ('.github', 'workflows'):
             for line in text.splitlines():
                 match = re.search(r'\buses:\s*([^\s#]+)', line)
                 if match and not match[1].startswith('./') and not re.search(r'@[0-9a-f]{40}$', match[1]):
@@ -54,19 +56,39 @@ def boundaries(files):
     return failures
 
 
+def lint_sources(files, root):
+    errors = boundaries(files, root)
+    if errors:
+        raise SystemExit('\n'.join(errors))
+    for path in files:
+        if path.suffix in ['.mjs', '.js', '.cjs']:
+            subprocess.run(['node', '--check', str(path)], check=True, cwd=root)
+    print('Source syntax, JSON, release boundaries, and action pins passed.', flush=True)
+
+
+def lint_index():
+    # Materialize the index, including staged deletions, without changing the worktree.
+    names = subprocess.check_output(['git', '-C', str(ROOT), 'ls-files', '-z'], text=True)
+    with tempfile.TemporaryDirectory(prefix='platform-index-') as directory:
+        root = Path(directory)
+        subprocess.run(['git', '-C', str(ROOT), 'checkout-index', '--all',
+                        '--prefix=' + str(root) + '/'], check=True)
+        lint_sources([root / name for name in names.split('\0') if name], root)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', nargs='?', choices=['ci', 'lint', 'test', 'eval', 'security'], default='ci')
+    parser.add_argument('--staged', action='store_true', help='Lint the Git index instead of working files')
     args = parser.parse_args()
+    if args.staged:
+        if args.command != 'lint':
+            parser.error('--staged is supported only for lint')
+        lint_index()
+        return
     files = source_files()
     if args.command in ['ci', 'lint', 'security']:
-        errors = boundaries(files)
-        if errors:
-            raise SystemExit('\n'.join(errors))
-        for path in files:
-            if path.suffix in ['.mjs', '.js', '.cjs']:
-                subprocess.run(['node', '--check', str(path)], check=True, cwd=ROOT)
-        print('Source syntax, JSON, release boundaries, and action pins passed.', flush=True)
+        lint_sources(files, ROOT)
     if args.command in ['ci', 'test']:
         tests = sorted(str(p.relative_to(ROOT)) for p in ROOT.glob('tests/unit/*.test.mjs'))
         subprocess.run(['node', '--test', *tests], check=True, cwd=ROOT)

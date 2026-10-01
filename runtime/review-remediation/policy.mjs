@@ -58,7 +58,7 @@ export function validateChanges(changes, policy) {
     const parts = c.path.split('/');
     if (seen.has(c.path) || parts.some(x => !x || x === '.' || x === '..') ||
         /[\\\x00-\x1f\x7f]/.test(c.path) || c.type !== 'file' ||
-        /(^|\/)(\.env(?:\..*)?|AGENTS\.md|CLAUDE\.md|GEMINI\.md|secrets?[^/]*|package-lock\.json|bun\.lock)$/.test(c.path) ||
+        /(^|\/)(\.env(?:\..*)?|AGENTS\.md|CLAUDE\.md|GEMINI\.md|secrets?[^/]*|package(?:-lock)?\.json|bun\.lockb?|pnpm-lock\.yaml|yarn\.lock|npm-shrinkwrap\.json|pyproject\.toml|uv\.lock|Pipfile(?:\.lock)?|poetry\.lock|requirements[^/]*\.txt|Cargo\.(?:toml|lock)|go\.(?:mod|sum))$/.test(c.path) ||
         !policy.allowedPrefixes.some(p => p.endsWith('/') ? c.path.startsWith(p) : c.path === p) ||
         policy.deniedPrefixes.some(p => c.path.startsWith(p))) throw new Error(`disallowed change: ${c.path}`);
     seen.add(c.path);

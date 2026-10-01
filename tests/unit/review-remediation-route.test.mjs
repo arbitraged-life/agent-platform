@@ -20,3 +20,8 @@ test('only completed CI runs route to the finalizer, never the agent',async()=>{
   assert.deepEqual(await routeEvent('workflow_run',event,policy,api),[{pr:7,mode:'finalize'}]);
   assert.deepEqual(await routeEvent('workflow_run',{...event,workflow_run:{...event.workflow_run,name:'Other'}},policy,api),[]);
 });
+
+test('manual dispatch rejects lossy and infinite pull request identifiers',async()=>{
+  for(const pr of ['9007199254740993','9'.repeat(400)])
+    await assert.rejects(()=>routeEvent('workflow_dispatch',{sender:{id:1},inputs:{pr,mode:'inspect'}},policy,{}),/Invalid manual dispatch/);
+});

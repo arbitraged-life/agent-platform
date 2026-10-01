@@ -26,7 +26,7 @@ try {
     if(process.env.GITHUB_OUTPUT)await appendFile(process.env.GITHUB_OUTPUT,
       `matrix=${JSON.stringify(result.matrix)}\nhas-work=${result.hasWork}\n`);
   } else {
-    if (!/^[1-9][0-9]*$/.test(values.pr??'') || !['inspect','remediate','finalize'].includes(values.mode))
+    if (!/^[1-9][0-9]*$/.test(values.pr??'') || !Number.isSafeInteger(Number(values.pr)) || !['inspect','remediate','finalize'].includes(values.mode))
       throw new Error('Invalid operation or pull request number');
     const number=Number(values.pr);
     const executor=values.mode==='remediate'?new DockerExecutor(api,policy,{image:values.image,

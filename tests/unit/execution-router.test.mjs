@@ -357,3 +357,13 @@ test('exceptional supervision still kills a SIGTERM-ignoring descendant',async()
   if(ownedGroup){try{originalKill(ownedGroup,'SIGKILL');}catch(error){if(error.code!=='ESRCH')throw error;}}
  }
 });
+
+test('isolated read-only profiles allow omitted protected branches',async()=>{
+ const f=await fixture(),linked=path.join(f.root,'read-only-linked');
+ await exec('git',['-C',f.workspace,'worktree','add','-qb','readonly-feature',linked]);
+ f.data.workspace_roots=[f.root];f.data.profiles['codex-readonly'].requires_isolated_worktree=true;
+ delete f.data.protected_branches;
+ await writeFile(f.policyPath,JSON.stringify(f.data));
+ const policy=await loadPolicy(f.policyPath);
+ assert.equal((await prepare(policy,packet(linked))).status,'prepared');
+});

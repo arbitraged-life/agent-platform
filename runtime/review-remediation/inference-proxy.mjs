@@ -4,7 +4,7 @@ import {pathToFileURL} from 'node:url';
 
 /** This server has no workspace mount and forwards to one trusted HTTPS endpoint. */
 export function createInferenceProxy(config, fetcher=fetch) {
-  if (new URL(config.endpoint).protocol!=='https:' || !config.key || !config.token ||
+  if (new URL(config.endpoint).protocol!=='https:' || !config.key || !config.token || typeof config.model!=='string' || !config.model.trim() ||
       !Number.isInteger(config.maxRequests) || config.maxRequests<1 || config.maxRequests>12 ||
       !Number.isInteger(config.maxOutputTokens) || config.maxOutputTokens<1 || config.maxOutputTokens>4096)
     throw new Error('Invalid inference proxy configuration');
@@ -16,16 +16,20 @@ export function createInferenceProxy(config, fetcher=fetch) {
     const supplied=Buffer.from(req.headers.authorization??'');
     if(supplied.length!==expected.length || !timingSafeEqual(supplied,expected)) {fail(401,'Unauthorized');return;}
     if(req.method!=='POST' || req.url!=='/v1/chat/completions') {fail(404,'Unsupported endpoint');return;}
+    if(requests>=config.maxRequests) {
+      res.setHeader('Connection','close');fail(429,'Attempt inference budget exhausted');return;
+    }
+    requests++;
     try {
       let text='';
       for await(const chunk of req) {
         text+=chunk.toString('utf8');
         if(Buffer.byteLength(text)>262144) {fail(413,'Request too large');return;}
       }
-      const body=JSON.parse(text);
+      let body;
+      try {body=JSON.parse(text);} catch {fail(400,'Invalid JSON body');return;}
+      if(!body || typeof body!=='object' || Array.isArray(body)) {fail(400,'Invalid request body');return;}
       if(body.model!==config.model || !Array.isArray(body.messages)) {fail(400,'Unsupported model or messages');return;}
-      if(requests>=config.maxRequests) {fail(429,'Attempt inference budget exhausted');return;}
-      requests++;
       const allowed=['messages','tools','tool_choice','parallel_tool_calls','temperature','top_p','stream','stream_options'];
       const forwarded=Object.fromEntries(allowed.filter(k=>body[k]!==undefined).map(k=>[k,body[k]]));
       forwarded.model=config.model;

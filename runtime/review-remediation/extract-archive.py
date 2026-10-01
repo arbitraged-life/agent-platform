@@ -1,6 +1,6 @@
 """Extract a GitHub source archive without following archive-created links."""
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import sys
 import tarfile
 
@@ -20,6 +20,8 @@ def extract(archive, destination):
                 if not member.isdir():
                     raise ValueError("missing archive root")
                 continue
+            if any(PureWindowsPath(part).drive for part in parts):
+                raise ValueError("drive-qualified archive path")
             relative = Path(*parts[1:])
             if str(relative) in seen:
                 raise ValueError("duplicate archive path")
