@@ -74,7 +74,7 @@ is absent; do not claim a prompt restriction is enforced by the operating system
 ## Verify and return
 
 Preserve distinctions: `prepared`, `running`, `returned`, `failed`, `timed-out`,
-`cancelled`, `unknown`, `needs-review`, and `verified-complete`. A PID, submitted
+`cancelled`, `output-limit`, `cleanup-uncertain`, `unknown`, `needs-review`, and `verified-complete`. A PID, submitted
 job, zero exit code, or agent assertion is not acceptance. Inspect artifacts and
 re-run appropriate safe checks independently. Supply controller evidence for all
 acceptance criteria before marking verified-complete. Approval/evidence records

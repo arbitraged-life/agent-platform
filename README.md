@@ -22,7 +22,7 @@ only after their own portability, provenance, and behavior checks pass.
 - [Migration provenance](docs/MIGRATION_PROVENANCE.md): source revisions and transformations.
 
 `./scripts/validate lint`, `test`, `eval`, and `security` select individual local
-gates. CI additionally runs independent secret scanners. Paid model runs and
+gates. CI additionally runs an independent secret scanner. Paid model runs and
 live GitHub mutations require explicit deployment configuration and credentials;
 the test suite uses isolated fixtures and fake clients.
 

@@ -19,12 +19,14 @@ reference bound to the prepared digest. Approval references are audit records,
 not an independent authentication mechanism. API-key fallback is disabled.
 A returned run is not verified-complete until the controller supplies evidence.
 `;
-const KEYS = new Set(['policy','profile','facts','task','task-id','approved-digest','approval-ref','evidence']);
+const OPTIONS = {route:['facts'],doctor:['policy','profile'],prepare:['policy','task'],run:['policy','task-id','approved-digest','approval-ref'],status:['policy','task-id'],cancel:['policy','task-id'],verify:['policy','task-id','evidence']};
 function parse(args) {
  const command=args.shift(), options={};
+ if(!Object.hasOwn(OPTIONS,command))throw new Error(`Unknown command: ${command}`);
+ const keys=new Set(OPTIONS[command]);
  while(args.length) {
   const flag=args.shift();
-  if(!flag.startsWith('--') || !KEYS.has(flag.slice(2))) throw new Error(`Unknown option: ${flag}`);
+  if(!flag.startsWith('--') || !keys.has(flag.slice(2))) throw new Error(`Unknown option: ${flag}`);
   const value=args.shift();
   if(!value || value.startsWith('--'))throw new Error(`Value required for ${flag}`);
   if(Object.hasOwn(options,flag.slice(2)))throw new Error(`Duplicate option: ${flag}`);
@@ -64,6 +66,6 @@ async function main() {
   default:throw new Error(`Unknown command: ${command}`);
  }
  console.log(JSON.stringify(result,null,2));
- if(['failed','timed-out','cancelled','needs-review','output-limit'].includes(result.status))process.exitCode=1;
+ if(['failed','timed-out','cancelled','needs-review','output-limit','unknown','cleanup-uncertain'].includes(result.status))process.exitCode=1;
 }
 main().catch(error=>{console.error(JSON.stringify({status:'blocked',error:error.message}));process.exitCode=2;});

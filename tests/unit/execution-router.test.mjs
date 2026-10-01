@@ -393,3 +393,13 @@ test('Unicode whitespace in protected branch names is preserved',async()=>{
  const policy=await loadPolicy(f.policyPath);
  await assert.rejects(()=>prepare(policy,packet(linked,{profile:'codex-write',actions:['edit'],source_write_authorized:true})),/non-protected feature branch/);
 });
+
+test('CLI rejects irrelevant command options and fails stale status queries',async()=>{
+ const f=await fixture(),cli=new URL('../../scripts/execution/router.mjs',import.meta.url).pathname;
+ await assert.rejects(()=>exec(process.execPath,[cli,'doctor','--policy',f.policyPath,'--facts','ignored']),/Unknown option/);
+ await prepare(f.policy,packet(f.workspace));
+ const stateFile=path.join(f.policy.state_dir,'runs','router-test','status.json');
+ const state=JSON.parse(await readFile(stateFile,'utf8'));
+ await writeFile(stateFile,JSON.stringify({...state,status:'running',heartbeat_at:'2000-01-01T00:00:00Z'}));
+ await assert.rejects(()=>exec(process.execPath,[cli,'status','--policy',f.policyPath,'--task-id','router-test']),error=>error.code===1 && JSON.parse(error.stdout).status==='unknown');
+});
