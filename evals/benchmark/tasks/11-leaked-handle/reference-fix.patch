@@ -1,0 +1,26 @@
+--- a/lib.js
++++ b/lib.js
+@@
+   for (const p of paths) {
+     const fd = _open(p);
+-    const buf = Buffer.alloc(3);
+-    fs.readSync(fd, buf, 0, 3, 0);
+-    if (buf.toString() === 'BAD') {
+-      // BUG: skips this file without closing its handle first
+-      results.push({ path: p, ok: false });
+-      continue;
+-    }
+-    _close(fd);
+-    results.push({ path: p, ok: true });
++    try {
++      const buf = Buffer.alloc(3);
++      fs.readSync(fd, buf, 0, 3, 0);
++      if (buf.toString() === 'BAD') {
++        results.push({ path: p, ok: false });
++        continue;
++      }
++      results.push({ path: p, ok: true });
++    } finally {
++      _close(fd);
++    }
+   }

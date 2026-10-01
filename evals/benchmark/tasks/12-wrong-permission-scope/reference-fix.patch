@@ -1,0 +1,11 @@
+--- a/lib.js
++++ b/lib.js
+@@
+ function canAccessProjectResource(user, project) {
+-  // BUG: checks the user's ORG-level role instead of a PROJECT-level role,
+-  // so any org member/admin gets access to every project's resources.
+-  const orgRole = user.orgRoles && user.orgRoles[project.orgId];
+-  return orgRole === 'member' || orgRole === 'admin';
++  const role = user.projectRoles && user.projectRoles[project.id];
++  return role === 'member' || role === 'admin';
+ }

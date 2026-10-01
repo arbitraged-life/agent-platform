@@ -23,3 +23,10 @@ The shared UUID helper, usage mapping, and trace/span transport were normalized
 into `runtime/observability/records.mjs` and `runtime/observability/opik.mjs`. Environment-specific
 configuration discovery and raw content/error capture were not imported. Source
 lifecycle adapters remain active until separately validated consumer cutover.
+
+The offline coding benchmark was clean-imported from `benchmark/` and
+`tests/unit/benchmark.test.mjs` at revision
+`92a774eae4528022982449d172801e6d891cfde3` into `evals/benchmark/` and `tests/unit/`.
+Normalization removes twelve duplicate shell oracle wrappers, validates task
+IDs and checkout containment, bounds child processes, cleans scratch output,
+and replaces real-clock rate-limit grading with a simulated clock.
