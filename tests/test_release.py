@@ -5,7 +5,12 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+# qlty-ignore(bandit:B404): Required CLI execution uses argv arrays without a shell.
 import subprocess
+import shutil
+
+
+GIT_EXECUTABLE = shutil.which('git')
 
 SPEC = importlib.util.spec_from_file_location('release', Path(__file__).resolve().parents[1] / 'scripts/platform-release.py')
 release = importlib.util.module_from_spec(SPEC)
@@ -13,16 +18,21 @@ SPEC.loader.exec_module(release)
 
 
 class ReleaseTests(unittest.TestCase):
+    @unittest.skipUnless(GIT_EXECUTABLE, "Git is required only for release building")
     def test_build_uses_committed_bytes_even_with_hidden_worktree_edits(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / 'repo'
             root.mkdir()
-            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
+            subprocess.run([GIT_EXECUTABLE, 'init', '-q', str(root)], check=True)
             source = root / 'main.txt'
             source.write_text('committed')
-            subprocess.run(['git', '-C', str(root), 'add', 'main.txt'], check=True)
-            subprocess.run(['git', '-C', str(root), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'test'], check=True)
-            subprocess.run(['git', '-C', str(root), 'update-index', '--assume-unchanged', 'main.txt'], check=True)
+            # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
+            subprocess.run([GIT_EXECUTABLE, '-C', str(root), 'add', 'main.txt'], check=True)
+            # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
+            subprocess.run([GIT_EXECUTABLE, '-C', str(root), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'test'], check=True)
+            # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
+            subprocess.run([GIT_EXECUTABLE, '-C', str(root), 'update-index', '--assume-unchanged', 'main.txt'], check=True)
             source.write_text('uncommitted')
             first, second = Path(tmp) / 'first.tar', Path(tmp) / 'second.tar'
             release.build(root, first)

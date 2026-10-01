@@ -44,7 +44,6 @@ class MergeGatePolicyTests(unittest.TestCase):
         result = merge_gate.evaluate_evidence(
             head_sha=SHA,
             required_actions=["ci.yml"],
-            advisory_actions=["security.yml"],
             action_runs=[action(), action("security.yml", conclusion="failure", run_id=11)],
         )
         self.assertTrue(result.allowed)
@@ -55,7 +54,6 @@ class MergeGatePolicyTests(unittest.TestCase):
             head_sha=SHA,
             pr_number=PR_NUMBER,
             required_actions=[],
-            advisory_actions=[],
             action_runs=[],
             provider_enabled=True,
             trusted_publisher_app_id=APP_ID,
@@ -73,7 +71,6 @@ class MergeGatePolicyTests(unittest.TestCase):
             head_sha=SHA,
             pr_number=PR_NUMBER,
             required_actions=[],
-            advisory_actions=[],
             action_runs=[],
             provider_enabled=True,
             trusted_publisher_app_id=APP_ID,
@@ -98,7 +95,6 @@ class MergeGatePolicyTests(unittest.TestCase):
                     head_sha=SHA,
                     pr_number=PR_NUMBER,
                     required_actions=[],
-                    advisory_actions=[],
                     action_runs=[],
                     provider_enabled=True,
                     trusted_publisher_app_id=APP_ID,
@@ -111,7 +107,6 @@ class MergeGatePolicyTests(unittest.TestCase):
         result = merge_gate.evaluate_evidence(
             head_sha=SHA,
             required_actions=["ci.yml", "release.yml"],
-            advisory_actions=[],
             action_runs=[action(), action("release.yml", conclusion="failure", run_id=12)],
         )
         self.assertFalse(result.allowed)
@@ -122,7 +117,6 @@ class MergeGatePolicyTests(unittest.TestCase):
             head_sha=SHA,
             pr_number=PR_NUMBER,
             required_actions=[],
-            advisory_actions=[],
             action_runs=[],
             provider_enabled=True,
             trusted_publisher_app_id=APP_ID,
@@ -137,7 +131,6 @@ class MergeGatePolicyTests(unittest.TestCase):
             head_sha=SHA,
             pr_number=PR_NUMBER,
             required_actions=[],
-            advisory_actions=[],
             action_runs=[],
             provider_enabled=True,
             trusted_publisher_app_id=APP_ID,
@@ -152,7 +145,6 @@ class MergeGatePolicyTests(unittest.TestCase):
         result = merge_gate.evaluate_evidence(
             head_sha="b" * 40,
             required_actions=["ci.yml"],
-            advisory_actions=[],
             action_runs=[action(sha=SHA)],
         )
         self.assertFalse(result.allowed)
@@ -162,7 +154,6 @@ class MergeGatePolicyTests(unittest.TestCase):
         result = merge_gate.evaluate_evidence(
             head_sha=SHA,
             required_actions=["ci.yml"],
-            advisory_actions=[],
             action_runs=[action(run_id=10), action(run_id=11)],
         )
         self.assertFalse(result.allowed)
@@ -173,7 +164,6 @@ class MergeGatePolicyTests(unittest.TestCase):
             head_sha=SHA,
             pr_number=PR_NUMBER,
             required_actions=[],
-            advisory_actions=[],
             action_runs=[],
             provider_enabled=True,
             trusted_publisher_app_id=APP_ID,
@@ -201,7 +191,6 @@ class MergeGatePolicyTests(unittest.TestCase):
                     head_sha=SHA,
                     pr_number=PR_NUMBER,
                     required_actions=[],
-                    advisory_actions=[],
                     action_runs=[],
                     provider_enabled=True,
                     trusted_publisher_app_id=APP_ID,
@@ -214,7 +203,6 @@ class MergeGatePolicyTests(unittest.TestCase):
         result = merge_gate.evaluate_evidence(
             head_sha=SHA,
             required_actions=[],
-            advisory_actions=[],
             action_runs=[],
             provider_enabled=True,
             trusted_publisher_app_id=None,
@@ -243,7 +231,7 @@ class MergeGatePolicyTests(unittest.TestCase):
             checks = merge_gate._get_provider_checks("owner/repo", SHA)
         self.assertEqual(request.call_count, 4)
         result = merge_gate.evaluate_evidence(
-            head_sha=SHA, pr_number=PR_NUMBER, required_actions=[], advisory_actions=[],
+            head_sha=SHA, pr_number=PR_NUMBER, required_actions=[],
             action_runs=[], provider_enabled=True, trusted_publisher_app_id=APP_ID,
             required_provider_workflows=["ci"], provider_checks=checks,
         )

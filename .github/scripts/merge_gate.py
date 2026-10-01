@@ -6,10 +6,15 @@ from __future__ import annotations
 import argparse
 import json
 import re
+# qlty-ignore(bandit:B404): Required CLI execution uses argv arrays without a shell.
 import subprocess
+import shutil
 import sys
 from dataclasses import dataclass
 from typing import Any
+
+
+GH_EXECUTABLE = shutil.which('gh')
 
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -69,12 +74,36 @@ def _single_provider_success(
     return None
 
 
+def _provider_decision(head_sha, pr_number, publisher_id, workflows, checks):
+    workflows = workflows or []
+    if (
+        not isinstance(publisher_id, int)
+        or publisher_id <= 0
+        or not isinstance(pr_number, int)
+        or pr_number <= 0
+        or not workflows
+    ):
+        return EvidenceDecision(False, "provider", "provider configuration requires a trusted publisher ID, PR number, and required workflow set")
+    if len(workflows) != len(set(workflows)):
+        return EvidenceDecision(False, "provider", "provider configuration has duplicate required workflows")
+    for workflow in workflows:
+        reason = _single_provider_success(
+            checks or [],
+            workflow=workflow,
+            sha=head_sha,
+            pr_number=pr_number,
+            publisher_id=publisher_id,
+        )
+        if reason:
+            return EvidenceDecision(False, "provider", reason)
+    return EvidenceDecision(True, "provider", "all required provider workflows passed")
+
+
 def evaluate_evidence(
     *,
     head_sha: str,
     pr_number: int | None = None,
     required_actions: list[str],
-    advisory_actions: list[str],
     action_runs: list[dict[str, Any]],
     provider_enabled: bool = False,
     trusted_publisher_app_id: int | None = None,
@@ -85,28 +114,8 @@ def evaluate_evidence(
     if not _SHA.fullmatch(head_sha):
         return EvidenceDecision(False, "none", "invalid current PR head SHA")
     if provider_enabled:
-        workflows = required_provider_workflows or []
-        if (
-            not isinstance(trusted_publisher_app_id, int)
-            or trusted_publisher_app_id <= 0
-            or not isinstance(pr_number, int)
-            or pr_number <= 0
-            or not workflows
-        ):
-            return EvidenceDecision(False, "provider", "provider configuration requires a trusted publisher ID, PR number, and required workflow set")
-        if len(workflows) != len(set(workflows)):
-            return EvidenceDecision(False, "provider", "provider configuration has duplicate required workflows")
-        for workflow in workflows:
-            reason = _single_provider_success(
-                provider_checks or [],
-                workflow=workflow,
-                sha=head_sha,
-                pr_number=pr_number,
-                publisher_id=trusted_publisher_app_id,
-            )
-            if reason:
-                return EvidenceDecision(False, "provider", reason)
-        return EvidenceDecision(True, "provider", "all required provider workflows passed")
+        return _provider_decision(head_sha, pr_number, trusted_publisher_app_id,
+                                  required_provider_workflows, provider_checks)
 
     if not required_actions:
         return EvidenceDecision(False, "actions", "Actions configuration has no required workflow")
@@ -121,12 +130,18 @@ def evaluate_evidence(
 
 
 def _gh_json(*args: str) -> Any:
-    completed = subprocess.run(["gh", "api", *args], check=True, capture_output=True, text=True, timeout=30)
+    if GH_EXECUTABLE is None:
+        raise ValueError("gh executable is required for GitHub operations")
+    # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
+    completed = subprocess.run([GH_EXECUTABLE, "api", *args], check=True, capture_output=True, text=True, timeout=30)
     return json.loads(completed.stdout)
 
 
 def _gh_pr_json(*args: str) -> Any:
-    completed = subprocess.run(["gh", "pr", *args], check=True, capture_output=True, text=True, timeout=30)
+    if GH_EXECUTABLE is None:
+        raise ValueError("gh executable is required for GitHub operations")
+    # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
+    completed = subprocess.run([GH_EXECUTABLE, "pr", *args], check=True, capture_output=True, text=True, timeout=30)
     return json.loads(completed.stdout)
 
 
@@ -156,35 +171,39 @@ def _get_action_runs(repo: str, workflow: str, sha: str) -> list[dict[str, Any]]
     ]
 
 
+def _check_page(data, expected_count, collected):
+    rows = data.get("check_runs")
+    total = data.get("total_count")
+    if not isinstance(rows, list) or type(total) is not int or total < 0 or len(rows) > 100:
+        raise ValueError("invalid GitHub check-run page response")
+    if total > 1000:
+        raise ValueError("provider check count exceeds the bounded 1000-check scan")
+    if expected_count is not None and total != expected_count:
+        raise ValueError("provider check result changed while paging; retry a fresh pass")
+    if collected + len(rows) > total:
+        raise ValueError("provider check result changed while paging; retry a fresh pass")
+    return rows, total
+
+
+def _scan_provider_checks(repo, sha):
+    checks = []
+    expected_count = None
+    for page in range(1, 11):
+        data = _gh_json(f"repos/{repo}/commits/{sha}/check-runs?filter=all&per_page=100&page={page}")
+        rows, expected_count = _check_page(data, expected_count, len(checks))
+        checks.extend(rows)
+        if len(checks) == expected_count:
+            return checks, page
+        if len(rows) != 100:
+            raise ValueError("truncated GitHub check-run page; refusing incomplete provider evidence")
+    raise ValueError("provider check result exceeds the bounded page scan")
+
+
 def _get_provider_checks(repo: str, sha: str) -> list[dict[str, Any]]:
-    first_pass: list[dict[str, Any]] | None = None
-    for scan in range(2):
-        checks: list[dict[str, Any]] = []
-        expected_count: int | None = None
-        for page in range(1, 11):
-            data = _gh_json(f"repos/{repo}/commits/{sha}/check-runs?filter=all&per_page=100&page={page}")
-            rows = data.get("check_runs")
-            total = data.get("total_count")
-            if not isinstance(rows, list) or type(total) is not int or total < 0 or len(rows) > 100:
-                raise ValueError("invalid GitHub check-run page response")
-            if total > 1000:
-                raise ValueError("provider check count exceeds the bounded 1000-check scan")
-            if expected_count is None:
-                expected_count = total
-            if total != expected_count or len(checks) + len(rows) > total:
-                raise ValueError("provider check result changed while paging; retry a fresh pass")
-            checks.extend(rows)
-            if len(checks) == total:
-                break
-            if len(rows) != 100:
-                raise ValueError("truncated GitHub check-run page; refusing incomplete provider evidence")
-        else:
-            raise ValueError("provider check result exceeds the bounded page scan")
-        if page == 1:
-            break
-        if scan == 0:
-            first_pass = checks
-        elif checks != first_pass:
+    checks, pages = _scan_provider_checks(repo, sha)
+    if pages > 1:
+        second_pass, _ = _scan_provider_checks(repo, sha)
+        if checks != second_pass:
             raise ValueError("provider check result changed between scans; retry a fresh pass")
     return [
         {
@@ -197,6 +216,32 @@ def _get_provider_checks(repo: str, sha: str) -> list[dict[str, Any]]:
         }
         for check in checks
     ]
+
+
+def _collect_action_runs(repo, sha, required_actions, advisory, number):
+    action_runs: list[dict[str, Any]] = []
+    for workflow in required_actions:
+        action_runs.extend(_get_action_runs(repo, workflow, sha))
+    required_action_set = set(required_actions)
+    for workflow in advisory:
+        if workflow in required_action_set:
+            continue
+        try:
+            action_runs.extend(_get_action_runs(repo, workflow, sha))
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+            print(f"PR #{number}: advisory Actions workflow {workflow}: unavailable ({exc})")
+    for workflow in advisory:
+        results = [run for run in action_runs if run.get("workflow") == workflow]
+        if len(results) != 1:
+            state = "missing" if not results else "ambiguous"
+            print(f"PR #{number}: advisory Actions workflow {workflow}: {state}")
+        else:
+            result = results[0]
+            print(
+                f"PR #{number}: advisory Actions workflow {workflow}: "
+                f"{result.get('status')}/{result.get('conclusion') or 'pending'}"
+            )
+    return action_runs
 
 
 def _process_pr(args: argparse.Namespace, repo: str, number: int, required_actions: list[str], advisory: list[str], provider_workflows: list[str]) -> bool:
@@ -212,34 +257,12 @@ def _process_pr(args: argparse.Namespace, repo: str, number: int, required_actio
         print(f"PR #{number}: mergeability is {pr.get('mergeable')}; skipping")
         return False
 
-    action_runs: list[dict[str, Any]] = []
-    for workflow in required_actions:
-        action_runs.extend(_get_action_runs(repo, workflow, initial_sha))
-    required_action_set = set(required_actions)
-    for workflow in advisory:
-        if workflow in required_action_set:
-            continue
-        try:
-            action_runs.extend(_get_action_runs(repo, workflow, initial_sha))
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
-            print(f"PR #{number}: advisory Actions workflow {workflow}: unavailable ({exc})")
+    action_runs = _collect_action_runs(repo, initial_sha, required_actions, advisory, number)
     provider_checks = _get_provider_checks(repo, initial_sha) if args.provider_enabled else []
-    for workflow in advisory:
-        results = [run for run in action_runs if run.get("workflow") == workflow]
-        if len(results) != 1:
-            state = "missing" if not results else "ambiguous"
-            print(f"PR #{number}: advisory Actions workflow {workflow}: {state}")
-        else:
-            result = results[0]
-            print(
-                f"PR #{number}: advisory Actions workflow {workflow}: "
-                f"{result.get('status')}/{result.get('conclusion') or 'pending'}"
-            )
     decision = evaluate_evidence(
         head_sha=initial_sha,
         pr_number=number,
         required_actions=required_actions,
-        advisory_actions=advisory,
         action_runs=action_runs,
         provider_enabled=args.provider_enabled,
         trusted_publisher_app_id=args.trusted_publisher_app_id,
@@ -262,8 +285,9 @@ def _process_pr(args: argparse.Namespace, repo: str, number: int, required_actio
         print(f"PR #{number}: eligibility/head changed before merge; skipping")
         return False
 
+    # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
     result = subprocess.run(
-        ["gh", "pr", "merge", str(number), "--repo", repo, f"--{args.merge_method}", "--delete-branch", "--match-head-commit", initial_sha],
+        [GH_EXECUTABLE, "pr", "merge", str(number), "--repo", repo, f"--{args.merge_method}", "--delete-branch", "--match-head-commit", initial_sha],
         capture_output=True,
         text=True,
         timeout=30,
@@ -273,6 +297,29 @@ def _process_pr(args: argparse.Namespace, repo: str, number: int, required_actio
         return False
     print(f"PR #{number}: merged at expected head {initial_sha} ({decision.source})")
     return True
+
+
+def _validate_options(args):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repo):
+        raise ValueError("--repo must be owner/name")
+    if not 1 <= args.max_prs <= 100:
+        raise ValueError("--max-prs must be between 1 and 100")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+\.ya?ml", args.gate_workflow):
+        raise ValueError("--gate-workflow must be a workflow filename")
+    if args.provider_enabled and (args.trusted_publisher_app_id is None or args.trusted_publisher_app_id <= 0):
+        raise ValueError("provider opt-in requires --trusted-publisher-app-id")
+    advisory = _parse_json_list(args.advisory_workflows, "--advisory-workflows")
+    provider_workflows = _parse_json_list(args.provider_required_workflows, "--provider-required-workflows")
+    if len(advisory) > 20 or len(provider_workflows) > 20:
+        raise ValueError("workflow lists are limited to 20 entries per coordinator pass")
+    if len(advisory) != len(set(advisory)) or len(provider_workflows) != len(set(provider_workflows)):
+        raise ValueError("workflow lists must not contain duplicates")
+    if any(not re.fullmatch(r"[A-Za-z0-9_.-]+\.ya?ml", workflow) for workflow in advisory):
+        raise ValueError("--advisory-workflows entries must be workflow filenames")
+    if args.provider_enabled and not provider_workflows:
+        raise ValueError("provider opt-in requires --provider-required-workflows")
+    required_actions = [] if args.provider_enabled else [args.gate_workflow]
+    return required_actions, advisory, provider_workflows
 
 
 def main() -> int:
@@ -289,25 +336,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repo):
-            raise ValueError("--repo must be owner/name")
-        if not 1 <= args.max_prs <= 100:
-            raise ValueError("--max-prs must be between 1 and 100")
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+\.ya?ml", args.gate_workflow):
-            raise ValueError("--gate-workflow must be a workflow filename")
-        if args.provider_enabled and (args.trusted_publisher_app_id is None or args.trusted_publisher_app_id <= 0):
-            raise ValueError("provider opt-in requires --trusted-publisher-app-id")
-        advisory = _parse_json_list(args.advisory_workflows, "--advisory-workflows")
-        provider_workflows = _parse_json_list(args.provider_required_workflows, "--provider-required-workflows")
-        if len(advisory) > 20 or len(provider_workflows) > 20:
-            raise ValueError("workflow lists are limited to 20 entries per coordinator pass")
-        if len(advisory) != len(set(advisory)) or len(provider_workflows) != len(set(provider_workflows)):
-            raise ValueError("workflow lists must not contain duplicates")
-        if any(not re.fullmatch(r"[A-Za-z0-9_.-]+\.ya?ml", workflow) for workflow in advisory):
-            raise ValueError("--advisory-workflows entries must be workflow filenames")
-        if args.provider_enabled and not provider_workflows:
-            raise ValueError("provider opt-in requires --provider-required-workflows")
-        required_actions = [] if args.provider_enabled else [args.gate_workflow]
+        required_actions, advisory, provider_workflows = _validate_options(args)
 
         numbers = _gh_pr_json("list", "--repo", args.repo, "--state", "open", "--label", args.label, "--limit", str(args.max_prs), "--json", "number")
         merged = 0

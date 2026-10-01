@@ -8,21 +8,32 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+# qlty-ignore(bandit:B404): Required CLI execution uses argv arrays without a shell.
 import subprocess
 import tarfile
 import tempfile
 
+
+GIT_EXECUTABLE = shutil.which('git')
+
+
+MANIFEST_NAME = 'release-manifest.json'
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
 def build(root, output):
-    if subprocess.check_output(['git', '-C', str(root), 'status', '--porcelain'], text=True).strip():
+    if GIT_EXECUTABLE is None:
+        raise RuntimeError('git executable is required to build a release')
+    # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
+    if subprocess.check_output([GIT_EXECUTABLE, '-C', str(root), 'status', '--porcelain'], text=True).strip():
         raise ValueError('Release build requires a clean working tree')
-    commit = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
+    # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
+    commit = subprocess.check_output([GIT_EXECUTABLE, '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
     files = {}
-    committed = subprocess.check_output(['git', '-C', str(root), 'archive', '--format=tar', commit])
+    # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
+    committed = subprocess.check_output([GIT_EXECUTABLE, '-C', str(root), 'archive', '--format=tar', commit])
     with tarfile.open(fileobj=io.BytesIO(committed)) as source:
         for member in source:
             if member.isdir():
@@ -31,7 +42,7 @@ def build(root, output):
                 raise ValueError(f'Unsupported release entry: {member.name}')
             files[member.name] = source.extractfile(member).read()
     manifest = {'schema_version': 1, 'commit': commit, 'files': {name: sha(data) for name, data in files.items()}}
-    files['release-manifest.json'] = (json.dumps(manifest, sort_keys=True, indent=2) + '\n').encode()
+    files[MANIFEST_NAME] = (json.dumps(manifest, sort_keys=True, indent=2) + '\n').encode()
     output.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(output, 'w') as archive:
         for name, data in sorted(files.items()):
@@ -41,6 +52,28 @@ def build(root, output):
             info.mtime = 0
             archive.addfile(info, io.BytesIO(data))
     return {'schema_version': 1, 'commit': commit, 'sha256': sha(output.read_bytes()), 'artifact': output.name}
+
+
+def _extract_bundle(data, temporary):
+    with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+        total = 0
+        members = archive.getmembers()
+        if len(members) > 10000:
+            raise ValueError('Too many release entries')
+        seen = set()
+        for member in members:
+            name = PurePosixPath(member.name)
+            if not member.isfile() or name.is_absolute() or '..' in name.parts or '\\' in member.name or str(name) in seen:
+                raise ValueError('Unsafe release entry')
+            seen.add(str(name))
+            total += member.size
+            if total > 64 * 1024 * 1024:
+                raise ValueError('Expanded release exceeds size limit')
+            path = temporary / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with archive.extractfile(member) as stream:
+                path.write_bytes(stream.read())
+            path.chmod(member.mode & 0o755)
 
 
 def install(bundle, lock, destination):
@@ -59,29 +92,11 @@ def install(bundle, lock, destination):
         raise ValueError('Immutable install already exists; choose it explicitly or inspect drift')
     temporary = Path(tempfile.mkdtemp(prefix='.install-', dir=destination))
     try:
-        with tarfile.open(fileobj=io.BytesIO(data)) as archive:
-            total = 0
-            members = archive.getmembers()
-            if len(members) > 10000:
-                raise ValueError('Too many release entries')
-            seen = set()
-            for member in members:
-                name = PurePosixPath(member.name)
-                if not member.isfile() or name.is_absolute() or '..' in name.parts or '\\' in member.name or str(name) in seen:
-                    raise ValueError('Unsafe release entry')
-                seen.add(str(name))
-                total += member.size
-                if total > 64 * 1024 * 1024:
-                    raise ValueError('Expanded release exceeds size limit')
-                path = temporary / name
-                path.parent.mkdir(parents=True, exist_ok=True)
-                with archive.extractfile(member) as stream:
-                    path.write_bytes(stream.read())
-                path.chmod(member.mode & 0o755)
-        manifest = json.loads((temporary / 'release-manifest.json').read_text())
+        _extract_bundle(data, temporary)
+        manifest = json.loads((temporary / MANIFEST_NAME).read_text())
         if manifest.get('schema_version') != 1 or manifest.get('commit') != lock['commit']:
             raise ValueError('Release manifest identity mismatch')
-        actual = {str(p.relative_to(temporary)): sha(p.read_bytes()) for p in temporary.rglob('*') if p.is_file() and p != temporary / 'release-manifest.json'}
+        actual = {str(p.relative_to(temporary)): sha(p.read_bytes()) for p in temporary.rglob('*') if p.is_file() and p != temporary / MANIFEST_NAME}
         if actual != manifest.get('files'):
             raise ValueError('Release content manifest mismatch')
         os.rename(temporary, target)
