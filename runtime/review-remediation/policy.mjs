@@ -79,6 +79,10 @@ export function validateChanges(changes, policy) {
 export function assertPolicySafety(policy) {
   if(policy.authorIds!==undefined && (!Array.isArray(policy.authorIds)||policy.authorIds.some(id=>!Number.isSafeInteger(id)||id<1)))throw new Error('Invalid author allowlist');
   if(policy.protectedBranches!==undefined && (!Array.isArray(policy.protectedBranches)||policy.protectedBranches.some(name=>typeof name!=='string'||!name)))throw new Error('Invalid protected branches');
+  const checks=policy.requiredChecks;
+  if(!Array.isArray(checks) || !checks.length || checks.length>100 ||
+      checks.some(name=>typeof name!=='string' || !name.trim() || name.length>256) || new Set(checks).size!==checks.length)
+    throw new Error('Invalid required check names');
   const workflows=policy.finalizationWorkflowNames;
   if(!Array.isArray(workflows) || !workflows.length || workflows.length>20 ||
       workflows.some(name=>typeof name!=='string' || !name.trim()) || new Set(workflows).size!==workflows.length)

@@ -9,6 +9,9 @@ account, service, or credentials are needed for local validation.
 ./scripts/validate
 ```
 
+Setup creates an isolated validation environment with a hash-pinned YAML parser.
+Runtime components use standard-library dependencies only.
+
 The initial release contains the execution router, bounded review remediation,
 one portable execution-routing skill, deterministic routing evaluations, and
 reusable stale-item and merge-gate workflows. Additional components are admitted
