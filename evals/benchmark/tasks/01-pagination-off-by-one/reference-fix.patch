@@ -1,0 +1,9 @@
+--- a/lib.js
++++ b/lib.js
+@@
+   const start = (page - 1) * pageSize;
+-  const end = start + pageSize; // BUG: never clamps to `total`, so soft-deleted/
+-                                 // trailing rows beyond the reported total leak
+-                                 // into the last page.
++  const end = Math.min(start + pageSize, total);
+   return rows.slice(start, end);

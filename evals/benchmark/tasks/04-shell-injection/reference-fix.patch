@@ -1,0 +1,11 @@
+--- a/lib.js
++++ b/lib.js
+@@
+-const { execSync } = require('child_process');
++const { execFileSync } = require('child_process');
+
+ function greet(name) {
+-  // BUG: unescaped string interpolation into a shell command
+-  return execSync(`echo hello ${name}`).toString();
++  return execFileSync('echo', ['hello', name]).toString();
+ }

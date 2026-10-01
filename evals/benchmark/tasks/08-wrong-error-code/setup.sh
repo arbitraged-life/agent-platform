@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -uo pipefail
+DEST="$1"
+mkdir -p "$DEST"
+cat > "$DEST/lib.js" <<'JS'
+function handleRequest(payload) {
+  if (!payload || typeof payload.name !== 'string' || payload.name.length === 0) {
+    throw new Error('invalid payload'); // BUG: generic Error, indistinguishable from a real server fault
+  }
+  if (payload.trigger === 'boom') {
+    throw new TypeError('unexpected internal failure'); // simulates a genuine unexpected error
+  }
+  return { status: 200, body: { ok: true } };
+}
+
+function handle(payload) {
+  try {
+    return handleRequest(payload);
+  } catch (e) {
+    // BUG: every error (validation or otherwise) is reported as a 500
+    return { status: 500, body: { error: e.message } };
+  }
+}
+
+module.exports = { handle };
+JS
