@@ -113,7 +113,19 @@ with tarfile.open(sys.argv[1],'w:gz') as t:
 });
 
 test('combined subprocess output is capped in bytes',async()=>{
- const result=await runCommand(process.execPath,['-e',"process.stdout.write('€'.repeat(80))"],{maxOutput:100});
+ const result=await runCommand(process.execPath,['-e',"process.stdout.write('€'.repeat(20));process.stderr.write('€'.repeat(20))"],{maxOutput:100});
  assert.equal(result.code,125);
- assert.ok(Buffer.byteLength(result.stdout)<=102);
+ assert.ok(result.stdout.length+result.stderr.length<=100);
+});
+
+test('command timeout terminates a forked descendant that would outlive its parent',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'review-process-group-')),marker=join(root,'escaped');
+ try {
+  const descendant=`process.on('SIGTERM',()=>{});process.send('ready');setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(marker)},'escaped'),600);`;
+  const parent=`const c=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore','ignore','ignore','ipc']});c.once('message',()=>{console.log('ready');setInterval(()=>{},1000);});`;
+  const result=await runCommand(process.execPath,['-e',parent],{timeoutMs:300});
+  assert.equal(result.code,124);assert.match(result.stdout,/ready/);
+  await new Promise(resolve=>setTimeout(resolve,700));
+  await assert.rejects(()=>access(marker));
+ } finally {await rm(root,{recursive:true,force:true});}
 });

@@ -37,7 +37,7 @@ try {
   }
   if(values.output)await writeFile(values.output,JSON.stringify(result,null,2)+'\n',{mode:0o600});
   console.log(JSON.stringify(result,null,2));
-  if(['failed','agent-failed','agent-timeout'].includes(result.status))process.exitCode=1;
+  if(['failed','agent-failed','agent-timeout','unverified','reconciliation-required'].includes(result.status))process.exitCode=1;
 } catch(error) {
   console.error(`Review remediation stopped: ${error.message}`);
   process.exitCode=1;

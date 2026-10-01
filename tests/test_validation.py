@@ -44,6 +44,7 @@ class BoundaryTests(unittest.TestCase):
                 file.write_text('CONFIG=value')
                 self.assertTrue(validation.boundaries([file], root))
 
+    @unittest.skipUnless(GIT_EXECUTABLE, "Git is required for index validation")
     def test_index_is_checked_even_when_worktree_differs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -144,14 +144,14 @@ export async function resolveProfile(policy, task) {
  if(profile.sandbox==='workspace-write')check(!contained(workspace,await canonicalPath(policy.state_dir)),'State directory must be outside a writable worktree');
  if(profile.sandbox==='workspace-write')check(task.source_write_authorized&&task.actions.some(a=>a!=='read'),'Write sandbox requires explicit source write authorization and an edit/test action');
  check(task.actions.every(a=>profile.actions.includes(a)),'Task actions exceed profile');
- const {stdout:top}=await exec('git',['-C',workspace,'rev-parse','--show-toplevel'],{timeout:10000});
+ const {stdout:top}=await exec('git',['-C',workspace,'rev-parse','--show-toplevel'],{timeout:10000,env:cleanEnvironment()});
  check(await realpath(top.replace(/\r?\n$/,''))===workspace,'workspace must be the repository/worktree root');
  if(profile.requires_isolated_worktree) {
-  const {stdout:branch}=await exec('git',['-C',workspace,'branch','--show-current'],{timeout:10000});
+  const {stdout:branch}=await exec('git',['-C',workspace,'branch','--show-current'],{timeout:10000,env:cleanEnvironment()});
   check(branch.replace(/\r?\n$/,'') && !['main','master',...(policy.protected_branches??[])].includes(branch.replace(/\r?\n$/,'')),'Writes require a non-protected feature branch');
-  const {stdout:dir}=await exec('git',['-C',workspace,'rev-parse','--git-dir'],{timeout:10000});
-  const {stdout:common}=await exec('git',['-C',workspace,'rev-parse','--git-common-dir'],{timeout:10000});
-  const {stdout:superproject}=await exec('git',['-C',workspace,'rev-parse','--show-superproject-working-tree'],{timeout:10000});
+  const {stdout:dir}=await exec('git',['-C',workspace,'rev-parse','--git-dir'],{timeout:10000,env:cleanEnvironment()});
+  const {stdout:common}=await exec('git',['-C',workspace,'rev-parse','--git-common-dir'],{timeout:10000,env:cleanEnvironment()});
+  const {stdout:superproject}=await exec('git',['-C',workspace,'rev-parse','--show-superproject-working-tree'],{timeout:10000,env:cleanEnvironment()});
   check(!superproject.trim() && path.resolve(workspace,dir.replace(/\r?\n$/,''))!==path.resolve(workspace,common.replace(/\r?\n$/,'')),'Writes require an isolated linked worktree, not a submodule');
  }
  return {profile,workspace};

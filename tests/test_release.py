@@ -5,6 +5,8 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
+import os
 # qlty-ignore(bandit:B404): Required CLI execution uses argv arrays without a shell.
 import subprocess
 import shutil
@@ -27,8 +29,12 @@ class ReleaseTests(unittest.TestCase):
             subprocess.run([GIT_EXECUTABLE, 'init', '-q', str(root)], check=True)
             source = root / 'main.txt'
             source.write_text('committed')
+            hook = root / '.githooks/pre-commit'
+            hook.parent.mkdir()
+            hook.write_text('#!/bin/sh\nexit 1\n')
+            hook.chmod(0o755)
             # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
-            subprocess.run([GIT_EXECUTABLE, '-C', str(root), 'add', 'main.txt'], check=True)
+            subprocess.run([GIT_EXECUTABLE, '-C', str(root), 'add', 'main.txt', '.githooks/pre-commit'], check=True)
             # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
             subprocess.run([GIT_EXECUTABLE, '-C', str(root), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'test'], check=True)
             # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
@@ -36,10 +42,22 @@ class ReleaseTests(unittest.TestCase):
             source.write_text('uncommitted')
             first, second = Path(tmp) / 'first.tar', Path(tmp) / 'second.tar'
             release.build(root, first)
+            # qlty-ignore(bandit:B603): Fixture changes only its local Git archive configuration.
+            subprocess.run([GIT_EXECUTABLE, '-C', str(root), 'config', 'tar.umask', '0777'], check=True)
             release.build(root, second)
             self.assertEqual(first.read_bytes(), second.read_bytes())
             with tarfile.open(first) as archive:
                 self.assertEqual(archive.extractfile('main.txt').read(), b'committed')
+                self.assertEqual(archive.getmember('.githooks/pre-commit').mode, 0o755)
+            installed = release.install(first, release.build(root, first), Path(tmp) / 'installed')
+            self.assertTrue(os.access(installed / '.githooks/pre-commit', os.X_OK))
+            with patch.object(release, 'MAX_RELEASE_BYTES', 64, create=True), self.assertRaisesRegex(ValueError, 'size limit'):
+                release.build(root, Path(tmp) / 'too-large.tar')
+            previous = Path(tmp) / 'existing.tar'
+            previous.write_bytes(b'previous verified artifact')
+            with patch.object(release, 'MAX_RELEASE_BYTES', 4096, create=True), self.assertRaisesRegex(ValueError, 'size limit'):
+                release.build(root, previous)
+            self.assertEqual(previous.read_bytes(), b'previous verified artifact')
 
     def bundle(self, root, names=None, wrong_manifest=False):
         data = b'export const version = 1;\n'

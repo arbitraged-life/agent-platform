@@ -42,24 +42,25 @@ export function changedFiles(before, after) {
 }
 
 export function runCommand(command,args,{timeoutMs=30000,env={},input='',maxOutput=2*1024*1024,cwd}={}) {
+  if(process.platform==='win32')return Promise.resolve({code:126,stdout:'',stderr:'Process-group supervision requires a POSIX host'});
   return new Promise(resolveResult=>{
-    const child=spawn(command,args,{cwd,env:{PATH:process.env.PATH,HOME:process.env.HOME,
+    const child=spawn(command,args,{cwd,detached:true,env:{PATH:process.env.PATH,HOME:process.env.HOME,
       ...(process.env.DOCKER_HOST?{DOCKER_HOST:process.env.DOCKER_HOST}:{}),...env},stdio:['pipe','pipe','pipe']});
-    let stdout='',stderr='',forced=null,outputBytes=0;
-    const stop=code=>{forced=code;child.kill('SIGKILL');};
+    const chunks={stdout:[],stderr:[]};let forced=null,outputBytes=0;
+    const killGroup=()=>{if(child.pid)try{process.kill(-child.pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')forced=126;}};
+    const stop=code=>{forced??=code;killGroup();};
     const timer=setTimeout(()=>stop(124),timeoutMs);
     child.stdin.on('error',()=>{});
     const collect=(stream,data)=>{
       const remaining=Math.max(0,maxOutput-outputBytes);
       outputBytes+=data.byteLength;
-      const text=data.subarray(0,remaining).toString();
-      if(stream==='stdout')stdout+=text;else stderr+=text;
+      chunks[stream].push(data.subarray(0,remaining));
       if(outputBytes>maxOutput)stop(125);
     };
     child.stdout.on('data',data=>collect('stdout',data));
     child.stderr.on('data',data=>collect('stderr',data));
-    child.on('error',()=>{clearTimeout(timer);resolveResult({code:127,stdout:'',stderr:'command unavailable'});});
-    child.on('close',code=>{clearTimeout(timer);resolveResult({code:forced??code??1,stdout:stdout.slice(-maxOutput),stderr:stderr.slice(-maxOutput)});});
+    child.on('error',()=>{clearTimeout(timer);killGroup();resolveResult({code:127,stdout:'',stderr:'command unavailable'});});
+    child.on('close',code=>{clearTimeout(timer);killGroup();resolveResult({code:forced??code??1,stdout:Buffer.concat(chunks.stdout).toString(),stderr:Buffer.concat(chunks.stderr).toString()});});
     child.stdin.end(input);
   });
 }

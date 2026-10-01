@@ -62,7 +62,10 @@ def lint_sources(files, root):
         raise SystemExit('\n'.join(errors))
     for path in files:
         if path.suffix in ['.mjs', '.js', '.cjs']:
-            subprocess.run(['node', '--check', str(path)], check=True, cwd=root)
+            try:
+                subprocess.run(['node', '--check', str(path)], check=True, cwd=root)
+            except subprocess.CalledProcessError:
+                raise SystemExit(f'{path.relative_to(root)}: JavaScript syntax check failed') from None
     print('Source syntax, JSON, release boundaries, and action pins passed.', flush=True)
 
 

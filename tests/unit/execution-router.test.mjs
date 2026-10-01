@@ -403,3 +403,35 @@ test('CLI rejects irrelevant command options and fails stale status queries',asy
  await writeFile(stateFile,JSON.stringify({...state,status:'running',heartbeat_at:'2000-01-01T00:00:00Z'}));
  await assert.rejects(()=>exec(process.execPath,[cli,'status','--policy',f.policyPath,'--task-id','router-test']),error=>error.code===1 && JSON.parse(error.stdout).status==='unknown');
 });
+
+test('Git environment overrides cannot disguise a protected source checkout',async()=>{
+ const f=await fixture(),linked=path.join(f.root,'linked');
+ await exec('git',['-C',f.workspace,'branch','-M','trunk']);
+ await exec('git',['-C',f.workspace,'worktree','add','-qb','feature',linked]);
+ const {stdout:gitDir}=await exec('git',['-C',linked,'rev-parse','--absolute-git-dir']);
+ f.data.protected_branches=['trunk'];
+ f.data.profiles.write={...f.data.profiles['codex-readonly'],sandbox:'workspace-write',actions:['read','edit'],requires_isolated_worktree:true};
+ await writeFile(f.policyPath,JSON.stringify(f.data));const policy=await loadPolicy(f.policyPath);
+ const previous={GIT_DIR:process.env.GIT_DIR,GIT_WORK_TREE:process.env.GIT_WORK_TREE};
+ try {
+  process.env.GIT_DIR=gitDir.trim();process.env.GIT_WORK_TREE=f.workspace;
+  await assert.rejects(()=>resolveProfile(policy,packet(f.workspace,{profile:'write',actions:['edit'],source_write_authorized:true})),/non-protected/);
+ } finally {for(const [key,value] of Object.entries(previous)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
+});
+
+test('shutdown during child creation cancels the owned process before returning',async()=>{
+ const f=await fixture('slow'),prepared=await prepare(f.policy,packet(f.workspace));
+ const {default:childProcess}=await import('node:child_process');
+ const {syncBuiltinESMExports}=await import('node:module');
+ const original=childProcess.spawn;let injected=false;
+ childProcess.spawn=function(command,...args){
+  const child=original.call(this,command,...args);
+  if(command===f.policy.profiles['codex-readonly'].executable){injected=true;process.emit('SIGTERM');}
+  return child;
+ };
+ syncBuiltinESMExports();
+ try {
+  const result=await runPrepared(f.policy,'router-test',{approved_digest:prepared.approval_digest,approval_ref:'unit-test-fixture'});
+  assert.equal(injected,true);assert.equal(result.status,'cancelled');
+ } finally {childProcess.spawn=original;syncBuiltinESMExports();}
+});

@@ -20,7 +20,7 @@ def extract(archive, destination):
                 if not member.isdir():
                     raise ValueError("missing archive root")
                 continue
-            if any(PureWindowsPath(part).drive for part in parts):
+            if any(PureWindowsPath(part).drive or ":" in part for part in parts):
                 raise ValueError("drive-qualified archive path")
             relative = Path(*parts[1:])
             if str(relative) in seen:
