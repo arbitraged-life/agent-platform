@@ -70,3 +70,17 @@ test('ambiguous suites and truncated or oversized workflow inventories fail clos
     {total_count:2,workflow_runs:[run,{...run,id:2}]}));
   assert.equal((await api.checks('owner/repo','sha'))[0].workflow,null);
 });
+
+test('REST JSON and cumulative pagination bytes are bounded',async()=>{
+  const oversized=new GitHubClient('token',async()=>new Response(' '.repeat(8*1024*1024+1)));
+  await assert.rejects(()=>oversized.rest('/oversized'),/response byte limit/);
+  let pages=0;
+  const large=new GitHubClient('token',async()=>{
+    pages++;
+    return Response.json(Array.from({length:100},(_,id)=>({id,body:'x'.repeat(50000)})));
+  });
+  await assert.rejects(()=>large.all('/comments'),/pagination byte limit/);
+  assert.equal(pages,2);
+  const oversizedPage=new GitHubClient('token',async()=>Response.json(Array.from({length:101},(_,id)=>({id}))));
+  await assert.rejects(()=>oversizedPage.all('/comments'),/bounded paginated/);
+});

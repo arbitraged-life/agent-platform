@@ -1,5 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
+const MAX_JSON_BYTES = 8*1024*1024;
+
 const MARKER = /<!-- review-remediation:v1:([A-Za-z0-9+/=]+):([a-f0-9]{64}) -->/;
 
 export function seal(data, key) {
@@ -42,7 +44,21 @@ export class GitHubClient {
 
   async rest(path, method = 'GET', body) {
     const response = await this.request(path, method, body);
-    return response.status === 204 ? null : response.json();
+    if(response.status===204)return null;
+    const reader=response.body?.getReader();
+    if(!reader)throw new Error('GitHub JSON body is missing');
+    const chunks=[];
+    let size=0;
+    try {
+      while(true) {
+        const {done,value}=await reader.read();
+        if(done)break;
+        size+=value.byteLength;
+        if(size>MAX_JSON_BYTES)throw new Error('GitHub response byte limit reached');
+        chunks.push(Buffer.from(value));
+      }
+      return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks,size)));
+    } finally {await reader.cancel();reader.releaseLock();}
   }
 
   async graphql(query, variables = {}) {
@@ -53,9 +69,12 @@ export class GitHubClient {
 
   async all(path) {
     const results = [];
+    let bytes=0;
     for (let page = 1; page <= 100; page++) {
       const rows = await this.rest(`${path}${path.includes('?') ? '&' : '?'}per_page=100&page=${page}`);
-      if (!Array.isArray(rows)) throw new Error('Expected a paginated GitHub array');
+      if (!Array.isArray(rows) || rows.length>100) throw new Error('Expected a bounded paginated GitHub array');
+      bytes+=Buffer.byteLength(JSON.stringify(rows));
+      if(bytes>MAX_JSON_BYTES)throw new Error('GitHub pagination byte limit reached');
       results.push(...rows);
       if (rows.length < 100) return results;
     }

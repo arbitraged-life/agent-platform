@@ -36,6 +36,22 @@ class BoundaryTests(unittest.TestCase):
                 file.write_text('-----BEGIN ' + label + ' PRIVATE KEY-----')
                 self.assertTrue(validation.boundaries([file], root))
 
+    def test_workflow_pins_use_parsed_yaml_keys_and_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            file = root / '.github/workflows/check.yml'
+            file.parent.mkdir(parents=True)
+            for key in ['uses', '"uses"', "'uses'", 'uses ', '"u\\u0073es"']:
+                with self.subTest(key=key):
+                    file.write_text('jobs:\n  test:\n    steps:\n      - ' + key + ': actions/checkout@main\n')
+                    self.assertTrue(validation.boundaries([file], root))
+                    file.write_text('jobs:\n  test:\n    steps:\n      - ' + key + ': "actions/checkout@' + 'a' * 40 + '"\n')
+                    self.assertEqual(validation.boundaries([file], root), [])
+            for content in ['jobs: {test: {uses: owner/repo/workflow@main}}',
+                            'jobs: {test: {steps: [{uses: null}]}}', 'jobs: [bad]', 'invalid: [']:
+                file.write_text(content)
+                self.assertTrue(validation.boundaries([file], root))
+
     def test_environment_variants_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

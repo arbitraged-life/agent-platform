@@ -2,6 +2,7 @@
 """Deterministic local and CI validation of public platform assets."""
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -9,6 +10,36 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+VALIDATION_PYTHON = ROOT / '.venv/bin/python'
+if __name__ == '__main__' and VALIDATION_PYTHON.exists() and Path(sys.prefix).resolve() != (ROOT / '.venv').resolve():
+    os.execv(str(VALIDATION_PYTHON), [str(VALIDATION_PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]])
+try:
+    import yaml
+except ImportError:
+    raise SystemExit('Validation dependencies missing; run ./scripts/setup') from None
+if yaml.__version__ != '6.0.3':
+    raise SystemExit('Validation dependency version mismatch; run ./scripts/setup')
+
+
+def workflow_actions(text):
+    document = yaml.safe_load(text)
+    if not isinstance(document, dict) or not isinstance(document.get('jobs'), dict):
+        raise ValueError('Workflow jobs must be a mapping')
+    actions = []
+    for job in document['jobs'].values():
+        if not isinstance(job, dict):
+            raise ValueError('Workflow job must be a mapping')
+        if 'uses' in job:
+            actions.append(job['uses'])
+        steps = job.get('steps', [])
+        if not isinstance(steps, list):
+            raise ValueError('Workflow steps must be a list')
+        for step in steps:
+            if not isinstance(step, dict):
+                raise ValueError('Workflow step must be a mapping')
+            if 'uses' in step:
+                actions.append(step['uses'])
+    return actions
 
 
 def source_files():
@@ -40,10 +71,12 @@ def boundaries(files, root=None):
                 if not (path.parent / match[1]).resolve().is_relative_to(root.resolve()):
                     failures.append(f'{relative}: import escapes public package boundary')
         if path.suffix in ['.yml', '.yaml'] and relative.parts[:2] == ('.github', 'workflows'):
-            for line in text.splitlines():
-                match = re.search(r'\buses:\s*([^\s#]+)', line)
-                if match and not match[1].startswith('./') and not re.search(r'@[0-9a-f]{40}$', match[1]):
-                    failures.append(f'{relative}: external action is not commit-pinned')
+            try:
+                for action in workflow_actions(text):
+                    if not isinstance(action, str) or (not action.startswith('./') and not re.fullmatch(r'[^\s]+@[0-9a-f]{40}', action)):
+                        failures.append(f'{relative}: external action is not commit-pinned')
+            except (yaml.YAMLError, ValueError):
+                failures.append(f'{relative}: invalid workflow structure')
         if path.suffix == '.json':
             document = json.loads(text)
             if path.name == 'package.json':

@@ -65,3 +65,34 @@ test('invalid request bodies return 400 and a missing model fails startup',async
     }
   } finally {server.closeAllConnections();server.close();}
 });
+
+test('request decoding preserves split UTF-8 and rejects invalid UTF-8',async()=>{
+  const {request}=await import('node:http');
+  const calls=[];
+  const server=createInferenceProxy({endpoint:'https://example.invalid/inference',model:'m',key:'key',token:'run',maxRequests:3,maxOutputTokens:100},
+    async(url,options)=>{calls.push(JSON.parse(options.body));return Response.json({});});
+  server.listen(0,'127.0.0.1');await once(server,'listening');
+  const send=async(first,last)=>{
+    const accepted=once(server,'request');
+    const pending=request(`http://127.0.0.1:${server.address().port}/v1/chat/completions`,{method:'POST',headers:{Authorization:'Bearer run'}});
+    const result=new Promise((resolve,reject)=>{
+      pending.on('error',reject);
+      pending.on('response',res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});
+    });
+    pending.write(first);
+    const [incoming]=await accepted;
+    // The server has consumed the first request chunk before the continuation.
+    if(incoming.readableLength)await new Promise(resolve=>setImmediate(resolve));
+    await new Promise(resolve=>setTimeout(resolve,20));
+    pending.end(last);
+    return result;
+  };
+  try {
+    const body=Buffer.from(JSON.stringify({model:'m',messages:[{role:'user',content:'café 🧪'}]}));
+    const offset=body.indexOf(Buffer.from('é'))+1;
+    assert.equal(await send(body.subarray(0,offset),body.subarray(offset)),200);
+    assert.equal(calls[0].messages[0].content,'café 🧪');
+    assert.equal(await send(Buffer.from('{"model":"m","messages":["'),Buffer.from([0xff,34,93,125])),400);
+    assert.equal(calls.length,1);
+  } finally {server.closeAllConnections();server.close();}
+});

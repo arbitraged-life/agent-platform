@@ -28,6 +28,12 @@ def release_path(value):
     name = PurePosixPath(value)
     if not name.parts or name.is_absolute() or PureWindowsPath(value).drive or '..' in name.parts or '\\' in value or ':' in value:
         raise ValueError('Unsafe release entry')
+    reserved = {'CON', 'PRN', 'AUX', 'NUL', 'CONIN$', 'CONOUT$'}
+    reserved.update(prefix + digit for prefix in ('COM', 'LPT') for digit in '123456789¹²³')
+    for part in name.parts:
+        if (part.endswith(('.', ' ')) or part.split('.')[0].upper() in reserved
+                or any(ord(char) < 32 or char in '<>"|?*' for char in part)):
+            raise ValueError('Unsafe release entry')
     return name
 
 

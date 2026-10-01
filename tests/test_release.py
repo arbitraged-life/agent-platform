@@ -22,6 +22,12 @@ SPEC.loader.exec_module(release)
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_windows_reserved_and_aliased_path_components_are_rejected(self):
+        for component in ['CON', 'NUL.txt', 'aux', 'COM1', 'lpt9.log', 'COM¹.txt', 'CONIN$', 'name.', 'name ', 'a?b']:
+            with self.subTest(component=component), self.assertRaisesRegex(ValueError, 'Unsafe release'):
+                release.release_path('nested/' + component + '/file.txt')
+        self.assertEqual(str(release.release_path('nested/console.txt')), 'nested/console.txt')
+
     @unittest.skipUnless(GIT_EXECUTABLE, "Git is required only for release building")
     def test_build_uses_committed_bytes_even_with_hidden_worktree_edits(self):
         with tempfile.TemporaryDirectory() as tmp:

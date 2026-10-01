@@ -21,13 +21,16 @@ export function createInferenceProxy(config, fetcher=fetch) {
     }
     requests++;
     try {
-      let text='';
+      const chunks=[];
+      let size=0;
       for await(const chunk of req) {
-        text+=chunk.toString('utf8');
-        if(Buffer.byteLength(text)>262144) {fail(413,'Request too large');return;}
+        size+=chunk.length;
+        if(size>262144) {fail(413,'Request too large');return;}
+        chunks.push(chunk);
       }
       let body;
-      try {body=JSON.parse(text);} catch {fail(400,'Invalid JSON body');return;}
+      try {body=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks,size)));}
+      catch {fail(400,'Invalid JSON body');return;}
       if(!body || typeof body!=='object' || Array.isArray(body)) {fail(400,'Invalid request body');return;}
       if(body.model!==config.model || !Array.isArray(body.messages)) {fail(400,'Unsupported model or messages');return;}
       const allowed=['messages','tools','tool_choice','parallel_tool_calls','temperature','top_p','stream','stream_options'];
