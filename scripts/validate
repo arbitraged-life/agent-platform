@@ -21,9 +21,28 @@ if yaml.__version__ != '6.0.3':
     raise SystemExit('Validation dependency version mismatch; run ./scripts/setup')
 
 
-def workflow_actions(text):
+def step_actions(steps):
+    if not isinstance(steps, list):
+        raise ValueError('Action steps must be a list')
+    actions = []
+    for step in steps:
+        if not isinstance(step, dict):
+            raise ValueError('Action step must be a mapping')
+        if 'uses' in step:
+            actions.append(step['uses'])
+    return actions
+
+
+def workflow_actions(text, composite=False):
     document = yaml.safe_load(text)
-    if not isinstance(document, dict) or not isinstance(document.get('jobs'), dict):
+    if not isinstance(document, dict):
+        raise ValueError('Action document must be a mapping')
+    if composite:
+        runs = document.get('runs')
+        if not isinstance(runs, dict):
+            raise ValueError('Action runs must be a mapping')
+        return step_actions(runs.get('steps', [])) if runs.get('using') == 'composite' else []
+    if not isinstance(document.get('jobs'), dict):
         raise ValueError('Workflow jobs must be a mapping')
     actions = []
     for job in document['jobs'].values():
@@ -31,14 +50,7 @@ def workflow_actions(text):
             raise ValueError('Workflow job must be a mapping')
         if 'uses' in job:
             actions.append(job['uses'])
-        steps = job.get('steps', [])
-        if not isinstance(steps, list):
-            raise ValueError('Workflow steps must be a list')
-        for step in steps:
-            if not isinstance(step, dict):
-                raise ValueError('Workflow step must be a mapping')
-            if 'uses' in step:
-                actions.append(step['uses'])
+        actions.extend(step_actions(job.get('steps', [])))
     return actions
 
 
@@ -70,9 +82,10 @@ def boundaries(files, root=None):
             for match in re.finditer(r'(?:from\s*|import\s*\(\s*|import\s+)[\x22\x27](\.[^\x22\x27]+)[\x22\x27]', text):
                 if not (path.parent / match[1]).resolve().is_relative_to(root.resolve()):
                     failures.append(f'{relative}: import escapes public package boundary')
-        if path.suffix in ['.yml', '.yaml'] and relative.parts[:2] == ('.github', 'workflows'):
+        composite = path.name in ('action.yml', 'action.yaml')
+        if path.suffix in ['.yml', '.yaml'] and (composite or relative.parts[:2] == ('.github', 'workflows')):
             try:
-                for action in workflow_actions(text):
+                for action in workflow_actions(text, composite=composite):
                     if not isinstance(action, str) or (not action.startswith('./') and not re.fullmatch(r'[^\s]+@[0-9a-f]{40}', action)):
                         failures.append(f'{relative}: external action is not commit-pinned')
             except (yaml.YAMLError, ValueError):
@@ -80,7 +93,10 @@ def boundaries(files, root=None):
         if path.suffix == '.json':
             document = json.loads(text)
             if path.name == 'package.json':
-                for group in ['dependencies', 'devDependencies', 'optionalDependencies']:
+                for group in ['dependencies', 'optionalDependencies', 'peerDependencies']:
+                    if document.get(group):
+                        failures.append(f'{relative}: production dependencies violate the standard-library runtime contract')
+                for group in ['devDependencies']:
                     for name, version in document.get(group, {}).items():
                         if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', version):
                             failures.append(f'{relative}: dependency {name} is not a pinned registry version')

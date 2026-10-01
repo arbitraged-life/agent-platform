@@ -5,7 +5,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 import os
 # qlty-ignore(bandit:B404): Required CLI execution uses argv arrays without a shell.
 import subprocess
@@ -114,6 +114,30 @@ class ReleaseTests(unittest.TestCase):
                 info.size = len(content)
                 archive.addfile(info, io.BytesIO(content))
         return bundle, {'schema_version': 1, 'commit': 'a' * 40, 'sha256': release.sha(bundle.read_bytes()), 'artifact': bundle.name}
+
+    def test_build_rejects_aliases_even_on_a_case_sensitive_source(self):
+        for names in [('Foo/a', 'foo/b'), ('caf\u00e9/a', 'cafe\u0301/b'), ('Release-manifest.json', 'other')]:
+            with self.subTest(names=names), tempfile.TemporaryDirectory() as tmp:
+                payload = io.BytesIO()
+                with tarfile.open(fileobj=payload, mode='w') as archive:
+                    for name in names:
+                        archive.addfile(tarfile.TarInfo(name))
+                process = Mock(stdout=io.BytesIO(payload.getvalue()))
+                process.wait.return_value = 0
+                process.poll.return_value = 0
+                with patch.object(release.subprocess, 'check_output', side_effect=['', 'a' * 40]), patch.object(release.subprocess, 'Popen', return_value=process):
+                    with self.assertRaisesRegex(ValueError, 'path alias'):
+                        release.build(Path(tmp), Path(tmp) / 'release.tar')
+                self.assertFalse((Path(tmp) / 'release.tar').exists())
+
+    def test_case_and_unicode_aliases_are_rejected_before_install(self):
+        for left, right in [('Foo/a', 'foo/b'), ('caf\u00e9/a', 'cafe\u0301/b'), ('File', 'file')]:
+            with self.subTest(left=left), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                bundle, lock = self.bundle(root, [(left, b'a'), (right, b'b')])
+                with self.assertRaisesRegex(ValueError, 'path alias'):
+                    release.install(bundle, lock, root / 'installed')
+                self.assertEqual(list((root / 'installed').iterdir()), [])
 
     def test_install_is_verified_and_immutable(self):
         with tempfile.TemporaryDirectory() as tmp:

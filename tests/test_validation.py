@@ -89,8 +89,21 @@ class BoundaryTests(unittest.TestCase):
                 for version in ['file:../private', 'latest', '^1.2.3', 'github:owner/repo#main']:
                     file.write_text('{"dependencies":{"module":"' + version + '"}}')
                     self.assertTrue(validation.boundaries([file]))
-                file.write_text('{"dependencies":{"module":"1.2.3"}}')
+                file.write_text('{"devDependencies":{"module":"1.2.3"}}')
                 self.assertEqual(validation.boundaries([file]), [])
+
+    def test_composite_actions_and_production_dependencies_cannot_escape_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            action = root / 'action.yml'
+            action.write_text('runs: {using: composite, steps: [{uses: actions/checkout@main}]}')
+            self.assertTrue(validation.boundaries([action], root))
+            action.write_text('runs: {using: composite, steps: [{uses: actions/checkout@' + 'a' * 40 + '}]}')
+            self.assertEqual(validation.boundaries([action], root), [])
+            package = root / 'package.json'
+            for group in ['dependencies', 'optionalDependencies', 'peerDependencies']:
+                package.write_text('{"' + group + '":{"module":"1.2.3"}}')
+                self.assertTrue(validation.boundaries([package], root))
 
 
 if __name__ == '__main__':

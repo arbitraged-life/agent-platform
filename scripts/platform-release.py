@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import unicodedata
 
 
 GIT_EXECUTABLE = shutil.which('git')
@@ -37,6 +38,17 @@ def release_path(value):
     return name
 
 
+def register_path(value, spellings):
+    name = release_path(value)
+    for count in range(1, len(name.parts) + 1):
+        spelling = '/'.join(name.parts[:count])
+        key = unicodedata.normalize('NFC', spelling).casefold()
+        previous = spellings.setdefault(key, spelling)
+        if previous != spelling:
+            raise ValueError('Unsafe release path alias')
+    return name
+
+
 def build(root, output):
     if GIT_EXECUTABLE is None:
         raise RuntimeError('git executable is required to build a release')
@@ -46,6 +58,8 @@ def build(root, output):
     # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
     commit = subprocess.check_output([GIT_EXECUTABLE, '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
     files, modes = {}, {}
+    spellings = {}
+    register_path(MANIFEST_NAME, spellings)
     # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
     process = subprocess.Popen([GIT_EXECUTABLE, '-c', 'tar.umask=0000', '-C', str(root), 'archive', '--format=tar', commit], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     total = 0
@@ -61,7 +75,7 @@ def build(root, output):
                     continue
                 if not member.isfile():
                     raise ValueError(f'Unsupported release entry: {member.name}')
-                release_path(member.name)
+                register_path(member.name, spellings)
                 if member.name == MANIFEST_NAME:
                     raise ValueError('Reserved release manifest in source')
                 files[member.name] = source.extractfile(member).read()
@@ -106,8 +120,9 @@ def _extract_bundle(data, temporary):
         if len(members) > 10000:
             raise ValueError('Too many release entries')
         seen = set()
+        spellings = {}
         for member in members:
-            name = release_path(member.name)
+            name = register_path(member.name, spellings)
             if not member.isfile() or str(name) in seen:
                 raise ValueError('Unsafe release entry')
             seen.add(str(name))
