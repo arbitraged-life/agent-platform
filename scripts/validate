@@ -173,6 +173,8 @@ def main():
         subprocess.run(['node', '--test', *tests], check=True, cwd=ROOT)
         subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', '.github/scripts', '-p', 'test_*.py'], check=True, cwd=ROOT)
         subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_*.py'], check=True, cwd=ROOT)
+        for task in ['test', 'typecheck']:
+            subprocess.run(['npm', 'run', task, '--prefix', 'skills/turnstile-spin/templates/worker'], check=True, cwd=ROOT)
     if args.command in ['ci', 'eval']:
         subprocess.run(['node', 'evals/routing.mjs'], check=True, cwd=ROOT)
 
