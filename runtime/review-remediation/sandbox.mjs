@@ -72,12 +72,23 @@ export function boxArgs(image,root,command,{name,readonly=false,network,verifier
   return [...args,image,...command];
 }
 
+async function removeDockerResource(kind,name) {
+  const args=kind==='container'?['rm','--force',name]:['network','rm',name];
+  const removed=await runCommand('docker',args,{timeoutMs:15000});
+  if(removed.code===0)return;
+  // --rm may have removed it already. A daemon error is not proof of absence.
+  const listed=await runCommand('docker',[kind,'ls',...(kind==='container'?['--all']:[]),
+    '--filter',`name=${name}`,'--format',kind==='container'?'{{.Names}}':'{{.Name}}'],{timeoutMs:15000});
+  if(listed.code!==0 || listed.stdout.split(/\r?\n/).includes(name))
+    throw new Error(`Docker cleanup could not confirm removal of ${kind} ${name}`);
+}
+
 export async function runBox(image,root,command,options={}) {
   const name=`review-remediation-${randomUUID()}`;
   try {
     return await runCommand('docker',boxArgs(image,root,command,{...options,name}),options);
   } finally {
-    await runCommand('docker',['rm','--force',name],{timeoutMs:15000});
+    await removeDockerResource('container',name);
   }
 }
 
@@ -103,7 +114,10 @@ export async function runWithInferenceProxy(image,root,command,{proxyEnvironment
       "for(let i=0;i<10;i++){try{const r=await fetch('http://127.0.0.1:8080/health');if(r.ok)process.exit(0);}catch{}await new Promise(r=>setTimeout(r,200));}process.exit(1);"]);
     return await runBox(image,root,command,{...options,network});
   } finally {
-    await runCommand('docker',['rm','--force',proxy],{timeoutMs:15000});
-    await runCommand('docker',['network','rm',network],{timeoutMs:15000});
+    const failures=[];
+    for(const [kind,name] of [['container',proxy],['network',network]]) {
+      try { await removeDockerResource(kind,name); } catch(error) { failures.push(error); }
+    }
+    if(failures.length)throw new AggregateError(failures,'Inference resource cleanup failed');
   }
 }

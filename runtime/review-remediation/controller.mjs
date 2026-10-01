@@ -98,8 +98,11 @@ export async function remediate({api, policy, executor, number, apply=false}) {
     // Detailed subprocess/model output is not copied into public comments.
     record.failure=error.name;
   } finally {
-    await update(api,policy.repository,reservation.id,record);
-    if (workspace) await executor.cleanup(workspace);
+    try {
+      await update(api,policy.repository,reservation.id,record);
+    } finally {
+      if (workspace) await executor.cleanup(workspace);
+    }
   }
   return {status:record.status,stage:record.stage,selected:threads.length,publishedSha:record.publishedSha,verified:record.proofs.length,before:record.before,after:record.after};
 }

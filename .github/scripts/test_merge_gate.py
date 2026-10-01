@@ -148,7 +148,7 @@ class MergeGatePolicyTests(unittest.TestCase):
         self.assertIn("PR", result.reason)
 
 
-    def test_newer_pr_commit_rejects_old_success(self):
+    def test_pr_head_advance_rejects_old_success(self):
         result = merge_gate.evaluate_evidence(
             head_sha="b" * 40,
             required_actions=["ci.yml"],

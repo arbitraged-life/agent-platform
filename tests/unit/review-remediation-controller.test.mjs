@@ -92,3 +92,17 @@ test('fixing one finding cannot publish a regression or lost evidence in another
     assert.equal(f.thread.isResolved,false);
   }
 });
+
+
+test('workspace cleanup runs even when the final GitHub status update fails',async()=>{
+  const f=fixture({before:2});
+  const rest=f.api.rest;
+  let cleaned=false;
+  f.api.rest=async(path,method,...args)=>{
+    if(method==='PATCH')throw new Error('GitHub unavailable');
+    return rest(path,method,...args);
+  };
+  f.executor.cleanup=async()=>{cleaned=true;};
+  await assert.rejects(()=>remediate({...f,number:7,apply:true}),/GitHub unavailable/);
+  assert.equal(cleaned,true);
+});
