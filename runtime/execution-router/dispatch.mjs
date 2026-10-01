@@ -111,7 +111,7 @@ export async function runPrepared(policy,id,approval={}) {
   keepLock=true;const group=await stopRemainingGroup(child);keepLock=!group.stopped;
   let after;try{after=await workspaceFingerprint(workspace,policy.state_dir);}catch{after={digest:null,head:null};}
   const result={...running,status:stopReason??(outcome.code===0?'returned':'failed'),finished_at:now(),exit_code:outcome.code,signal:outcome.signal,verified:false,workspace_after:after,workspace_changed:after.digest!==state.workspace_fingerprint.digest,usage:{tokens:null,cost_usd:null,source:'not-measured'},...((childError||ioError)?{error:(childError||ioError).message}:{})};
-  if(result.status==='returned'&&(group.lingering||after.digest===null||profile.sandbox==='read-only'&&result.workspace_changed)){result.status='needs-review';result.warning=keepLock?'Owned process group remains alive; workspace lock retained for inspection.':'Descendants were terminated, fingerprint unavailable, or read-only workspace changed; inspect before acceptance.';}
+  if(result.status==='returned'&&(group.lingering||after.digest===null||(profile.sandbox==='read-only'||!task.actions.includes('edit'))&&result.workspace_changed)){result.status='needs-review';result.warning=keepLock?'Owned process group remains alive; workspace lock retained for inspection.':'Descendants were terminated, fingerprint unavailable, or workspace changed without edit authority; inspect before acceptance.';}
   await json(path.join(dir,'status.json'),result);await event(dir,'returned',{task_id:id,status:result.status,exit_code:result.exit_code,verified:false});return result;
  } catch(e) {
   finalized=true;

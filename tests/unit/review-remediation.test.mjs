@@ -11,10 +11,10 @@ const policy = {
   repository: 'owner/project', maxAttempts: 2, maxFiles: 8, maxBytes: 10000,
   reviewers: [{id: 11, login: 'review-a[bot]'}, {id: 22, login: 'review-b[bot]'}],
   allowedPrefixes: ['src/', 'tests/'], deniedPrefixes: ['.github/', 'src/policy/'],
-  requiredChecks: ['Verify'],checkAppId:15368,
+  requiredChecks: ['Verify'],checkAppId:15368,checkWorkflowId:123,
 };
 const safePolicy = {finalizationWorkflowNames:['CI'],maxAttempts:2,maxThreads:12,maxFiles:8,maxBytes:131072,agentTimeoutSeconds:390,
-  maxModelRequests:12,maxOutputTokens:4096,checkAppId:15368,provider:'openrouter',
+  maxModelRequests:12,maxOutputTokens:4096,checkAppId:15368,checkWorkflowId:123,provider:'openrouter',
   providerEnv:'OPENROUTER_API_KEY',model:'openrouter/qwen/qwen3-coder',upstreamModel:'qwen/qwen3-coder',
   inferenceEndpoint:'https://openrouter.ai/api/v1/chat/completions'};
 const pr = {number: 7, state: 'open', draft: false, head: {sha: 'a'.repeat(40), ref: 'feature', repo: {full_name: policy.repository}}, base: {ref: 'main'}};
@@ -52,7 +52,7 @@ test('deduplicates attempts and caps the entire PR rather than resetting after a
 });
 test('resolve requires same published head, unchanged discussion, regression proof and successful CI', () => {
   const proof={headSha:pr.head.sha,threadHash:fingerprint(pr,[thread]),before:1,after:0,verifier:'regression'};
-  const checks=[{name:'Verify',status:'completed',conclusion:'success',appId:15368}];
+  const checks=[{name:'Verify',status:'completed',conclusion:'success',appId:15368,headSha:pr.head.sha,workflow:{workflow_id:123,id:10,latestRunId:10,status:'completed',conclusion:'success',event:'pull_request',head_sha:pr.head.sha,repository:{full_name:policy.repository},head_repository:{full_name:policy.repository},pull_requests:[{number:pr.number,head:{sha:pr.head.sha}}]}}];
   assert.equal(canResolve(pr,thread,proof,checks,policy),true);
   for (const patch of [{headSha:'b'.repeat(40)},{before:0},{before:2},{after:1},{verifier:null},{threadHash:'changed'}]) {
     assert.equal(canResolve(pr,thread,{...proof,...patch},checks,policy),false);
@@ -63,7 +63,7 @@ test('resolve requires same published head, unchanged discussion, regression pro
 });
 test('changed discussions block resolution; outdated alone is never success', () => {
   const proof={headSha:pr.head.sha,threadHash:fingerprint(pr,[thread]),before:1,after:0,verifier:'v'};
-  const checks=[{name:'Verify',status:'completed',conclusion:'success',appId:15368}];
+  const checks=[{name:'Verify',status:'completed',conclusion:'success',appId:15368,headSha:pr.head.sha,workflow:{workflow_id:123,id:10,latestRunId:10,status:'completed',conclusion:'success',event:'pull_request',head_sha:pr.head.sha,repository:{full_name:policy.repository},head_repository:{full_name:policy.repository},pull_requests:[{number:pr.number,head:{sha:pr.head.sha}}]}}];
   assert.equal(canResolve(pr,{...thread,comments:[root,{...root,id:999,body:'Still broken'}]},proof,checks,policy),false);
   assert.equal(canResolve(pr,{...thread,isOutdated:true},{...proof,before:0},checks,policy),false);
 });
@@ -87,7 +87,7 @@ test('CI check identity must match the configured GitHub App',()=>{
   const guarded={...policy,checkAppId:15368};
   const proof={headSha:pr.head.sha,threadHash:fingerprint(pr,[thread]),before:1,after:0,verifier:'v'};
   assert.equal(canResolve(pr,thread,proof,[{name:'Verify',status:'completed',conclusion:'success',appId:999}],guarded),false);
-  assert.equal(canResolve(pr,thread,proof,[{name:'Verify',status:'completed',conclusion:'success',appId:15368}],guarded),true);
+  assert.equal(canResolve(pr,thread,proof,[{name:'Verify',status:'completed',conclusion:'success',appId:15368,headSha:pr.head.sha,workflow:{workflow_id:123,id:10,latestRunId:10,status:'completed',conclusion:'success',event:'pull_request',head_sha:pr.head.sha,repository:{full_name:policy.repository},head_repository:{full_name:policy.repository},pull_requests:[{number:pr.number,head:{sha:pr.head.sha}}]}}],guarded),true);
 });
 
 test('an allowed file name is exact rather than an arbitrary path prefix',()=>{
@@ -96,7 +96,7 @@ test('an allowed file name is exact rather than an arbitrary path prefix',()=>{
 
 test('an unspecified check App identity can never authorize resolution',()=>{
   const proof={headSha:pr.head.sha,threadHash:fingerprint(pr,[thread]),before:1,after:0,verifier:'v'};
-  assert.equal(canResolve(pr,thread,proof,[{name:'Verify',status:'completed',conclusion:'success',appId:15368}],{...policy,checkAppId:undefined}),false);
+  assert.equal(canResolve(pr,thread,proof,[{name:'Verify',status:'completed',conclusion:'success',appId:15368,headSha:pr.head.sha,workflow:{workflow_id:123,id:10,latestRunId:10,status:'completed',conclusion:'success',event:'pull_request',head_sha:pr.head.sha,repository:{full_name:policy.repository},head_repository:{full_name:policy.repository},pull_requests:[{number:pr.number,head:{sha:pr.head.sha}}]}}],{...policy,checkAppId:undefined}),false);
 });
 
 test('safety ceilings reject absent, non-finite, fractional and negative budgets',async()=>{
@@ -152,4 +152,20 @@ test('malformed author allowlists and configured protected heads fail closed',()
  for(const authorIds of ['77',77,null,{},[7.5],['7']])assert.equal(eligibleEvent('pull_request_review',event,{...policy,authorIds}),false);
  assert.equal(eligibleEvent('pull_request_review',event,{...policy,authorIds:[7]}),true);
  assert.equal(eligibleEvent('pull_request_review',event,{...policy,protectedBranches:[pr.head.ref]}),false);
+});
+
+
+test('resolution binds named checks to current PR workflow and successful rerun',()=>{
+  const proof={headSha:pr.head.sha,threadHash:fingerprint(pr,[thread]),before:1,after:0,verifier:'v'};
+  const trusted={name:'Verify',status:'completed',conclusion:'failure',appId:15368,headSha:pr.head.sha,
+    workflow:{workflow_id:123,id:10,latestRunId:10,status:'completed',conclusion:'success',event:'pull_request',head_sha:pr.head.sha,
+      repository:{full_name:policy.repository},head_repository:{full_name:policy.repository},pull_requests:[{number:7,head:{sha:pr.head.sha}}]}};
+  const success={...trusted,conclusion:'success'};
+  assert.equal(canResolve(pr,thread,proof,[success],policy),true);
+  for(const change of [{workflow_id:999},{event:'push'},{event:'workflow_dispatch'},{pull_requests:[]},
+    {pull_requests:[{number:8,head:{sha:pr.head.sha}}]},{repository:{full_name:'other/repo'}},{head_repository:{full_name:'other/repo'}},{head_sha:'b'.repeat(40)},
+    {status:'in_progress',conclusion:null},{conclusion:'failure'},{latestRunId:11}]) {
+    assert.equal(canResolve(pr,thread,proof,[{...success,workflow:{...success.workflow,...change}},trusted],policy),false);
+  }
+  assert.equal(canResolve(pr,thread,proof,[{...success,workflow:null}],policy),false);
 });

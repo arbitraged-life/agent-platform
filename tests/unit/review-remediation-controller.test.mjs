@@ -6,7 +6,7 @@ import { fingerprint } from '../../runtime/review-remediation/policy.mjs';
 
 function fixture({before=1,after=0,agentCode=0}={}) {
   const policy={repository:'owner/repo',reviewers:[{id:11,login:'review[bot]'}],maxAttempts:2,maxThreads:8,maxFiles:8,maxBytes:10000,
-    allowedPrefixes:['src/'],deniedPrefixes:[],requiredChecks:['Verify'],checkAppId:15368,verifiers:[{id:'regression',path:'^src/',body:'bug'}]};
+    allowedPrefixes:['src/'],deniedPrefixes:[],requiredChecks:['Verify'],checkAppId:15368,checkWorkflowId:123,verifiers:[{id:'regression',path:'^src/',body:'bug'}]};
   const pr={number:7,state:'open',draft:false,head:{sha:'a'.repeat(40),ref:'feature',repo:{full_name:'owner/repo'}},base:{ref:'main'}};
   const thread={id:'T1',path:'src/a.js',isResolved:false,isOutdated:false,comments:[{id:123,user:{id:11,login:'review[bot]',type:'Bot'},body:'Fix bug',updated_at:'now'}]};
   let records=[],published=0,agentCalls=0,checks=[];
@@ -23,7 +23,7 @@ function fixture({before=1,after=0,agentCode=0}={}) {
   let passes=0;
   const executor={prepare:async()=>({}),verify:async()=>({syntax:0,regression:passes++?after:before}),
     run:async()=>{agentCalls++;return{code:agentCode};},changes:async()=>[{path:'src/a.js',type:'file',content:'fixed'}],cleanup:async()=>{}};
-  return{policy,api,executor,pr,thread,counts:()=>({published,agentCalls}),green:()=>{checks=[{name:'Verify',status:'completed',conclusion:'success',appId:15368}];}};
+  return{policy,api,executor,pr,thread,counts:()=>({published,agentCalls}),green:()=>{checks=[{name:'Verify',status:'completed',conclusion:'success',appId:15368,headSha:pr.head.sha,workflow:{workflow_id:123,id:10,latestRunId:10,status:'completed',conclusion:'success',event:'pull_request',head_sha:pr.head.sha,repository:{full_name:policy.repository},head_repository:{full_name:policy.repository},pull_requests:[{number:pr.number,head:{sha:pr.head.sha}}]}}];}};
 }
 
 test('dry run reads eligibility without invoking agent or writing state',async()=>{
@@ -54,6 +54,9 @@ test('a head update during agent work prevents a stale publish',async()=>{
   f.executor.run=async()=>{const result=await original();f.pr.head.sha='c'.repeat(40);return result;};
   const result=await remediate({...f,number:7,apply:true});
   assert.equal(result.status,'failed');assert.equal(f.counts().published,0);
+  assert.notEqual(result.stage,'publish');
+  f.executor.run=original;let passes=0;f.executor.verify=async()=>({syntax:0,regression:passes++ ? 0 : 1});
+  assert.equal((await remediate({...f,number:7,apply:true})).status,'pending-ci');
 });
 test('attempt cap survives changes to the PR head',async()=>{
   const f=fixture({agentCode:124});f.executor.verify=async()=>({syntax:0,regression:1});

@@ -90,11 +90,31 @@ export class GitHubClient {
   async checks(repository, sha) {
     const result = [];
     for (let page = 1; page <= 100; page++) {
-      const data = await this.rest(`/repos/${repository}/commits/${sha}/check-runs?filter=latest&per_page=100&page=${page}`);
+      const data = await this.rest(`/repos/${repository}/commits/${sha}/check-runs?filter=all&per_page=100&page=${page}`);
       result.push(...data.check_runs);
       if (data.check_runs.length < 100) {
-        return result.sort((a,b) => b.id-a.id).filter((c,i,all) => all.findIndex(x => x.name === c.name) === i)
-          .map(c => ({name:c.name,status:c.status,conclusion:c.conclusion,appId:c.app?.id}));
+        const runs = [];
+        for (let runPage = 1; runPage <= 10; runPage++) {
+          const data = await this.rest(`/repos/${repository}/actions/runs?head_sha=${sha}&per_page=100&page=${runPage}`);
+          if (!Array.isArray(data.workflow_runs) || !Number.isSafeInteger(data.total_count) || data.total_count < 0 || data.total_count > 1000) throw new Error('Workflow provenance is incomplete');
+          runs.push(...data.workflow_runs);
+          if (runs.length === data.total_count) break;
+          if (data.workflow_runs.length < 100 || runs.length > data.total_count) throw new Error('Workflow provenance is incomplete');
+          if (runPage === 10) throw new Error('Workflow provenance pagination limit reached');
+        }
+        const suites = new Map();
+        for (const run of runs) {
+          const matching = runs.filter(candidate => candidate.check_suite_id === run.check_suite_id);
+          if (matching.length !== 1) continue;
+          const latestRunId = Math.max(...runs.filter(candidate =>
+            candidate.workflow_id === run.workflow_id && candidate.event === 'pull_request' && candidate.head_sha === sha
+          ).map(candidate => candidate.id));
+          suites.set(run.check_suite_id, {...run, latestRunId});
+        }
+        return result.sort((a,b) => b.id-a.id).map(check => ({
+          name:check.name, status:check.status, conclusion:check.conclusion, appId:check.app?.id,
+          headSha:check.head_sha, workflow:suites.get(check.check_suite?.id) ?? null,
+        }));
       }
     }
     throw new Error('Check pagination safety limit reached');

@@ -435,3 +435,23 @@ test('shutdown during child creation cancels the owned process before returning'
   assert.equal(injected,true);assert.equal(result.status,'cancelled');
  } finally {childProcess.spawn=original;syncBuiltinESMExports();}
 });
+
+
+test('test-only write sandbox cannot accept workspace edits',async()=>{
+ const f=await fixture(),linked=path.join(f.root,'test-linked');
+ await writeFile(path.join(f.workspace,'source.txt'),'original');
+ await exec('git',['-C',f.workspace,'add','source.txt']);
+ await exec('git',['-C',f.workspace,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','source']);
+ await exec('git',['-C',f.workspace,'worktree','add','-qb','test-scope',linked]);
+ f.data.workspace_roots=[f.root];f.data.protected_branches=['main','master'];
+ const bin=f.data.profiles['codex-readonly'].executable;
+ await writeFile(bin,(await readFile(bin,'utf8')).replace("console.log(JSON.stringify({type:'fixture'", "await fs.writeFile('source.txt','unauthorized');console.log(JSON.stringify({type:'fixture'"));
+ f.data.profiles.write={...f.data.profiles['codex-readonly'],sandbox:'workspace-write',actions:['read','test','edit'],requires_isolated_worktree:true};
+ await writeFile(f.policyPath,JSON.stringify(f.data));
+ const policy=await loadPolicy(f.policyPath),task=packet(linked,{profile:'write',actions:['test'],source_write_authorized:true});
+ const prepared=await prepare(policy,task);
+ const result=await runPrepared(policy,task.task_id,{approved_digest:prepared.approval_digest,approval_ref:'user approved fixture'});
+ assert.equal(result.status,'needs-review');
+ assert.equal(result.workspace_changed,true);
+ await assert.rejects(()=>acceptResult(policy,task.task_id,{}),/Only a returned/);
+});

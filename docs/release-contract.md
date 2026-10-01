@@ -28,3 +28,5 @@ reviewer policies, destinations, allowlists, and secret references remain in the
 consumer. No environment-specific configuration is shipped inside the bundle.
 
 Build and install share a 64 MiB size ceiling and 10,000-entry ceiling. Oversized builds fail before returning a release lock or replacing an existing artifact. Paths containing colons are rejected during installation for cross-platform extraction safety.
+
+Builds stream committed Git archive entries, enforce entry and expanded-byte bounds before reading each body, and terminate the archive producer on rejection. Published bundle files use mode 0644; executable entry permissions come from committed Git modes.

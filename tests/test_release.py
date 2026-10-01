@@ -10,6 +10,8 @@ import os
 # qlty-ignore(bandit:B404): Required CLI execution uses argv arrays without a shell.
 import subprocess
 import shutil
+import sys
+import time
 
 
 GIT_EXECUTABLE = shutil.which('git')
@@ -42,6 +44,7 @@ class ReleaseTests(unittest.TestCase):
             source.write_text('uncommitted')
             first, second = Path(tmp) / 'first.tar', Path(tmp) / 'second.tar'
             release.build(root, first)
+            self.assertEqual(first.stat().st_mode & 0o777, 0o644)
             # qlty-ignore(bandit:B603): Fixture changes only its local Git archive configuration.
             subprocess.run([GIT_EXECUTABLE, '-C', str(root), 'config', 'tar.umask', '0777'], check=True)
             release.build(root, second)
@@ -58,6 +61,23 @@ class ReleaseTests(unittest.TestCase):
             with patch.object(release, 'MAX_RELEASE_BYTES', 4096, create=True), self.assertRaisesRegex(ValueError, 'size limit'):
                 release.build(root, previous)
             self.assertEqual(previous.read_bytes(), b'previous verified artifact')
+
+    def test_oversized_header_rejected_before_waiting_for_archive_body(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git = root / 'git-fixture'
+            git.write_text(f"#!{sys.executable}\n" + "import sys, tarfile, time\n"
+                           "if 'status' in sys.argv: sys.exit(0)\n"
+                           "if 'rev-parse' in sys.argv: print('a' * 40); sys.exit(0)\n"
+                           "header = tarfile.TarInfo('huge.bin'); header.size = 100 * 1024 * 1024\n"
+                           "sys.stdout.buffer.write(header.tobuf() + bytes(10240)); sys.stdout.buffer.flush()\n"
+                           "time.sleep(30)\n")
+            git.chmod(0o755)
+            started = time.monotonic()
+            with patch.object(release, 'GIT_EXECUTABLE', str(git)), self.assertRaisesRegex(ValueError, 'size limit'):
+                release.build(root, root / 'release.tar')
+            self.assertLess(time.monotonic() - started, 5)
+            self.assertFalse((root / 'release.tar').exists())
 
     def bundle(self, root, names=None, wrong_manifest=False):
         data = b'export const version = 1;\n'

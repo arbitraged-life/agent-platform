@@ -42,13 +42,19 @@ export function attemptDecision(attempts, key, maxAttempts) {
 // A verified fix can itself make an old diff thread outdated. That flag is
 // neither proof of a fix nor a veto on an otherwise fully verified resolution.
 export function canResolve(pr, thread, proof, checks, policy) {
-  if (!Number.isInteger(policy.checkAppId) || policy.checkAppId<=0 || !eligiblePR(pr, policy) || thread.isResolved || thread.truncated || !proof.verifier ||
+  if (!Number.isSafeInteger(policy.checkWorkflowId) || policy.checkWorkflowId < 1 || !Number.isInteger(policy.checkAppId) || policy.checkAppId<=0 || !eligiblePR(pr, policy) || thread.isResolved || thread.truncated || !proof.verifier ||
       proof.headSha !== pr.head.sha || proof.before !== 1 || proof.after !== 0 ||
       proof.threadHash !== fingerprint(pr, [thread])) return false;
   return policy.requiredChecks.length > 0 && policy.requiredChecks.every(name => {
-    const check = checks.find(c => c.name === name);
+    const check = checks.find(c => c.name === name && c.appId === policy.checkAppId &&
+      c.headSha === pr.head.sha && c.workflow?.workflow_id === policy.checkWorkflowId &&
+      c.workflow.event === 'pull_request' && c.workflow.head_sha === pr.head.sha &&
+      c.workflow.repository?.full_name === policy.repository &&
+      c.workflow.head_repository?.full_name === policy.repository &&
+      c.workflow.pull_requests?.some(p => p.number === pr.number && p.head?.sha === pr.head.sha));
     return check?.status === 'completed' && check.conclusion === 'success' &&
-      check.appId === policy.checkAppId;
+      check.appId === policy.checkAppId && Number.isSafeInteger(check.workflow.id) &&
+      check.workflow.id === check.workflow.latestRunId && check.workflow.status === 'completed' && check.workflow.conclusion === 'success';
   });
 }
 
@@ -78,7 +84,7 @@ export function assertPolicySafety(policy) {
       workflows.some(name=>typeof name!=='string' || !name.trim()) || new Set(workflows).size!==workflows.length)
     throw new Error('Invalid finalization workflow names');
   const ceilings={maxAttempts:2,maxThreads:100,maxFiles:20,maxBytes:1048576,
-    agentTimeoutSeconds:600,maxModelRequests:12,maxOutputTokens:4096,checkAppId:Number.MAX_SAFE_INTEGER};
+    agentTimeoutSeconds:600,maxModelRequests:12,maxOutputTokens:4096,checkAppId:Number.MAX_SAFE_INTEGER,checkWorkflowId:Number.MAX_SAFE_INTEGER};
   for(const [key,ceiling] of Object.entries(ceilings)) {
     if(!Number.isSafeInteger(policy[key]) || policy[key]<1 || policy[key]>ceiling)
       throw new Error(`Invalid policy safety limit: ${key}`);
