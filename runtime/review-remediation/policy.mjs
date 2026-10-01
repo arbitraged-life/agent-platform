@@ -89,7 +89,7 @@ export function assertPolicySafety(policy) {
     if(!Number.isSafeInteger(policy[key]) || policy[key]<1 || policy[key]>ceiling)
       throw new Error(`Invalid policy safety limit: ${key}`);
   }
-  const credentials={openrouter:'OPENROUTER_API_KEY',anthropic:'ANTHROPIC_API_KEY',openai:'OPENAI_API_KEY'};
+  const credentials={openrouter:'OPENROUTER_API_KEY',openai:'OPENAI_API_KEY'};
   if (!Object.hasOwn(credentials,policy.provider)) throw new Error('Invalid inference provider');
   if (policy.providerEnv!==credentials[policy.provider]) throw new Error('Unsupported inference credential');
   if (typeof policy.model!=='string' || !/^[^/\s]+\/[^\s]+$/.test(policy.model))

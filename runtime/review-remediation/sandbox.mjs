@@ -2,9 +2,9 @@ import { spawn } from 'node:child_process';
 import { readdir, lstat, readFile, readlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { isUtf8 } from 'node:buffer';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
-export async function snapshot(root) {
+export async function snapshot(root, {includeContent=true, baseline}={}) {
   const files = new Map();
   let size = 0, entries = 0;
   async function visit(relative) {
@@ -18,7 +18,10 @@ export async function snapshot(root) {
         size += stat.size;
         if (size > 200*1024*1024) throw new Error('snapshot limit exceeded');
         const bytes = await readFile(full);
-        files.set(path,{type:'file',content:bytes.toString('utf8'),bytes,mode:stat.mode & 0o111,binary:!isUtf8(bytes)});
+        const hash=createHash('sha256').update(bytes).digest('hex'),binary=!isUtf8(bytes);
+        const file={type:'file',hash,mode:stat.mode & 0o111,binary};
+        if(includeContent && !binary && baseline?.get(path)?.hash!==hash)file.content=bytes.toString('utf8');
+        files.set(path,file);
       } else throw new Error(`special file in snapshot: ${path}`);
     }
   }
@@ -31,11 +34,12 @@ export function changedFiles(before, after) {
   for (const path of new Set([...before.keys(),...after.keys()])) {
     const a=before.get(path), b=after.get(path);
     if (a?.type === b?.type && a?.mode === b?.mode) {
-      if (a?.type === 'file' && a.bytes.equals(b.bytes)) continue;
+      if (a?.type === 'file' && typeof a.hash==='string' && a.hash===b.hash) continue;
       if (a?.type !== 'file' && a?.content === b?.content) continue;
     }
     if ((a && a.type !== 'file') || (b && b.type !== 'file') || a?.binary || b?.binary ||
         (a && b && a.mode !== b.mode) || (!a && b?.mode)) throw new Error(`special, binary or mode-only change: ${path}`);
+    if(b && typeof b.content!=='string')throw new Error(`Missing changed file content: ${path}`);
     changes.push({path,type:'file',content:b?.content ?? null});
   }
   return changes;

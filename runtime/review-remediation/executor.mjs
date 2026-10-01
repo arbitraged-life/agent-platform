@@ -33,7 +33,7 @@ export class DockerExecutor {
       await writeFile(archive,await this.api.archive(this.policy.repository,pr.head.sha),{mode:0o600});
       const result=await runCommand('python3',[fileURLToPath(new URL('./extract-archive.py',import.meta.url)),archive,root]);
       if(result.code!==0)throw new Error('Source extraction failed');
-      return {directory,root,before:await snapshot(root)};
+      return {directory,root,before:await snapshot(root,{includeContent:false})};
     } catch(error) {await rm(directory,{recursive:true,force:true});throw error;}
   }
   async verify(workspace) {
@@ -45,7 +45,7 @@ export class DockerExecutor {
     return parsed;
   }
   async run(workspace,threads) {
-    if(!['OPENROUTER_API_KEY','ANTHROPIC_API_KEY','OPENAI_API_KEY'].includes(this.policy.providerEnv))
+    if(!['OPENROUTER_API_KEY','OPENAI_API_KEY'].includes(this.policy.providerEnv))
       throw new Error('Unsupported inference credential');
     const key=process.env[this.policy.providerEnv];
     if(!key)throw new Error('Inference credential is missing');
@@ -67,7 +67,7 @@ export class DockerExecutor {
       const result=await runBox(this.image,workspace.root,command,{network:'none',timeoutMs:60000});
       if(result.code!==0)throw new Error('Deterministic generation failed');
     }
-    return changedFiles(workspace.before,await snapshot(workspace.root));
+    return changedFiles(workspace.before,await snapshot(workspace.root,{baseline:workspace.before}));
   }
   async cleanup(workspace) {await rm(workspace.directory,{recursive:true,force:true});}
 }

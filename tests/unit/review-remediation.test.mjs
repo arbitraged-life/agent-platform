@@ -121,6 +121,7 @@ test('malformed inference policy fails at startup before GitHub credentials or a
     [{providerEnv:'OPENAI_API_KEY'},/Unsupported inference credential/],
     [{provider:undefined},/Invalid inference provider/],
     [{provider:'other'},/Invalid inference provider/],
+    [{provider:'anthropic',providerEnv:'ANTHROPIC_API_KEY'},/Invalid inference provider/],
     [{model:undefined},/Invalid inference model/],
     [{model:'openrouter/'},/Invalid inference model/],
     [{upstreamModel:' '},/Invalid upstream model/],

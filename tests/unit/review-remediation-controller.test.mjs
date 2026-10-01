@@ -223,3 +223,35 @@ test('rename to a consumer-protected branch blocks publication',async()=>{
  assert.equal((await remediate({...f,number:7,apply:true})).status,'failed');
  assert.equal(f.counts().published,0);
 });
+
+
+test('large verifier diagnostics never enter a receipt or block its final update',async()=>{
+  const f=fixture();let passes=0;
+  f.executor.verify=async()=>({syntax:0,regression:passes++?0:1,diagnostics:'private-diagnostic'.repeat(100000)});
+  const rest=f.api.rest;
+  f.api.rest=async(path,method,body)=>{
+    if(body?.body)assert.ok(Buffer.byteLength(body.body)<60000);
+    return rest(path,method,body);
+  };
+  assert.equal((await remediate({...f,number:7,apply:true})).status,'pending-ci');
+  const records=await f.api.all();
+  assert.ok(records.every(record=>!record.body.includes('private-diagnostic')));
+  f.green();assert.equal((await finalize({...f,number:7})).resolved,1);
+});
+
+test('oversized status maps fail safely and leave a bounded completed attempt',async()=>{
+  const f=fixture();
+  f.executor.verify=async()=>({syntax:0,...Object.fromEntries(Array.from({length:129},(_,i)=>[`check${i}`,0]))});
+  const result=await remediate({...f,number:7,apply:true});
+  assert.equal(result.status,'failed');assert.equal(result.stage,'verify-before');
+  assert.equal(f.counts().published,0);
+  assert.equal((await remediate({...f,number:7,apply:true})).status,'duplicate');
+});
+
+test('oversized proof is rejected before publication and leaves a recoverable receipt',async()=>{
+  const f=fixture();f.thread.id='T'.repeat(48000);
+  const result=await remediate({...f,number:7,apply:true});
+  assert.equal(result.status,'failed');assert.notEqual(result.stage,'publish');
+  assert.equal(f.counts().published,0);
+  assert.equal((await remediate({...f,number:7,apply:true})).status,'duplicate');
+});
