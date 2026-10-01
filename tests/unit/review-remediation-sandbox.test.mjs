@@ -27,7 +27,9 @@ test('snapshot rejects binary changes that decode to the same replacement text',
     const before=await snapshot(dir);
     await writeFile(file,Buffer.from([0x81]));
     const after=await snapshot(dir);
-    assert.equal(before.get('input.bin').content,after.get('input.bin').content);
+    assert.notEqual(before.get('input.bin').hash,after.get('input.bin').hash);
+    assert.equal(before.get('input.bin').content,undefined);
+    assert.equal(after.get('input.bin').bytes,undefined);
     assert.throws(()=>changedFiles(before,after),/binary/);
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
@@ -140,4 +142,49 @@ test('completed group termination is not repeated against an exited group',async
   const result=await runCommand(process.execPath,['-e','setInterval(()=>{},1000)'],{timeoutMs:150});
   assert.equal(result.code,124);assert.equal(groupKills,1);
  } finally {process.kill=original;}
+});
+
+
+test('baseline retains only hashes and final snapshots decode only changed text',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'review-hash-snapshot-'));
+  try {
+    await writeFile(join(dir,'same.txt'),'unchanged');
+    await writeFile(join(dir,'changed.txt'),'before');
+    await writeFile(join(dir,'binary.bin'),Buffer.from([0x80]));
+    const before=await snapshot(dir,{includeContent:false});
+    for(const entry of before.values()) {
+      assert.equal(entry.bytes,undefined);assert.equal(entry.content,undefined);
+      assert.match(entry.hash,/^[a-f0-9]{64}$/);
+    }
+    await writeFile(join(dir,'changed.txt'),'after');
+    const after=await snapshot(dir,{baseline:before});
+    assert.equal(after.get('same.txt').content,undefined);
+    assert.deepEqual(changedFiles(before,after),[{path:'changed.txt',type:'file',content:'after'}]);
+    delete after.get('changed.txt').content;
+    assert.throws(()=>changedFiles(before,after),/Missing changed file content/);
+  } finally {await rm(dir,{recursive:true,force:true});}
+});
+
+test('archive rejects actual case and Unicode aliases in implicit directory parents',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'review-directory-alias-'));
+  try {
+    for(const [index,names] of [['case',['Mixed','MIXED']],['unicode',['caf\u00e9','cafe\u0301']]]) {
+      const probe=join(dir,index);await mkdir(probe);await mkdir(join(probe,names[0]));
+      const aliases=await access(join(probe,names[1])).then(()=>true,()=>false);
+      const archive=join(dir,`${index}.tar.gz`);
+      const made=await runCommand('python3',['-c',`import tarfile,io,sys
+with tarfile.open(sys.argv[1],'w:gz') as t:
+ for parent,leaf in [(sys.argv[2],'a'),(sys.argv[3],'b')]:
+  m=tarfile.TarInfo('root/'+parent+'/'+leaf);m.size=2;t.addfile(m,io.BytesIO(b'ok'))`,archive,...names]);
+      assert.equal(made.code,0);
+      const result=await runCommand('python3',['runtime/review-remediation/extract-archive.py',archive,join(dir,index+'-out')]);
+      assert.equal(result.code,aliases?1:0);
+    }
+    const archive=join(dir,'same.tar.gz');
+    await runCommand('python3',['-c',`import tarfile,io,sys
+with tarfile.open(sys.argv[1],'w:gz') as t:
+ m=tarfile.TarInfo('root/src/a');m.size=2;t.addfile(m,io.BytesIO(b'ok'))
+ m=tarfile.TarInfo('root/src');m.type=tarfile.DIRTYPE;t.addfile(m)`,archive]);
+    assert.equal((await runCommand('python3',['runtime/review-remediation/extract-archive.py',archive,join(dir,'same-out')])).code,0);
+  } finally {await rm(dir,{recursive:true,force:true});}
 });

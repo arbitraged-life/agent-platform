@@ -28,9 +28,21 @@ function visibleThread(thread, identity, token) {
 }
 
 function recordBody(record, token) {
-  return `Review remediation: **${record.status}**. Attempt ${record.attempt}. ` +
+  const body = `Review remediation: **${record.status}**. Attempt ${record.attempt}. ` +
     `Selected ${record.threadCount} review thread(s); verified ${record.proofs?.length ?? 0}. ` +
     'Unverified findings remain open. No automatic merge or deployment.\n\n' + seal(record, token);
+  if(Buffer.byteLength(body)>60000)throw new Error('Attempt receipt exceeds comment budget');
+  return body;
+}
+
+// Only bounded status codes enter signed public receipts; diagnostic output stays local.
+function verificationStatuses(report) {
+  if(!report || typeof report!=='object' || Array.isArray(report) || ![0,1,2].includes(report.syntax))
+    throw new Error('Invalid verification report');
+  const statuses=Object.entries(report).filter(([,status])=>[0,1,2].includes(status));
+  if(statuses.length>128 || statuses.some(([name])=>!/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(name)))
+    throw new Error('Verification status budget exceeded');
+  return Object.fromEntries(statuses);
 }
 
 async function update(api, repository, id, record) {
@@ -63,7 +75,7 @@ export async function remediate({api, policy, executor, number, apply=false}) {
     record.stage='prepare';
     workspace = await executor.prepare(pr);
     record.stage='verify-before';
-    const before = await executor.verify(workspace);
+    const before = verificationStatuses(await executor.verify(workspace));
     record.before=before;
     const actionable = threads.filter(t=>before[verifierFor(t,policy)?.id] === 1);
     const verifierIds=actionable.map(t=>verifierFor(t,policy).id);
@@ -75,7 +87,7 @@ export async function remediate({api, policy, executor, number, apply=false}) {
       else {
         record.stage='generate-and-verify';
         const changes = await executor.changes(workspace);
-        const after = await executor.verify(workspace);
+        const after = verificationStatuses(await executor.verify(workspace));
         record.after=after;
         const proofs = actionable.flatMap(t=>{
           const id=verifierFor(t,policy).id;
@@ -93,6 +105,9 @@ export async function remediate({api, policy, executor, number, apply=false}) {
           const matching = selectThreads(fresh,policy);
           if (!eligiblePR(current,policy) || current.head.sha!==pr.head.sha || fingerprint(current,matching)!==key)
             throw new Error('PR or discussion changed during remediation');
+          // Budget the largest eventual receipt before creating an irreversible commit.
+          recordBody({...record,status:'pending-ci',stage:'publish',publishedSha:'f'.repeat(40),
+            proofs:proofs.map(proof=>({...proof,headSha:'f'.repeat(40),threadHash:'f'.repeat(64),resolved:true}))},api.signingKeys[0]);
           record.stage='publish';
           const commit = await api.publish(policy.repository,current.head.ref,current.head.sha,changes);
           const published = {...current,head:{...current.head,sha:commit.oid}};
@@ -104,7 +119,7 @@ export async function remediate({api, policy, executor, number, apply=false}) {
   } catch (error) {
     record.status='failed';
     // Detailed subprocess/model output is not copied into public comments.
-    record.failure=error.name;
+    record.failure='Error';
   } finally {
     try {
       await update(api,policy.repository,reservation.id,record);

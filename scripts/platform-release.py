@@ -49,7 +49,7 @@ def build(root, output):
             for member in source:
                 entries += 1
                 total += member.size
-                if entries >= 10000 or total > MAX_RELEASE_BYTES:
+                if entries > 10000 or total > MAX_RELEASE_BYTES:
                     raise ValueError('Expanded release exceeds size limit')
                 if member.isdir():
                     continue

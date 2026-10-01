@@ -79,6 +79,23 @@ class ReleaseTests(unittest.TestCase):
             self.assertLess(time.monotonic() - started, 5)
             self.assertFalse((root / 'release.tar').exists())
 
+    def test_input_directory_plus_9999_files_fits_output_manifest_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git = root / 'git-fixture'
+            git.write_text(f"#!{sys.executable}\n" + "import sys, tarfile\n"
+                           "if 'status' in sys.argv: sys.exit(0)\n"
+                           "if 'rev-parse' in sys.argv: print('a' * 40); sys.exit(0)\n"
+                           "with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as archive:\n"
+                           " directory=tarfile.TarInfo('src'); directory.type=tarfile.DIRTYPE; archive.addfile(directory)\n"
+                           " for index in range(9999): archive.addfile(tarfile.TarInfo('src/file-'+str(index)))\n")
+            git.chmod(0o755)
+            with patch.object(release, 'GIT_EXECUTABLE', str(git)):
+                lock = release.build(root, root / 'release.tar')
+            with tarfile.open(root / 'release.tar') as archive:
+                self.assertEqual(len(archive.getmembers()), 10000)
+            self.assertEqual(lock['commit'], 'a' * 40)
+
     def bundle(self, root, names=None, wrong_manifest=False):
         data = b'export const version = 1;\n'
         manifest = {'schema_version': 1, 'commit': 'a' * 40, 'files': {'runtime/main.mjs': release.sha(data)}}

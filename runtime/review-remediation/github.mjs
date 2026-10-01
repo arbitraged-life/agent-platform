@@ -106,9 +106,10 @@ export class GitHubClient {
         for (const run of runs) {
           const matching = runs.filter(candidate => candidate.check_suite_id === run.check_suite_id);
           if (matching.length !== 1) continue;
-          const latestRunId = Math.max(...runs.filter(candidate =>
+          const matchingRuns = runs.filter(candidate =>
             candidate.workflow_id === run.workflow_id && candidate.event === 'pull_request' && candidate.head_sha === sha
-          ).map(candidate => candidate.id));
+          ).map(candidate => candidate.id);
+          const latestRunId = matchingRuns.length ? Math.max(...matchingRuns) : null;
           suites.set(run.check_suite_id, {...run, latestRunId});
         }
         return result.sort((a,b) => b.id-a.id).map(check => ({

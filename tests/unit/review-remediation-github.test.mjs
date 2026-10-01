@@ -51,6 +51,7 @@ test('same-name check runs retain their distinct workflow provenance',async()=>{
   const checks=await api.checks('owner/repo','sha');
   assert.equal(checks.length,2);
   assert.equal(checks[0].workflow.event,'push');
+  assert.equal(checks[0].workflow.latestRunId,null);
   assert.equal(checks[1].workflow.event,'pull_request');
   assert.equal(checks[1].conclusion,'failure');
   assert.equal(checks[1].workflow.latestRunId,3);

@@ -42,3 +42,5 @@ The tests exercise event identity, fork/author restrictions, durable budgets, si
 Host subprocess supervision requires POSIX process groups. Timeout and output-limit termination kill owned descendants, and Windows hosts are rejected. The CLI returns failure for unverified work and reconciliation-required states.
 
 Resolution evidence comes from the configured Actions workflow ID at the current PR head, with a pull-request event and explicit PR association. The newest PR run must be completed successfully; queued reruns and same-name push/manual checks cannot authorize resolution. The controller credential needs Actions read permission. Missing or ambiguous provenance fails closed. Merge-SHA evidence is not inferred from a matching name.
+
+The inference proxy supports OpenAI-compatible chat-completions providers (`openai` and `openrouter`). Native Anthropic API policies are rejected; Anthropic models may be selected through an OpenRouter endpoint. Signed receipts retain at most 128 status codes with bounded identifiers, excluding verifier diagnostics. The controller budgets the complete proof receipt before publishing a patch.
