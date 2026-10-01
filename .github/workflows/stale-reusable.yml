@@ -29,22 +29,22 @@ on:
         type: string
         default: >
           This issue has been automatically marked as stale because it has had
-          no activity for 60 days. It will be closed in 14 days if no further
-          activity occurs. Remove the stale label or comment to keep it open.
+          no recent activity. It may be closed under this repository's configured
+          inactivity policy. Remove the stale label or comment to keep it open.
       stale-pr-message:
         type: string
         default: >
           This pull request has been automatically marked as stale because it
-          has had no activity for 60 days. It will be closed in 14 days if no
-          further activity occurs. Remove the stale label or comment to keep it open.
+          has had no recent activity. It may be closed under this repository's
+          configured inactivity policy. Remove the stale label or comment to keep it open.
       close-issue-message:
         type: string
         default: >
-          This issue was closed because it has been stale for 14 days with no activity.
+          This issue was closed because it reached this repository's configured stale threshold with no activity.
       close-pr-message:
         type: string
         default: >
-          This pull request was closed because it has been stale for 14 days with no activity.
+          This pull request was closed because it reached this repository's configured stale threshold with no activity.
 
 permissions:
   issues: write
