@@ -24,6 +24,13 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def release_path(value):
+    name = PurePosixPath(value)
+    if not name.parts or name.is_absolute() or PureWindowsPath(value).drive or '..' in name.parts or '\\' in value or ':' in value:
+        raise ValueError('Unsafe release entry')
+    return name
+
+
 def build(root, output):
     if GIT_EXECUTABLE is None:
         raise RuntimeError('git executable is required to build a release')
@@ -41,6 +48,7 @@ def build(root, output):
                 continue
             if not member.isfile():
                 raise ValueError(f'Unsupported release entry: {member.name}')
+            release_path(member.name)
             if member.name == MANIFEST_NAME:
                 raise ValueError('Reserved release manifest in source')
             files[member.name] = source.extractfile(member).read()
@@ -78,8 +86,8 @@ def _extract_bundle(data, temporary):
             raise ValueError('Too many release entries')
         seen = set()
         for member in members:
-            name = PurePosixPath(member.name)
-            if not member.isfile() or name.is_absolute() or PureWindowsPath(member.name).drive or '..' in name.parts or '\\' in member.name or ':' in member.name or str(name) in seen:
+            name = release_path(member.name)
+            if not member.isfile() or str(name) in seen:
                 raise ValueError('Unsafe release entry')
             seen.add(str(name))
             total += member.size
