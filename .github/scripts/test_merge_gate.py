@@ -337,6 +337,17 @@ class CoordinatorLifecycleTests(unittest.TestCase):
             self.assertFalse(merge_gate._process_pr(args, 'owner/repo', 42, ['ci.yml'], [], []))
         command.assert_not_called()
 
+    def test_inventory_bound_and_malformed_pages_fail_closed(self):
+        page = [{'number': n, 'labels': []} for n in range(100)]
+        for payload in [None, page+[page[0]]]:
+            with patch.object(merge_gate, '_gh_json', return_value=payload), self.assertRaisesRegex(ValueError, 'invalid'):
+                merge_gate._candidate_numbers('owner/repo','auto-merge',100,1)
+        with patch.object(merge_gate, '_gh_json', return_value=page) as request, self.assertRaisesRegex(ValueError, 'exceeds 10000'):
+            merge_gate._candidate_numbers('owner/repo','auto-merge',100,1)
+        self.assertEqual(request.call_count,101)
+        with patch.object(merge_gate, '_gh_json', side_effect=[page]*100+[[]]):
+            self.assertEqual(merge_gate._candidate_numbers('owner/repo','auto-merge',100,1),[])
+
     def test_bounded_processing_rotates_across_paginated_labeled_inventory(self):
         first = [{'number': n, 'labels': [{'name':'auto-merge'}]} for n in range(1,101)]
         last = [{'number':101, 'labels':[{'name':'auto-merge'}]}]
