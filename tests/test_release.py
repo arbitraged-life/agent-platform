@@ -23,7 +23,7 @@ SPEC.loader.exec_module(release)
 
 class ReleaseTests(unittest.TestCase):
     def test_windows_reserved_and_aliased_path_components_are_rejected(self):
-        for component in ['CON', 'NUL.txt', 'aux', 'COM1', 'lpt9.log', 'COM¹.txt', 'CONIN$', 'name.', 'name ', 'a?b']:
+        for component in ['CON', 'CON .txt', 'COM1 .log', 'NUL.txt', 'aux', 'COM1', 'lpt9.log', 'COM¹.txt', 'CONIN$', 'name.', 'name ', 'a?b']:
             with self.subTest(component=component), self.assertRaisesRegex(ValueError, 'Unsafe release'):
                 release.release_path('nested/' + component + '/file.txt')
         self.assertEqual(str(release.release_path('nested/console.txt')), 'nested/console.txt')

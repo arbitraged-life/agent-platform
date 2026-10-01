@@ -1,7 +1,8 @@
 # Agent Platform
 
 Reusable, independently testable agent engineering components. Node.js 24 or
-newer, Python 3.12 or newer, and Git are required. No private checkout,
+newer, CPython 3.12–3.14, and Git are required for validation on macOS or Linux
+x86_64/arm64. No private checkout,
 account, service, or credentials are needed for local validation.
 
 ```sh
@@ -10,7 +11,12 @@ account, service, or credentials are needed for local validation.
 ```
 
 Setup creates an isolated validation environment with a hash-pinned YAML parser.
-Runtime components use standard-library dependencies only.
+Runtime components use standard-library dependencies only. The validation lock is
+generated from the [PyYAML 6.0.3 release metadata](https://pypi.org/pypi/PyYAML/6.0.3/json):
+select `urls` entries with `packagetype == "bdist_wheel"`, collect their
+`digests.sha256` values, deduplicate, sort, and write one `--hash=sha256:` per
+line under the exact version pin. Compare that set with the metadata when
+updating the lock; installation verifies the selected artifact with `--require-hashes`.
 
 The initial release contains the execution router, bounded review remediation,
 one portable execution-routing skill, deterministic routing evaluations, and

@@ -84,3 +84,14 @@ test('REST JSON and cumulative pagination bytes are bounded',async()=>{
   const oversizedPage=new GitHubClient('token',async()=>Response.json(Array.from({length:101},(_,id)=>({id}))));
   await assert.rejects(()=>oversizedPage.all('/comments'),/bounded paginated/);
 });
+
+test('pagination accounts for wire whitespace before retaining another page',async()=>{
+  let pages=0;
+  const api=new GitHubClient('token',async()=>{
+    pages++;
+    if(pages>2)throw new Error('requested an excessive third page');
+    return new Response(JSON.stringify(Array.from({length:100},(_,id)=>({id})))+' '.repeat(5*1024*1024));
+  });
+  await assert.rejects(()=>api.all('/comments'),/pagination byte limit/);
+  assert.equal(pages,2);
+});

@@ -73,18 +73,15 @@ test('request decoding preserves split UTF-8 and rejects invalid UTF-8',async()=
     async(url,options)=>{calls.push(JSON.parse(options.body));return Response.json({});});
   server.listen(0,'127.0.0.1');await once(server,'listening');
   const send=async(first,last)=>{
-    const accepted=once(server,'request');
     const pending=request(`http://127.0.0.1:${server.address().port}/v1/chat/completions`,{method:'POST',headers:{Authorization:'Bearer run'}});
     const result=new Promise((resolve,reject)=>{
       pending.on('error',reject);
       pending.on('response',res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});
     });
+    pending.setTimeout(5000,()=>pending.destroy(new Error('fragmented request timed out')));
+    // Send the continuation only after the server observes the first chunk.
+    server.once('request',incoming=>incoming.once('data',()=>pending.end(last)));
     pending.write(first);
-    const [incoming]=await accepted;
-    // The server has consumed the first request chunk before the continuation.
-    if(incoming.readableLength)await new Promise(resolve=>setImmediate(resolve));
-    await new Promise(resolve=>setTimeout(resolve,20));
-    pending.end(last);
     return result;
   };
   try {
