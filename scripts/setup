@@ -1,7 +1,21 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/.."
-python3 -m venv .venv
-.venv/bin/python -m pip install --only-binary=:all: --require-hashes -r scripts/requirements-validation.txt
 git config core.hooksPath .githooks
+python3 -c 'import sys; raise SystemExit(not (sys.implementation.name == "cpython" and (3, 12) <= sys.version_info[:2] <= (3, 14)))' || {
+  echo 'Validation requires CPython 3.12–3.14 on PATH; setup stopped.' >&2
+  exit 1
+}
+python3 -m venv .venv || {
+  echo 'Cannot create the validation environment; install Python venv/ensurepip support.' >&2
+  exit 1
+}
+.venv/bin/python -c 'import sys; raise SystemExit(not (sys.implementation.name == "cpython" and (3, 12) <= sys.version_info[:2] <= (3, 14)))' || {
+  echo 'Existing .venv uses an unsupported Python. Move it aside, then rerun setup.' >&2
+  exit 1
+}
+.venv/bin/python -m pip install --only-binary=:all: --require-hashes -r scripts/requirements-validation.txt || {
+  echo 'Validation dependency installation failed. Check network access and use CPython 3.12–3.14 on macOS or Linux x86_64/arm64.' >&2
+  exit 1
+}
 .venv/bin/python scripts/validate lint

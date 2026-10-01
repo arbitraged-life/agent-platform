@@ -42,7 +42,7 @@ export class GitHubClient {
     return response;
   }
 
-  async rest(path, method = 'GET', body) {
+  async rest(path, method = 'GET', body, budget) {
     const response = await this.request(path, method, body);
     if(response.status===204)return null;
     const reader=response.body?.getReader();
@@ -54,6 +54,10 @@ export class GitHubClient {
         const {done,value}=await reader.read();
         if(done)break;
         size+=value.byteLength;
+        if(budget) {
+          budget.bytes+=value.byteLength;
+          if(budget.bytes>MAX_JSON_BYTES)throw new Error('GitHub pagination byte limit reached');
+        }
         if(size>MAX_JSON_BYTES)throw new Error('GitHub response byte limit reached');
         chunks.push(Buffer.from(value));
       }
@@ -69,12 +73,10 @@ export class GitHubClient {
 
   async all(path) {
     const results = [];
-    let bytes=0;
+    const budget={bytes:0};
     for (let page = 1; page <= 100; page++) {
-      const rows = await this.rest(`${path}${path.includes('?') ? '&' : '?'}per_page=100&page=${page}`);
+      const rows = await this.rest(`${path}${path.includes('?') ? '&' : '?'}per_page=100&page=${page}`, 'GET', undefined, budget);
       if (!Array.isArray(rows) || rows.length>100) throw new Error('Expected a bounded paginated GitHub array');
-      bytes+=Buffer.byteLength(JSON.stringify(rows));
-      if(bytes>MAX_JSON_BYTES)throw new Error('GitHub pagination byte limit reached');
       results.push(...rows);
       if (rows.length < 100) return results;
     }
