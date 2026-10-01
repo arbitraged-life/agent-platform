@@ -3,12 +3,37 @@
   "title": "Opik destination configuration v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "endpoint", "workspace", "project", "credential_env"],
+  "required": [
+    "schema_version",
+    "endpoint",
+    "workspace",
+    "project",
+    "credential_env"
+  ],
   "properties": {
-    "schema_version": {"const": 1},
-    "endpoint": {"type": "string", "format": "uri", "pattern": "^https://"},
-    "workspace": {"type": "string", "minLength": 1, "maxLength": 256},
-    "project": {"type": "string", "minLength": 1, "maxLength": 256},
-    "credential_env": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"}
+    "schema_version": {
+      "const": 1
+    },
+    "endpoint": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://[^/@?#\\s]+(?:/[^?#\\s]*)?$"
+    },
+    "workspace": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "credential_env": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    }
   }
 }

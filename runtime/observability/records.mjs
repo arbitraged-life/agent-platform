@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import schema from '../schemas/telemetry-event.schema.json' with {type:'json'};
+import schema from '../../schemas/telemetry-event.schema.json' with {type:'json'};
 
 export function createUuidV7(nowMs=Date.now()) {
   if(!Number.isSafeInteger(nowMs) || nowMs<0 || nowMs>0xffffffffffff)throw new Error('Invalid event timestamp');
@@ -32,11 +32,11 @@ function identifier(value,label,required=false) {
 export function turnEvent({runtime,runId,taskId,agentId,modelId,provider,startedMs,endedMs,status='succeeded',attempt=1,
   usage={},toolCalls=0,toolFailures=0,eventId}={}) {
   if(!['succeeded','failed','cancelled','timed_out','unknown'].includes(status))throw new Error('Invalid result status');
-  if(!Number.isSafeInteger(startedMs)||!Number.isSafeInteger(endedMs)||startedMs<0||endedMs<startedMs)throw new Error('Invalid event time range');
+  if(!Number.isSafeInteger(startedMs)||!Number.isSafeInteger(endedMs)||startedMs<0||endedMs<startedMs||endedMs>253402300799999)throw new Error('Invalid event time range');
   if(!Number.isSafeInteger(attempt)||attempt<1)throw new Error('Invalid attempt');
   if(measurement(toolCalls)===null||measurement(toolFailures)===null||toolFailures>toolCalls)throw new Error('Invalid tool counts');
   const id=identifier(eventId??createUuidV7(startedMs),'event ID',true);
-  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))throw new Error('Invalid telemetry event UUID');
+  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))throw new Error('Invalid telemetry event UUID');
   return {schema_version:1,event_name:'agent.turn.completed',event_id:id,
     runtime:identifier(runtime,'runtime',true),run_id:identifier(runId,'run ID',true),task_id:identifier(taskId,'task ID'),
     agent_id:identifier(agentId,'agent ID'),model_id:identifier(modelId,'model ID'),provider:identifier(provider,'provider'),

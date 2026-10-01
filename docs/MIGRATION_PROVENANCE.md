@@ -20,6 +20,6 @@ record builders at source revision `92a774eae4528022982449d172801e6d891cfde3`:
 `harness/opencode-kilo/opik-records.js`, and
 `harness/opencode-kilo/opik-observability.js`.
 The shared UUID helper, usage mapping, and trace/span transport were normalized
-into `observability/records.mjs` and `observability/opik.mjs`. Environment-specific
+into `runtime/observability/records.mjs` and `runtime/observability/opik.mjs`. Environment-specific
 configuration discovery and raw content/error capture were not imported. Source
 lifecycle adapters remain active until separately validated consumer cutover.

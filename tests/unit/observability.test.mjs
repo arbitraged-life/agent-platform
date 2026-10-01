@@ -1,7 +1,9 @@
 import test from 'node:test';
+import eventSchema from '../../schemas/telemetry-event.schema.json' with {type:'json'};
+import configSchema from '../../schemas/opik-config.schema.json' with {type:'json'};
 import assert from 'node:assert/strict';
-import {turnEvent,normalizeUsage,openAgentEvent,ompEvent} from '../../observability/records.mjs';
-import {createOpikExporter,validateOpikConfig} from '../../observability/opik.mjs';
+import {turnEvent,normalizeUsage,openAgentEvent,ompEvent} from '../../runtime/observability/records.mjs';
+import {createOpikExporter,validateOpikConfig} from '../../runtime/observability/opik.mjs';
 const timing={startedMs:1700000000000,endedMs:1700000001500};
 const config={schema_version:1,endpoint:'https://example.invalid/opik/api',workspace:'fixture',project:'fixture',credential_env:'OPIK_API_KEY'};
 
@@ -71,4 +73,54 @@ test('required event values cannot be replaced by constructor defaults during va
 test('external runtime error marks the turn failed without exporting the error',()=>{
  const event=openAgentEvent({runtime:'kilo',sessionID:'run',error:{message:'PRIVATE_ERROR'},assistant:{role:'assistant',time:{created:timing.startedMs,completed:timing.endedMs}}});
  assert.equal(event.status,'failed');assert.ok(!JSON.stringify(event).includes('PRIVATE_ERROR'));
+});
+
+test('uncloneable values produce sanitized validation errors before transport',async()=>{
+ const exporter=createOpikExporter(config,{environment:{OPIK_API_KEY:'fixture'},fetcher:async()=>assert.fail('network called')});
+ const event=turnEvent({runtime:'omp',runId:'run',...timing});
+ event.prompt=function PRIVATE_CONTENT(){};
+ await assert.rejects(()=>exporter(event),error=>error.message==='Invalid telemetry event snapshot');
+});
+
+test('retry after ambiguous span failure reuses both ingestion identities',async()=>{
+ const sent=[],event=turnEvent({runtime:'omp',runId:'run',...timing});
+ const exporter=createOpikExporter(config,{environment:{OPIK_API_KEY:'fixture'},fetcher:async(_url,options)=>{
+  sent.push(JSON.parse(options.body));if(sent.length===2)throw new Error('response lost');return new Response('');
+ }});
+ await assert.rejects(()=>exporter(event),/transport/);
+ await exporter(event);
+ assert.equal(sent[0].id,sent[2].id);assert.equal(sent[1].id,sent[3].id);
+ assert.notEqual(sent[0].id,sent[1].id);
+ for(const row of sent)assert.equal(row.id[14],'7');
+ assert.equal(sent[0].id.slice(0,13),sent[1].id.slice(0,13));
+});
+
+test('endpoint delimiters and blank credentials fail configuration validation',()=>{
+ for(const suffix of ['?','#','?key=value','#fragment'])assert.throws(()=>validateOpikConfig({...config,endpoint:config.endpoint+suffix}),/endpoint/);
+ assert.throws(()=>createOpikExporter(config,{environment:{OPIK_API_KEY:' \t'}}),/unavailable/);
+});
+
+
+test('schema scalar constraints reject values refused by the exporter',()=>{
+ for(const name of ['runtime','run_id','task_id','agent_id','model_id','provider']) {
+  const pattern=new RegExp(eventSchema.properties[name].pattern);
+  assert.ok(pattern.test('fixture'));
+  for(const value of ['   ','bad\u0000value','bad\nvalue'])assert.equal(pattern.test(value),false);
+ }
+ const timestamp=new RegExp(eventSchema.properties.started_at.pattern);
+ assert.ok(timestamp.test('2023-11-14T22:13:20.000Z'));
+ assert.equal(timestamp.test('2023-11-14T23:13:20+01:00'),false);
+ const endpoint=new RegExp(configSchema.properties.endpoint.pattern);
+ for(const suffix of ['?','#','?x=y'])assert.equal(endpoint.test(config.endpoint+suffix),false);
+ assert.throws(()=>turnEvent({runtime:'omp',runId:'run',startedMs:0,endedMs:253402300800000}),/time range/);
+});
+
+
+test('non-v7 ingestion IDs are rejected before transport',async()=>{
+ const event=turnEvent({runtime:'omp',runId:'run',...timing});
+ const exporter=createOpikExporter(config,{environment:{OPIK_API_KEY:'fixture'},fetcher:async()=>assert.fail('network called')});
+ for(const version of ['1','4','5','8']) {
+  const id=event.event_id.slice(0,14)+version+event.event_id.slice(15);
+  await assert.rejects(()=>exporter({...event,event_id:id}),/UUID/);
+ }
 });

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import {readFile} from 'node:fs/promises';
-import {validateOpikConfig} from '../../observability/opik.mjs';
+import {validateOpikConfig} from '../../runtime/observability/opik.mjs';
 try {
   const [command,file,...extra]=process.argv.slice(2);
   if(command!=='validate'||!file||extra.length)throw new Error('Usage: config.mjs validate FILE');
