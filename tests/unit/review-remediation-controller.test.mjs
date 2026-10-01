@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { remediate, finalize } from '../../runtime/review-remediation/controller.mjs';
-import { seal } from '../../runtime/review-remediation/github.mjs';
+import { seal, unseal } from '../../runtime/review-remediation/github.mjs';
 import { fingerprint } from '../../runtime/review-remediation/policy.mjs';
 
 function fixture({before=1,after=0,agentCode=0}={}) {
@@ -254,4 +254,25 @@ test('oversized proof is rejected before publication and leaves a recoverable re
   assert.equal(result.status,'failed');assert.notEqual(result.stage,'publish');
   assert.equal(f.counts().published,0);
   assert.equal((await remediate({...f,number:7,apply:true})).status,'duplicate');
+});
+
+
+test('finalization retires a superseded pending receipt without resolving any thread',async()=>{
+  const f=fixture();await remediate({...f,number:7,apply:true});
+  f.pr.head.sha='c'.repeat(40);
+  await finalize({...f,number:7});
+  assert.equal(f.thread.isResolved,false);
+  assert.equal(unseal((await f.api.all())[0].body,f.api.signingKeys).data.status,'superseded');
+  assert.equal((await remediate({...f,number:7,apply:false})).status,'eligible');
+});
+
+test('external thread resolution completes pending bookkeeping without claiming an automated resolution',async()=>{
+  const f=fixture();await remediate({...f,number:7,apply:true});
+  f.thread.isResolved=true;let resolves=0;f.api.resolve=async()=>{resolves++;};
+  assert.equal((await finalize({...f,number:7})).resolved,0);
+  assert.equal(resolves,0);
+  const record=unseal((await f.api.all())[0].body,f.api.signingKeys).data;
+  assert.equal(record.status,'complete');assert.equal(record.proofs[0].resolution,'external');
+  f.thread.isResolved=false;f.thread.comments[0].body='New bug';
+  assert.equal((await remediate({...f,number:7,apply:false})).status,'eligible');
 });

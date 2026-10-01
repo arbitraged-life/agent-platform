@@ -319,5 +319,37 @@ class MergeGateDryRunTests(unittest.TestCase):
         command.assert_not_called()
 
 
+class CoordinatorLifecycleTests(unittest.TestCase):
+    def test_label_revoked_during_final_evidence_prevents_merge(self):
+        args = Namespace(label='auto-merge', provider_enabled=False,
+                         trusted_publisher_app_id=None, merge_method='squash', dry_run=False)
+        pr = dict(state='OPEN', headRefOid=SHA, mergeable='MERGEABLE', labels=[{'name':'auto-merge'}])
+        reads = 0
+        def evidence(*unused):
+            nonlocal reads
+            reads += 1
+            if reads == 2:
+                pr['labels'] = []
+            return [action()]
+        with patch.object(merge_gate, '_gh_pr_json', side_effect=lambda *args: dict(pr)), \
+             patch.object(merge_gate, '_get_action_runs', side_effect=evidence), \
+             patch.object(merge_gate.subprocess, 'run') as command:
+            self.assertFalse(merge_gate._process_pr(args, 'owner/repo', 42, ['ci.yml'], [], []))
+        command.assert_not_called()
+
+    def test_bounded_processing_rotates_across_paginated_labeled_inventory(self):
+        first = [{'number': n, 'labels': [{'name':'auto-merge'}]} for n in range(1,101)]
+        last = [{'number':101, 'labels':[{'name':'auto-merge'}]}]
+        with patch.object(merge_gate, '_gh_json', side_effect=[first,last,first,last]) as request:
+            initial = merge_gate._candidate_numbers('owner/repo','auto-merge',100,1)
+            next_pass = merge_gate._candidate_numbers('owner/repo','auto-merge',100,2)
+        self.assertEqual(len(initial),100)
+        self.assertNotIn(101,initial)
+        self.assertEqual(next_pass[0],101)
+        self.assertEqual(len(next_pass),100)
+        self.assertIn('page=2',request.call_args_list[1].args[0])
+
+
+
 if __name__ == "__main__":
     unittest.main()

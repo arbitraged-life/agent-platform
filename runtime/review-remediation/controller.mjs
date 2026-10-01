@@ -107,7 +107,7 @@ export async function remediate({api, policy, executor, number, apply=false}) {
             throw new Error('PR or discussion changed during remediation');
           // Budget the largest eventual receipt before creating an irreversible commit.
           recordBody({...record,status:'pending-ci',stage:'publish',publishedSha:'f'.repeat(40),
-            proofs:proofs.map(proof=>({...proof,headSha:'f'.repeat(40),threadHash:'f'.repeat(64),resolved:true}))},api.signingKeys[0]);
+            proofs:proofs.map(proof=>({...proof,headSha:'f'.repeat(40),threadHash:'f'.repeat(64),resolved:true,resolution:'external'}))},api.signingKeys[0]);
           record.stage='publish';
           const commit = await api.publish(policy.repository,current.head.ref,current.head.sha,changes);
           const published = {...current,head:{...current.head,sha:commit.oid}};
@@ -132,10 +132,15 @@ export async function remediate({api, policy, executor, number, apply=false}) {
 
 export async function finalize({api,policy,number}) {
   const {pr,identity,ledger}=await context(api,policy,number);
-  const checks=await api.checks(policy.repository,pr.head.sha);
+  let checks;
   let resolved=0;
-  for (const entry of ledger.filter(r=>r.verified && r.data.status==='pending-ci' && r.data.publishedSha===pr.head.sha)) {
+  for (const entry of ledger.filter(r=>r.verified && r.data.status==='pending-ci')) {
     const record=entry.data;
+    if(record.publishedSha!==pr.head.sha) {
+      record.status='superseded';
+      await update(api,policy.repository,entry.commentId,record);
+      continue;
+    }
     for (const proof of record.proofs) {
       if (proof.resolved) continue;
       const current=await api.rest(`/repos/${policy.repository}/pulls/${number}`);
@@ -151,12 +156,19 @@ export async function finalize({api,policy,number}) {
       // A confirmed resolution may precede a failed ledger PATCH. Recover only
       // from our authenticated receipt with the same head, discussion and checks.
       if(thread.isResolved) {
+        if(!alreadyReplied) {
+          proof.resolved=true;proof.resolution='external';
+          await update(api,policy.repository,entry.commentId,record);
+          continue;
+        }
+        checks??=await api.checks(policy.repository,pr.head.sha);
         if(alreadyReplied && canResolve(current,{...thread,isResolved:false},proof,checks,policy)) {
           proof.resolved=true;resolved++;
           await update(api,policy.repository,entry.commentId,record);
         }
         continue;
       }
+      checks??=await api.checks(policy.repository,pr.head.sha);
       if(!canResolve(current,thread,proof,checks,policy))continue;
       if(!alreadyReplied)await api.rest(`/repos/${policy.repository}/pulls/${number}/comments/${proof.rootCommentId}/replies`,'POST',{body});
       const last=await api.rest(`/repos/${policy.repository}/pulls/${number}`);

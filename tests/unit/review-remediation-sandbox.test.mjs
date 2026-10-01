@@ -19,7 +19,7 @@ test('snapshot records symlinks without reading their targets', async () => {
     assert.throws(()=>changedFiles(before,after),/special/);
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
-test('snapshot rejects binary changes that decode to the same replacement text', async () => {
+test('snapshot hashes binary files without decoding and rejects changed bytes', async () => {
   const dir=await mkdtemp(join(tmpdir(),'review-binary-snapshot-'));
   try {
     const file=join(dir,'input.bin');

@@ -279,6 +279,11 @@ def _process_pr(args: argparse.Namespace, repo: str, number: int, required_actio
 
     # Refresh eligibility and evidence. Server-required checks close the final check race;
     # match-head-commit only guards the branch revision.
+    decision = fresh_decision()
+    if not decision.allowed:
+        print(f"PR #{number}: evidence changed before merge; skipping")
+        return False
+
     latest = _gh_pr_json("view", str(number), "--repo", repo, "--json", "state,headRefOid,mergeable,labels")
     latest_labels = {label["name"] for label in latest.get("labels", [])}
     if (
@@ -288,11 +293,6 @@ def _process_pr(args: argparse.Namespace, repo: str, number: int, required_actio
         or latest.get("mergeable") != "MERGEABLE"
     ):
         print(f"PR #{number}: eligibility/head changed before merge; skipping")
-        return False
-
-    decision = fresh_decision()
-    if not decision.allowed:
-        print(f"PR #{number}: evidence changed before merge; skipping")
         return False
 
     if args.dry_run:
@@ -313,9 +313,32 @@ def _process_pr(args: argparse.Namespace, repo: str, number: int, required_actio
     return True
 
 
+def _candidate_numbers(repo, label, limit, rotation):
+    # Enumerate the bounded inventory, then rotate processing independently of blockers.
+    numbers = []
+    for page in range(1, 102):
+        rows = _gh_json(f"repos/{repo}/pulls?state=open&sort=created&direction=asc&per_page=100&page={page}")
+        if not isinstance(rows, list) or len(rows)>100:
+            raise ValueError("invalid pull request inventory")
+        if page == 101 and rows:
+            raise ValueError("pull request inventory exceeds 10000; partition coordinator ownership")
+        for row in rows:
+            if label in {entry["name"] for entry in row.get("labels", [])}:
+                numbers.append(row["number"])
+        if len(rows)<100:
+            ordered = sorted(set(numbers))
+            if not ordered:
+                return []
+            offset = ((rotation-1)*limit) % len(ordered)
+            return (ordered[offset:]+ordered[:offset])[:limit]
+    raise ValueError("pull request inventory exceeds 10000; partition coordinator ownership")
+
+
 def _validate_options(args):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repo):
         raise ValueError("--repo must be owner/name")
+    if args.rotation_index < 1:
+        raise ValueError("--rotation-index must be positive")
     if not 1 <= args.max_prs <= 100:
         raise ValueError("--max-prs must be between 1 and 100")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+\.ya?ml", args.gate_workflow):
@@ -348,15 +371,16 @@ def main() -> int:
     parser.add_argument("--trusted-publisher-app-id", type=int, help="exact GitHub App ID allowed to publish provider checks")
     parser.add_argument("--provider-required-workflows", default="[]", help="JSON array of required provider workflow names")
     parser.add_argument("--max-prs", type=int, default=100, help="maximum labeled PRs processed per invocation (1..100)")
+    parser.add_argument("--rotation-index", type=int, default=1, help="monotonically increasing pass ordinal; use the caller workflow run number")
     args = parser.parse_args()
 
     try:
         required_actions, advisory, provider_workflows = _validate_options(args)
 
-        numbers = _gh_pr_json("list", "--repo", args.repo, "--state", "open", "--label", args.label, "--limit", str(args.max_prs), "--json", "number")
+        numbers = _candidate_numbers(args.repo, args.label, args.max_prs, args.rotation_index)
         merged = 0
-        for row in numbers:
-            merged += _process_pr(args, args.repo, row["number"], required_actions, advisory, provider_workflows)
+        for number in numbers:
+            merged += _process_pr(args, args.repo, number, required_actions, advisory, provider_workflows)
         print(f"Coordinator pass complete: considered={len(numbers)} merged={merged} limit={args.max_prs}")
         return 0
     except (ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired, KeyError) as exc:

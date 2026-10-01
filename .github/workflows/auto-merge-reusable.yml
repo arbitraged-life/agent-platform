@@ -77,6 +77,7 @@ jobs:
           TRUSTED_PUBLISHER_APP_ID: ${{ inputs.trusted-publisher-app-id }}
           PROVIDER_REQUIRED_WORKFLOWS: ${{ inputs.provider-required-workflows }}
           MAX_PRS: ${{ inputs.max-prs }}
+          ROTATION_INDEX: ${{ github.run_number }}
         run: |
           set -euo pipefail
           args=(
@@ -87,6 +88,7 @@ jobs:
             --advisory-workflows "$ADVISORY_WORKFLOWS"
             --provider-required-workflows "$PROVIDER_REQUIRED_WORKFLOWS"
             --max-prs "$MAX_PRS"
+            --rotation-index "$ROTATION_INDEX"
           )
           if [[ "$PROVIDER_ENABLED" == "true" ]]; then
             args+=(--provider-enabled --trusted-publisher-app-id "$TRUSTED_PUBLISHER_APP_ID")

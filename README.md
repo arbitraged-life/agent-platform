@@ -27,3 +27,5 @@ live GitHub mutations require explicit deployment configuration and credentials;
 the test suite uses isolated fixtures and fake clients.
 
 Original code is licensed under Apache-2.0. See LICENSE and NOTICE.
+
+The reusable merge coordinator enumerates up to 10,000 open PRs and rotates its labeled processing window using the caller workflow run number. Each pass processes at most `max-prs`; standalone callers supply an increasing `--rotation-index` for continued coverage. Larger inventories fail explicitly. Label, head and eligibility are refreshed after the final evidence fetch; server-required checks remain necessary for the final API race.
