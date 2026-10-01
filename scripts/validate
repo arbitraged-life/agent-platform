@@ -59,6 +59,16 @@ def source_files():
     return [ROOT / name for name in names.split('\0') if name]
 
 
+def package_failures(document, relative):
+    failures = []
+    if any(document.get(group) for group in ['dependencies', 'optionalDependencies', 'peerDependencies']):
+        failures.append(f'{relative}: production dependencies violate the standard-library runtime contract')
+    for name, version in document.get('devDependencies', {}).items():
+        if not isinstance(version, str) or not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', version):
+            failures.append(f'{relative}: dependency {name} is not a pinned registry version')
+    return failures
+
+
 def boundaries(files, root=None):
     root = root or ROOT
     failures = []
@@ -79,10 +89,10 @@ def boundaries(files, root=None):
         if re.search(r'-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----', text):
             failures.append(f'{relative}: private key')
         if path.suffix in ['.mjs', '.js', '.ts']:
-            for match in re.finditer(r'(?:from\s*|import\s*\(\s*|import\s+)[\x22\x27](\.[^\x22\x27]+)[\x22\x27]', text):
-                if not (path.parent / match[1]).resolve().is_relative_to(root.resolve()):
+            for match in re.finditer(r'(?:from\s*|import\s*\(\s*|import\s+)[\x22\x27]([^\x22\x27]+)[\x22\x27]', text):
+                if match[1].startswith(('file:', '/', '\\')) or re.match(r'^[A-Za-z]:', match[1]) or (match[1].startswith('.') and not (path.parent / match[1]).resolve().is_relative_to(root.resolve())):
                     failures.append(f'{relative}: import escapes public package boundary')
-        composite = path.name in ('action.yml', 'action.yaml')
+        composite = path.name in ('action.yml', 'action.yaml') and relative.parts[:2] != ('.github', 'workflows')
         if path.suffix in ['.yml', '.yaml'] and (composite or relative.parts[:2] == ('.github', 'workflows')):
             try:
                 for action in workflow_actions(text, composite=composite):
@@ -93,13 +103,7 @@ def boundaries(files, root=None):
         if path.suffix == '.json':
             document = json.loads(text)
             if path.name == 'package.json':
-                for group in ['dependencies', 'optionalDependencies', 'peerDependencies']:
-                    if document.get(group):
-                        failures.append(f'{relative}: production dependencies violate the standard-library runtime contract')
-                for group in ['devDependencies']:
-                    for name, version in document.get(group, {}).items():
-                        if not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', version):
-                            failures.append(f'{relative}: dependency {name} is not a pinned registry version')
+                failures.extend(package_failures(document, relative))
         if path.suffix == '.py' or relative == Path('scripts/validate'):
             compile(text, str(relative), 'exec')
     return failures

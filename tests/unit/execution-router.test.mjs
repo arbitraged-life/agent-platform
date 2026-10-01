@@ -455,3 +455,15 @@ test('test-only write sandbox cannot accept workspace edits',async()=>{
  assert.equal(result.workspace_changed,true);
  await assert.rejects(()=>acceptResult(policy,task.task_id,{}),/Only a returned/);
 });
+
+
+test('oversized or unknown verification fields leave returned status unchanged',async()=>{
+ const f=await fixture();const prepared=await prepare(f.policy,packet(f.workspace));
+ await runPrepared(f.policy,'router-test',{approved_digest:prepared.approval_digest,approval_ref:'user approved fixture'});
+ const evidence={verifier:'controller',summary:'Inspected output.',criteria:[{criterion:'Report the fixture result.',passed:true,evidence:'Expected output.'}],artifacts:[path.join(f.policy.state_dir,'runs','router-test','agent-final.txt')]};
+ for(const value of [{...evidence,summary:'x'.repeat(8193)},{...evidence,extra:'unrecognized'},{...evidence,criteria:[{...evidence.criteria[0],evidence:'x'.repeat(8193)}]}]) {
+  await assert.rejects(()=>acceptResult(f.policy,'router-test',value),/evidence/i);
+  assert.equal((await inspect(f.policy,'router-test')).status,'returned');
+ }
+ assert.equal((await acceptResult(f.policy,'router-test',evidence)).status,'verified-complete');
+});

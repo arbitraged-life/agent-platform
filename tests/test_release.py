@@ -116,7 +116,7 @@ class ReleaseTests(unittest.TestCase):
         return bundle, {'schema_version': 1, 'commit': 'a' * 40, 'sha256': release.sha(bundle.read_bytes()), 'artifact': bundle.name}
 
     def test_build_rejects_aliases_even_on_a_case_sensitive_source(self):
-        for names in [('Foo/a', 'foo/b'), ('caf\u00e9/a', 'cafe\u0301/b'), ('Release-manifest.json', 'other')]:
+        for names in [('Foo/a', 'foo/b'), ('caf\u00e9/a', 'cafe\u0301/b'), ('Release-manifest.json', 'other'), ('release-manifest.json/child', 'other')]:
             with self.subTest(names=names), tempfile.TemporaryDirectory() as tmp:
                 payload = io.BytesIO()
                 with tarfile.open(fileobj=payload, mode='w') as archive:
@@ -125,7 +125,7 @@ class ReleaseTests(unittest.TestCase):
                 process = Mock(stdout=io.BytesIO(payload.getvalue()))
                 process.wait.return_value = 0
                 process.poll.return_value = 0
-                with patch.object(release.subprocess, 'check_output', side_effect=['', 'a' * 40]), patch.object(release.subprocess, 'Popen', return_value=process):
+                with patch.object(release, 'GIT_EXECUTABLE', '/mock/git'), patch.object(release.subprocess, 'check_output', side_effect=['', 'a' * 40]), patch.object(release.subprocess, 'Popen', return_value=process):
                     with self.assertRaisesRegex(ValueError, 'path alias'):
                         release.build(Path(tmp), Path(tmp) / 'release.tar')
                 self.assertFalse((Path(tmp) / 'release.tar').exists())

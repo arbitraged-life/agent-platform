@@ -127,6 +127,20 @@ export async function runPrepared(policy,id,approval={}) {
   throw e;
  } finally {finalized=true;clearInterval(heartbeat);clearInterval(cancelPoll);clearInterval(outputPoll);clearTimeout(limit);clearTimeout(hardKill);process.removeListener('SIGTERM',signalStop);process.removeListener('SIGINT',signalStop);if(!keepLock)await rm(lock,{recursive:true,force:true});}
 }
+function boundedEvidence(input) {
+ const keys=['verifier','summary','criteria','artifacts'];
+ if(!input || typeof input!=='object' || Array.isArray(input) || Object.keys(input).some(key=>!keys.includes(key)))throw new Error('Invalid verification evidence fields');
+ const bounded=(value,max)=>typeof value==='string' && value.length<=max;
+ if(!bounded(input.verifier,256) || !bounded(input.summary,8192) || !Array.isArray(input.criteria) || input.criteria.length>100 || !Array.isArray(input.artifacts) || input.artifacts.length>20)throw new Error('Verification evidence exceeds limits');
+ const criteria=input.criteria.map(item=>{
+  if(!item || typeof item!=='object' || Object.keys(item).some(key=>!['criterion','passed','evidence'].includes(key)) || !bounded(item.criterion,4096) || !bounded(item.evidence,8192) || typeof item.passed!=='boolean')throw new Error('Invalid criterion evidence');
+  return {criterion:item.criterion,passed:item.passed,evidence:item.evidence};
+ });
+ if(input.artifacts.some(file=>!bounded(file,4096)))throw new Error('Invalid evidence artifact path');
+ const result={verifier:input.verifier,summary:input.summary,criteria,artifacts:[...input.artifacts]};
+ if(Buffer.byteLength(JSON.stringify(result))>65536)throw new Error('Verification evidence exceeds byte limit');
+ return result;
+}
 export async function acceptResult(policy,id,evidence) {
  const dir=runDir(policy,id),lock=path.join(dir,'accept.lock');
  try{await mkdir(lock,{mode:0o700});}catch(e){if(e.code==='EEXIST')throw new Error('Acceptance already in progress or stale lock; inspect before recovery');throw e;}
@@ -134,6 +148,7 @@ export async function acceptResult(policy,id,evidence) {
   const state=await readJson(path.join(dir,'status.json')),task=await readJson(path.join(dir,'packet.json'));
   if(state.status!=='returned')throw new Error('Only a returned run can be accepted');
   if(digest(task)!==state.packet_digest)throw new Error('Packet digest changed; approval invalid');
+  evidence=boundedEvidence(evidence);
   if(!evidence || typeof evidence.verifier!=='string' || !evidence.verifier.trim() || typeof evidence.summary!=='string' || !evidence.summary.trim())throw new Error('Controller verification evidence required');
   if(!Array.isArray(evidence.criteria) || evidence.criteria.length!==task.acceptance_criteria.length || !task.acceptance_criteria.every(c=>evidence.criteria.some(e=>e.criterion===c && e.passed===true && typeof e.evidence==='string' && e.evidence.trim())))throw new Error('All acceptance criteria require passing evidence');
   if(!Array.isArray(evidence.artifacts) || evidence.artifacts.length<1 || evidence.artifacts.length>20)throw new Error('At least one inspected artifact is required');
