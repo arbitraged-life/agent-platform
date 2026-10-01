@@ -3,3 +3,8 @@ Copyright 2026 Agent Platform contributors
 
 Original reusable components are distributed under Apache License 2.0.
 Source revision and normalization records are documented in docs/MIGRATION_PROVENANCE.md.
+
+Cloudflare skill documentation is derived from cloudflare/skills under Apache
+License 2.0. The immutable revision is recorded in skills/upstream-lock.json.
+The upstream license is retained in licenses/cloudflare-skills-LICENSE.
+Local changes and per-file hashes are recorded in skills/upstream-lock.json.

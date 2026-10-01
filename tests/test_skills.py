@@ -1,0 +1,73 @@
+"""Pinned skill provenance, discovery, and drift checks."""
+import json
+from pathlib import Path
+import runpy
+import shutil
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+MODULE = runpy.run_path(str(ROOT / 'scripts/skills.py'))
+
+
+class SkillTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        for name in ['skills', 'licenses']:
+            shutil.copytree(ROOT / name, self.root / name)
+        shutil.copyfile(ROOT / 'LICENSE', self.root / 'LICENSE')
+
+    def edit(self, name, action):
+        path = self.root / name
+        data = json.loads(path.read_text())
+        action(data)
+        path.write_text(json.dumps(data))
+
+    def test_discovery_and_installed_hashes(self):
+        rows = MODULE['catalog'](self.root)
+        self.assertEqual(len(rows), 9)
+        lock = MODULE['verify_upstream'](self.root)
+        self.assertEqual(len(lock['files']), 358)
+        self.assertEqual(len(lock['overlays']), 10)
+
+    def test_catalog_duplicates_and_escape_are_rejected(self):
+        self.edit('skills/catalog.json', lambda d: d['skills'].append(d['skills'][0]))
+        with self.assertRaisesRegex(ValueError, 'duplicate'):
+            MODULE['catalog'](self.root)
+        for name in ['../LICENSE', '/LICENSE', 'skills/../LICENSE']:
+            with self.assertRaises(ValueError):
+                MODULE['contained_file'](self.root, name)
+
+    def test_drift_cannot_be_hidden_by_updating_only_the_file_hash(self):
+        name = 'skills/wrangler/SKILL.md'
+        path = self.root / name
+        path.write_text(path.read_text() + '\nUnreviewed change\n')
+        with self.assertRaisesRegex(ValueError, 'content changed'):
+            MODULE['verify_upstream'](self.root)
+        self.edit('skills/upstream-lock.json', lambda d: d['files'][name].update(sha256=MODULE['sha'](path)))
+        with self.assertRaisesRegex(ValueError, 'explicit overlay'):
+            MODULE['verify_upstream'](self.root)
+
+    def test_omitted_and_extra_files_fail(self):
+        extra = self.root / 'skills/wrangler/unreviewed.md'
+        extra.write_text('not in the release inventory')
+        with self.assertRaisesRegex(ValueError, 'inventory changed'):
+            MODULE['verify_upstream'](self.root)
+        extra.unlink()
+        (self.root / 'skills/wrangler/SKILL.md').unlink()
+        with self.assertRaises(ValueError):
+            MODULE['verify_upstream'](self.root)
+
+    def test_missing_license_and_unpinned_source_fail(self):
+        self.edit('skills/upstream-lock.json', lambda d: d.update(commit='main'))
+        with self.assertRaisesRegex(ValueError, 'immutable'):
+            MODULE['verify_upstream'](self.root)
+        (self.root / 'licenses/cloudflare-skills-LICENSE').unlink()
+        with self.assertRaises(ValueError):
+            MODULE['catalog'](self.root)
+
+
+if __name__ == '__main__':
+    unittest.main()

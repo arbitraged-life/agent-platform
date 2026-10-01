@@ -30,3 +30,13 @@ The offline coding benchmark was clean-imported from `benchmark/` and
 Normalization removes twelve duplicate shell oracle wrappers, validates task
 IDs and checkout containment, bounds child processes, cleans scratch output,
 and replaces real-clock rate-limit grading with a simulated clock.
+
+Eight Cloudflare skill directories are imported directly from the official
+`cloudflare/skills` repository at the immutable commit recorded in
+`skills/upstream-lock.json` under Apache-2.0. The selected
+358 Markdown files match the established skill inventory; the upstream backup
+file is excluded. Reviewed overlays preserve specific-skill routing, repair external and local
+documentation references, and replace credential-shaped examples with explicit
+placeholders or environment references. `skills/upstream-lock.json` records original and installed SHA-256
+digests. Private-network addresses in upstream networking examples are generic
+documentation, not deployment configuration.
