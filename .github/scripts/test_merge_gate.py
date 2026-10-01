@@ -2,6 +2,7 @@
 """Behavioral tests for the reusable merge gate evidence policy."""
 
 import unittest
+from argparse import Namespace
 
 from unittest.mock import patch
 import merge_gate
@@ -268,6 +269,18 @@ class MergeGatePolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "bound"):
                 merge_gate._get_provider_checks("owner/repo", SHA)
         request.assert_called_once()
+
+
+class MergeGateDryRunTests(unittest.TestCase):
+    def test_dry_run_never_invokes_merge(self):
+        args = Namespace(label='auto-merge', provider_enabled=False,
+                         trusted_publisher_app_id=None, merge_method='squash', dry_run=True)
+        pr = dict(state='OPEN', headRefOid=SHA, mergeable='MERGEABLE', labels=[{'name':'auto-merge'}])
+        with patch.object(merge_gate, '_gh_pr_json', return_value=pr), \
+             patch.object(merge_gate, '_get_action_runs', return_value=[action()]), \
+             patch.object(merge_gate.subprocess, 'run') as command:
+            self.assertFalse(merge_gate._process_pr(args, 'owner/repo', 42, ['ci.yml'], [], []))
+        command.assert_not_called()
 
 
 if __name__ == "__main__":

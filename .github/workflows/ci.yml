@@ -39,3 +39,11 @@ jobs:
       - uses: trufflesecurity/trufflehog@f15cb8b37b9b70056bc82a8eb7151f75fad27a71
         with:
           extra_args: --no-verification
+
+  reusable-workflow:
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: read
+    uses: ./.github/workflows/merge-gate-validation.yml

@@ -13,7 +13,7 @@ const policy = {
   allowedPrefixes: ['src/', 'tests/'], deniedPrefixes: ['.github/', 'src/policy/'],
   requiredChecks: ['Verify'],checkAppId:15368,
 };
-const safePolicy = {maxAttempts:2,maxThreads:12,maxFiles:8,maxBytes:131072,agentTimeoutSeconds:390,
+const safePolicy = {finalizationWorkflowNames:['CI'],maxAttempts:2,maxThreads:12,maxFiles:8,maxBytes:131072,agentTimeoutSeconds:390,
   maxModelRequests:12,maxOutputTokens:4096,checkAppId:15368,provider:'openrouter',
   providerEnv:'OPENROUTER_API_KEY',model:'openrouter/qwen/qwen3-coder',upstreamModel:'qwen/qwen3-coder',
   inferenceEndpoint:'https://openrouter.ai/api/v1/chat/completions'};

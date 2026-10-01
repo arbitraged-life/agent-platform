@@ -10,7 +10,7 @@ function fixture({before=1,after=0,agentCode=0}={}) {
   const pr={number:7,state:'open',draft:false,head:{sha:'a'.repeat(40),ref:'feature',repo:{full_name:'owner/repo'}},base:{ref:'main'}};
   const thread={id:'T1',path:'src/a.js',isResolved:false,isOutdated:false,comments:[{id:123,user:{id:11,login:'review[bot]',type:'Bot'},body:'Fix bug',updated_at:'now'}]};
   let records=[],published=0,agentCalls=0,checks=[];
-  const api={token:'test-key',rest:async(path,method='GET',body)=>{
+  const api={token:'test-key',signingKeys:['ledger-fixture-key'.repeat(2)],rest:async(path,method='GET',body)=>{
     if(path==='/user')return{id:99};
     if(method==='POST'&&path.endsWith('/comments')){const c={id:records.length+1,user:{id:99},body:body.body};records.push(c);return c;}
     if(method==='PATCH'){records.find(c=>c.id===Number(path.split('/').at(-1))).body=body.body;return{};}
@@ -67,18 +67,17 @@ test('a patch containing the controller credential is never published',async()=>
   const result=await remediate({...f,number:7,apply:true});
   assert.equal(result.status,'failed');assert.equal(f.counts().published,0);
 });
-test('invalid ledger signature cannot consume an attempt or suppress remediation',async()=>{
+test('unverifiable controller receipts block automatic attempts',async()=>{
   const f=fixture();
   const forged={version:1,type:'attempt',repository:f.policy.repository,pr:7,
     key:fingerprint(f.pr,[f.thread]),status:'reserved',attempt:1};
   await f.api.rest('/repos/owner/repo/issues/7/comments','POST',{body:seal(forged,'wrong-key')});
-  const result=await remediate({...f,number:7,apply:false});
-  assert.equal(result.status,'eligible');
+  await assert.rejects(()=>remediate({...f,number:7,apply:false}),/signing|receipt/i);
   assert.deepEqual(f.counts(),{published:0,agentCalls:0});
 });
-test('rotated signing credentials do not validate old proof records',async()=>{
+test('GitHub token rotation preserves valid signed proof records',async()=>{
   const f=fixture();await remediate({...f,number:7,apply:true});f.green();f.api.token='rotated-key';
-  await finalize({...f,number:7});assert.equal(f.thread.isResolved,false);
+  await finalize({...f,number:7});assert.equal(f.thread.isResolved,true);
 });
 
 test('fixing one finding cannot publish a regression or lost evidence in another passing check',async()=>{
@@ -105,4 +104,30 @@ test('workspace cleanup runs even when the final GitHub status update fails',asy
   f.executor.cleanup=async()=>{cleaned=true;};
   await assert.rejects(()=>remediate({...f,number:7,apply:true}),/GitHub unavailable/);
   assert.equal(cleaned,true);
+});
+
+
+test('signing key rotation retains the PR-wide attempt budget',async()=>{
+  const f=fixture({agentCode:124});f.executor.verify=async()=>({syntax:0,regression:1});
+  await remediate({...f,number:7,apply:true});f.pr.head.sha='c'.repeat(40);
+  f.api.token='new-github-token';
+  f.api.signingKeys.unshift('new-ledger-fixture-key'.repeat(2));
+  await remediate({...f,number:7,apply:true});f.pr.head.sha='d'.repeat(40);
+  assert.equal((await remediate({...f,number:7,apply:true})).status,'budget-exhausted');
+  assert.equal(f.counts().agentCalls,2);
+});
+
+test('missing historical signing key blocks rather than resetting budget',async()=>{
+  const f=fixture({agentCode:124});await remediate({...f,number:7,apply:true});
+  f.api.signingKeys=['unrelated-ledger-fixture-key'.repeat(2)];
+  f.api.token='new-github-token';f.pr.head.sha='d'.repeat(40);
+  await assert.rejects(()=>remediate({...f,number:7,apply:true}),/signing|receipt/i);
+});
+
+
+test('corrupt controller receipts cannot silently reset attempt history',async()=>{
+ const f=fixture();
+ await f.api.rest('/repos/owner/repo/issues/7/comments','POST',{body:'<!-- review-remediation:v1:corrupt -->'});
+ await assert.rejects(()=>remediate({...f,number:7,apply:false}),/receipt/i);
+ assert.equal(f.counts().agentCalls,0);
 });

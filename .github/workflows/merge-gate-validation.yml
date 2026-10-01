@@ -1,0 +1,30 @@
+name: Merge Gate Validation (reusable)
+on:
+  workflow_call:
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          # qlty-ignore(actionlint:expression): GitHub.com called-workflow identity is supported.
+          repository: ${{ job.workflow_repository }}
+          # qlty-ignore(actionlint:expression): GitHub.com called-workflow identity is supported.
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+      - name: Verify called-source identity and read-only coordinator
+        env:
+          # qlty-ignore(actionlint:expression): GitHub.com called-workflow identity is supported.
+          EXPECTED_SHA: ${{ job.workflow_sha }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+          python3 .github/scripts/merge_gate.py --repo "$GH_REPO" --gate-workflow ci.yml --label platform-workflow-acceptance --max-prs 1 --dry-run

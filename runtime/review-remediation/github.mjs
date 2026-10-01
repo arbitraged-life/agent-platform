@@ -9,6 +9,10 @@ export function seal(data, key) {
 }
 
 export function unseal(body, key) {
+  if(Array.isArray(key)) {
+    const records=key.map(value=>unseal(body,value));
+    return records.find(record=>record?.verified)??records.find(Boolean)??null;
+  }
   const match = body.match(MARKER);
   if (!match) return null;
   try {
@@ -19,9 +23,10 @@ export function unseal(body, key) {
 }
 
 export class GitHubClient {
-  constructor(token, fetcher = fetch) {
+  constructor(token, fetcher = fetch, {signingKeys=[]} = {}) {
     if (!token) throw new Error('GitHub credential is missing');
     this.token = token;
+    this.signingKeys = signingKeys;
     this.fetcher = fetcher;
   }
 
@@ -115,8 +120,20 @@ export class GitHubClient {
   async archive(repository, sha) {
     const response = await this.request(`/repos/${repository}/tarball/${sha}`);
     if (!['api.github.com','codeload.github.com'].includes(new URL(response.url).hostname)) throw new Error('Unexpected archive origin');
-    const data = Buffer.from(await response.arrayBuffer());
-    if (data.length > 100 * 1024 * 1024) throw new Error('Repository archive exceeds size limit');
-    return data;
+    if(!response.body)throw new Error('Repository archive body is missing');
+    const reader=response.body.getReader(),chunks=[];
+    let size=0;
+    try {
+      for(;;) {
+        const {value,done}=await reader.read();
+        if(done)return Buffer.concat(chunks,size);
+        size+=value.byteLength;
+        if(size>100*1024*1024)throw new Error('Repository archive exceeds size limit');
+        chunks.push(Buffer.from(value));
+      }
+    } catch(error) {
+      await reader.cancel().catch(()=>{});
+      throw error;
+    } finally { reader.releaseLock(); }
   }
 }

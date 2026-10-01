@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { routeEvent } from '../../runtime/review-remediation/route.mjs';
-const policy={repository:'owner/repo',authorIds:[1],reviewers:[{id:11,login:'review[bot]'}]};
+const policy={finalizationWorkflowNames:['CI'],repository:'owner/repo',authorIds:[1],reviewers:[{id:11,login:'review[bot]'}]};
 const pr={number:7,state:'open',user:{id:1},head:{sha:'a'.repeat(40),ref:'feature',repo:{full_name:'owner/repo'}},base:{ref:'main'}};
 test('review routing excludes billing notices before any agent work',async()=>{
   const event={repository:{full_name:'owner/repo'},action:'submitted',pull_request:pr,review:{user:{id:11,login:'review[bot]',type:'Bot'}}};

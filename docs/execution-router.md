@@ -156,3 +156,5 @@ Compare source digests before redeployment. Preserve current worktrees and
 unrelated uncommitted changes. Do not silently grant additional permissions,
 upgrade running agents, create duplicate queues, or attach every transcript to
 memory. Existing maintenance workflows should report drift and unresolved runs.
+
+Automatic process execution supports POSIX process groups. Windows uses manual handoffs until process-tree supervision is available. Exceptional exits retain the workspace lock and report `cleanup-uncertain` if descendant termination cannot be confirmed.

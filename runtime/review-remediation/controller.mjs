@@ -2,12 +2,17 @@ import { eligiblePR, selectThreads, fingerprint, attemptDecision, canResolve, va
 import { seal, unseal } from './github.mjs';
 
 async function context(api, policy, number) {
+  if(!Array.isArray(api.signingKeys) || !api.signingKeys.length || api.signingKeys.length>4 ||
+      api.signingKeys.some(key=>typeof key!=='string' || key.length<32))
+    throw new Error('A stable ledger signing keyring is required');
   const pr = await api.rest(`/repos/${policy.repository}/pulls/${number}`);
   if (!eligiblePR(pr, policy)) throw new Error('PR is not eligible');
   const identity = await api.rest('/user');
   const comments = await api.all(`/repos/${policy.repository}/issues/${number}/comments`);
   const ledger = comments.flatMap(comment => {
-    const record = unseal(comment.body, api.token);
+    const record = unseal(comment.body, api.signingKeys);
+    if(comment.user.id===identity.id && comment.body.includes('<!-- review-remediation:') && !record?.verified)
+      throw new Error('Controller receipt cannot be verified; reconcile historical signing keys');
     return comment.user.id === identity.id && record?.verified && record.data.version === 1 &&
       record.data.repository === policy.repository && record.data.pr === number && record.data.type === 'attempt'
       ? [{...record, commentId:comment.id}] : [];
@@ -29,7 +34,7 @@ function recordBody(record, token) {
 }
 
 async function update(api, repository, id, record) {
-  await api.rest(`/repos/${repository}/issues/comments/${id}`, 'PATCH', {body:recordBody(record,api.token)});
+  await api.rest(`/repos/${repository}/issues/comments/${id}`, 'PATCH', {body:recordBody(record,api.signingKeys[0])});
 }
 
 function verifierFor(thread, policy) {
@@ -38,7 +43,7 @@ function verifierFor(thread, policy) {
 
 export async function remediate({api, policy, executor, number, apply=false}) {
   const {pr,identity,ledger} = await context(api,policy,number);
-  const all = (await api.threads(policy.repository,number)).map(t=>visibleThread(t,identity,api.token));
+  const all = (await api.threads(policy.repository,number)).map(t=>visibleThread(t,identity,api.signingKeys));
   const threads = selectThreads(all,policy);
   if (!threads.length) return {status:'no-feedback',selected:0};
   if (threads.length > policy.maxThreads) return {status:'thread-limit',selected:threads.length};
@@ -50,7 +55,7 @@ export async function remediate({api, policy, executor, number, apply=false}) {
     threads:threads.map(t=>({id:t.id,path:t.path,reviewer:t.comments[0].user.login,verifier:verifierFor(t,policy)?.id??null}))};
   const record = {version:1,type:'attempt',repository:policy.repository,pr:number,key,
     headSha:pr.head.sha,attempt:ledger.length+1,status:'reserved',threadCount:threads.length,proofs:[],createdAt:new Date().toISOString()};
-  const reservation = await api.rest(`/repos/${policy.repository}/issues/${number}/comments`,'POST',{body:recordBody(record,api.token)});
+  const reservation = await api.rest(`/repos/${policy.repository}/issues/${number}/comments`,'POST',{body:recordBody(record,api.signingKeys[0])});
   let workspace;
   try {
     record.stage='prepare';
@@ -77,12 +82,12 @@ export async function remediate({api, policy, executor, number, apply=false}) {
         if (!proofs.length || after.syntax !== 0 || lostPassingCheck) record.status='unverified';
         else {
           validateChanges(changes,policy);
-          const credentials=[api.token,process.env[policy.providerEnv]].filter(Boolean);
+          const credentials=[api.token,...api.signingKeys,process.env[policy.providerEnv]].filter(Boolean);
           if(changes.some(c=>credentials.some(secret=>c.content?.includes(secret))))
             throw new Error('Credential material detected in proposed patch');
           record.stage='publish';
           const current = await api.rest(`/repos/${policy.repository}/pulls/${number}`);
-          const fresh = (await api.threads(policy.repository,number)).map(t=>visibleThread(t,identity,api.token));
+          const fresh = (await api.threads(policy.repository,number)).map(t=>visibleThread(t,identity,api.signingKeys));
           const matching = fresh.filter(t=>threads.some(old=>old.id===t.id));
           if (!eligiblePR(current,policy) || current.head.sha!==pr.head.sha || fingerprint(current,matching)!==key)
             throw new Error('PR or discussion changed during remediation');
@@ -117,17 +122,17 @@ export async function finalize({api,policy,number}) {
       if (proof.resolved) continue;
       const current=await api.rest(`/repos/${policy.repository}/pulls/${number}`);
       const rawThread=(await api.threads(policy.repository,number)).find(t=>t.id===proof.threadId);
-      const thread=rawThread && visibleThread(rawThread,identity,api.token);
+      const thread=rawThread && visibleThread(rawThread,identity,api.signingKeys);
       if (!thread || !canResolve(current,thread,proof,checks,policy)) continue;
       const body=`Addressed in ${proof.headSha}. Independent verifier \`${proof.verifier}\` failed before the change and passed afterward; required CI passed for this exact commit.\n\n`+
-        seal({type:'resolution',threadId:thread.id,headSha:proof.headSha},api.token);
+        seal({type:'resolution',threadId:thread.id,headSha:proof.headSha},api.signingKeys[0]);
       const alreadyReplied=rawThread.comments.some(c=>{
-        const receipt=c.user.id===identity.id && unseal(c.body,api.token);
+        const receipt=c.user.id===identity.id && unseal(c.body,api.signingKeys);
         return receipt?.verified && receipt.data.type==='resolution' && receipt.data.threadId===thread.id && receipt.data.headSha===proof.headSha;
       });
       if(!alreadyReplied)await api.rest(`/repos/${policy.repository}/pulls/${number}/comments/${proof.rootCommentId}/replies`,'POST',{body});
       const last=await api.rest(`/repos/${policy.repository}/pulls/${number}`);
-      const lastThread=(await api.threads(policy.repository,number)).map(t=>visibleThread(t,identity,api.token)).find(t=>t.id===proof.threadId);
+      const lastThread=(await api.threads(policy.repository,number)).map(t=>visibleThread(t,identity,api.signingKeys)).find(t=>t.id===proof.threadId);
       const latestChecks=await api.checks(policy.repository,last.head.sha);
       if (!lastThread || !canResolve(last,lastThread,proof,latestChecks,policy)) continue;
       await api.resolve(thread.id);proof.resolved=true;resolved++;

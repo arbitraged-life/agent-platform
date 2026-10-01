@@ -14,7 +14,10 @@ try {
   if (!values.config) throw new Error('A trusted policy file is required');
   const policy=JSON.parse(await readFile(resolve(values.config),'utf8'));
   assertPolicySafety(policy);
-  const api=new GitHubClient(process.env.GH_TOKEN);
+  let signingKeys;
+  try {signingKeys=JSON.parse(process.env.REMEDIATION_SIGNING_KEYS??'[]');}
+  catch {throw new Error('Invalid REMEDIATION_SIGNING_KEYS JSON');}
+  const api=new GitHubClient(process.env.GH_TOKEN,fetch,{signingKeys});
   let result;
   if (values.mode==='route') {
     const event=JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH,'utf8'));
@@ -26,8 +29,8 @@ try {
     if (!/^[1-9][0-9]*$/.test(values.pr??'') || !['inspect','remediate','finalize'].includes(values.mode))
       throw new Error('Invalid operation or pull request number');
     const number=Number(values.pr);
-    const executor=new DockerExecutor(api,policy,{image:values.image,
-      verifierDir:resolve(values['verifier-dir']??'.'),outputDir:values['debug-dir']});
+    const executor=values.mode==='remediate'?new DockerExecutor(api,policy,{image:values.image,
+      verifierDir:resolve(values['verifier-dir']??'.'),outputDir:values['debug-dir']}):undefined;
     result=values.mode==='finalize' ? await finalize({api,policy,number}) :
       await remediate({api,policy,executor,number,apply:values.mode==='remediate'});
     if(process.env.GITHUB_OUTPUT)await appendFile(process.env.GITHUB_OUTPUT,`eligible=${result.status==='eligible'}\n`);

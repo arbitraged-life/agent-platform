@@ -64,7 +64,7 @@ def main():
         if errors:
             raise SystemExit('\n'.join(errors))
         for path in files:
-            if path.suffix == '.mjs':
+            if path.suffix in ['.mjs', '.js', '.cjs']:
                 subprocess.run(['node', '--check', str(path)], check=True, cwd=ROOT)
         print('Source syntax, JSON, release boundaries, and action pins passed.', flush=True)
     if args.command in ['ci', 'test']:

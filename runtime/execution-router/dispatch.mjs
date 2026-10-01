@@ -50,6 +50,7 @@ async function stopRemainingGroup(child) {
  return {lingering:true,stopped:!groupAlive(child)};
 }
 export async function runPrepared(policy,id,approval={}) {
+ if(process.platform==='win32')throw new Error('Windows process-tree supervision is not supported; use a manual handoff');
  const dir=runDir(policy,id);const state=await readJson(path.join(dir,'status.json'));
  if(state.status!=='prepared')throw new Error('Run is not prepared; retries require a new task_id and approval');
  if(!approval.approved_digest || typeof approval.approval_ref!=='string' || approval.approval_ref.trim().length<8)throw new Error('Explicit approval digest and user approval reference required');
@@ -110,8 +111,16 @@ export async function runPrepared(policy,id,approval={}) {
   if(result.status==='returned'&&(group.lingering||after.digest===null||profile.sandbox==='read-only'&&result.workspace_changed)){result.status='needs-review';result.warning=keepLock?'Owned process group remains alive; workspace lock retained for inspection.':'Descendants were terminated, fingerprint unavailable, or read-only workspace changed; inspect before acceptance.';}
   await json(path.join(dir,'status.json'),result);await event(dir,'returned',{task_id:id,status:result.status,exit_code:result.exit_code,verified:false});return result;
  } catch(e) {
-  if(child){keepLock=true;stopChild(child);}
-  if(started){await json(path.join(dir,'status.json'),{...state,status:'failed',finished_at:now(),verified:false,error:e.message});await event(dir,'failed',{task_id:id,error:e.message});}
+  finalized=true;
+  clearInterval(heartbeat);clearInterval(cancelPoll);clearInterval(outputPoll);clearTimeout(limit);clearTimeout(hardKill);
+  await logChain;
+  let cleanupError;
+  if(child){
+   keepLock=true;
+   try{keepLock=!(await stopRemainingGroup(child)).stopped;}catch(error){cleanupError=error.message;}
+  }
+  const status=keepLock?'cleanup-uncertain':'failed';
+  if(started){await json(path.join(dir,'status.json'),{...state,status,finished_at:now(),verified:false,error:e.message,lock_retained:keepLock,...(cleanupError?{cleanup_error:cleanupError}:{})});await event(dir,status,{task_id:id,error:e.message,lock_retained:keepLock});}
   throw e;
  } finally {finalized=true;clearInterval(heartbeat);clearInterval(cancelPoll);clearInterval(outputPoll);clearTimeout(limit);clearTimeout(hardKill);process.removeListener('SIGTERM',signalStop);process.removeListener('SIGINT',signalStop);if(!keepLock)await rm(lock,{recursive:true,force:true});}
 }

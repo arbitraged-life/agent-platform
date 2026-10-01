@@ -13,4 +13,6 @@ Local instructions describe component-specific contracts. Lifecycle enforcement
 is implemented in executable validation and runtime hooks.
 
 Release identity is a Git commit plus artifact SHA-256, consumed through an
-explicit lock. Public workflows use commit-pinned actions and hosted runners.
+explicit lock. This repository runs public CI on hosted runners with commit-pinned actions.
+Reusable workflows accept trusted caller configuration; runner ownership stays
+with the consuming repository.

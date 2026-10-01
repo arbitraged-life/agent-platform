@@ -1,12 +1,12 @@
-import { readFile, realpath, stat, lstat, readlink, opendir } from 'node:fs/promises';
+import { readFile, realpath, access, stat, lstat, readlink, opendir } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { createReadStream } from 'node:fs';
+import { createReadStream, constants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
-export const VERSION = '1.0.3';
+export const VERSION = '1.0.4';
 export const exec = promisify(execFile);
 const REASONS = new Set(['missing-capability','execution-lifecycle','local-harness','explicit-user-choice']);
 const ACTIONS = new Set(['read','edit','test']);
@@ -54,6 +54,7 @@ export async function executableIdentity(profile) {
  if(profile.adapter!=='codex')return null;
  const filename=await realpath(profile.executable),info=await stat(filename);
  check(info.isFile(),'Codex executable is not a regular file');
+ await access(filename,constants.X_OK);
  return {path:filename,sha256:await fileDigest(filename)};
 }
 async function* trackedEntries(workspace) {

@@ -1,6 +1,6 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rmdir, writeFile, readFile, chmod, symlink, unlink, link } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, rmdir, writeFile, readFile, chmod, symlink, unlink, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
@@ -8,14 +8,17 @@ import { promisify } from 'node:util';
 import { routeTask, validateTask, loadPolicy, resolveProfile, cleanEnvironment, digest, executableIdentity, VERSION } from '../../runtime/execution-router/policy.mjs';
 import { prepare, runPrepared, inspect, requestCancel, acceptResult } from '../../runtime/execution-router/dispatch.mjs';
 const exec = promisify(execFile);
+const fixtureRoots=new Set();
+after(async()=>Promise.all([...fixtureRoots].map(root=>rm(root,{recursive:true,force:true}))));
 const packet = (workspace, overrides={}) => ({ schema_version:1, task_id:'router-test', project:'AGENT', objective:'Inspect the fixture without changes.', workspace, profile:'codex-readonly', actions:['read'], source_write_authorized:false, delegation_reason:'execution-lifecycle', delegation_detail:'Independent bounded repository loop is needed.', acceptance_criteria:['Report the fixture result.'], references:[], ...overrides });
 async function fixture(mode='success') {
  const root=await mkdtemp(path.join(tmpdir(),'execution-router-'));
+ fixtureRoots.add(root);
  const workspace=path.join(root,'repo'); await mkdir(workspace);
  await exec('git',['init','-q',workspace]);
  await exec('git',['-C',workspace,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-qm','fixture']);
  const bin=path.join(root,'codex');
- await writeFile(bin,`#!/usr/bin/env node\nconst args=process.argv.slice(2);\nif(args.includes('--help')) { ${mode==='slow-doctor'?'setTimeout(()=>{console.log("--ignore-user-config --sandbox --json --ephemeral --output-last-message");process.exit(0);},1200);':'console.log("--ignore-user-config --sandbox --json --ephemeral --output-last-message");process.exit(0);'} }\nif(args.includes('status')) { console.log('Logged in using ChatGPT'); process.exit(0); }\nlet prompt='';process.stdin.on('data',d=>prompt+=d);process.stdin.on('end',async()=>{\nconst fs=await import('node:fs/promises');\nconst i=args.indexOf('--output-last-message');\nif(i>=0) await fs.writeFile(args[i+1],${mode==='final-loud'?"'x'.repeat(500)":"JSON.stringify({summary:'fixture return',prompt_received:prompt.includes('router-test')})"});\nconsole.log(JSON.stringify({type:'fixture',shell:false,args}));\n${mode==='slow'?'setTimeout(()=>process.exit(0),60000);':mode==='poll-race'?'setTimeout(()=>process.exit(0),450);':mode==='fail'?'process.exit(7);':mode==='loud'?'console.log("x".repeat(1000));process.exit(0);':mode==='orphan'?`const {spawn}=await import('node:child_process');spawn(process.execPath,['-e',${JSON.stringify(`setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(path.join(root,'orphan-marker'))},'escaped'),800)`)}],{stdio:'ignore'});process.exit(0);`:'process.exit(0);'}\n});\n`); await chmod(bin,0o700);
+ await writeFile(bin,`#!/usr/bin/env node\nconst args=process.argv.slice(2);\nif(args.includes('--help')) { ${mode==='slow-doctor'?'setTimeout(()=>{console.log("--ignore-user-config --sandbox --json --ephemeral --output-last-message");process.exit(0);},1200);':'console.log("--ignore-user-config --sandbox --json --ephemeral --output-last-message");process.exit(0);'} }\nif(args.includes('status')) { console.log('Logged in using ChatGPT'); process.exit(0); }\nlet prompt='';process.stdin.on('data',d=>prompt+=d);process.stdin.on('end',async()=>{\nconst fs=await import('node:fs/promises');\nconst i=args.indexOf('--output-last-message');\nif(i>=0) await fs.writeFile(args[i+1],${mode==='final-loud'?"'x'.repeat(500)":"JSON.stringify({summary:'fixture return',prompt_received:prompt.includes('router-test')})"});\nconsole.log(JSON.stringify({type:'fixture',shell:false,args}));\n${mode==='slow'?'setTimeout(()=>process.exit(0),60000);':mode==='poll-race'?'setTimeout(()=>process.exit(0),450);':mode==='fail'?'process.exit(7);':mode==='loud'?'console.log("x".repeat(1000));process.exit(0);':['orphan','stubborn-orphan'].includes(mode)?`const {spawn}=await import('node:child_process');const descendant=spawn(process.execPath,['-e',${JSON.stringify(`${mode==='stubborn-orphan'?"process.on('SIGTERM',()=>{});process.send('ready');":''}setTimeout(()=>require('node:fs/promises').writeFile(${JSON.stringify(path.join(root,'orphan-marker'))},'escaped'),${mode==='stubborn-orphan'?3000:800})`)}],{stdio:${mode==='stubborn-orphan'?"['ignore','ignore','ignore','ipc']":"'ignore'"}});${mode==='stubborn-orphan'?"descendant.once('message',()=>process.exit(0));":"process.exit(0);"}`:'process.exit(0);'}\n});\n`); await chmod(bin,0o700);
  const policyPath=path.join(root,'policy.json');
  const data={schema_version:1,policy_version:'1.0.0',state_dir:path.join(root,'state'),workspace_roots:[workspace],profiles:{'codex-readonly':{adapter:'codex',executable:bin,sandbox:'read-only',actions:['read'],max_seconds:mode==='slow'?1:10,requires_isolated_worktree:false,requires_chatgpt_login:true}}};
  await writeFile(policyPath,JSON.stringify(data));
@@ -319,4 +322,38 @@ test('a tracked UTF-8 BOM-prefixed path cannot alias its unprefixed neighbor in 
  const p=await prepare(f.policy,packet(f.workspace));
  await writeFile(bom,'changed contents');
  await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/workspace changed/i);
+});
+
+
+test('non-executable files cannot become approved launch identities',async()=>{
+ const f=await fixture();await chmod(path.join(f.root,'codex'),0o600);
+ await assert.rejects(()=>prepare(f.policy,packet(f.workspace)),{code:'EACCES'});
+});
+
+test('unsupported process-tree supervision fails before launch state is touched',async()=>{
+ const descriptor=Object.getOwnPropertyDescriptor(process,'platform');
+ try {
+  Object.defineProperty(process,'platform',{...descriptor,value:'win32'});
+  await assert.rejects(()=>runPrepared({},'unused'),/Windows.*supervision/i);
+ } finally {Object.defineProperty(process,'platform',descriptor);}
+});
+
+test('exceptional supervision still kills a SIGTERM-ignoring descendant',async()=>{
+ const f=await fixture('stubborn-orphan'),p=await prepare(f.policy,packet(f.workspace));
+ const originalKill=process.kill;let injected=false,killed=false,ownedGroup;
+ process.kill=(pid,signal)=>{
+  if(pid<0)ownedGroup=pid;
+  if(pid<0&&signal===0&&!injected){injected=true;throw new Error('injected supervisor failure');}
+  if(pid<0&&signal==='SIGKILL')killed=true;
+  return originalKill(pid,signal);
+ };
+ try {
+  await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/injected supervisor failure/);
+  assert.equal(killed,true);
+  await new Promise(resolve=>setTimeout(resolve,3200));
+  await assert.rejects(()=>readFile(path.join(f.root,'orphan-marker')),{code:'ENOENT'});
+ } finally {
+  process.kill=originalKill;
+  if(ownedGroup){try{originalKill(ownedGroup,'SIGKILL');}catch(error){if(error.code!=='ESRCH')throw error;}}
+ }
 });

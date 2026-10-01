@@ -23,6 +23,8 @@ export function makePrompt(threads,policy) {
 export class DockerExecutor {
   constructor(api,policy,{image,verifierDir,outputDir}={}) {
     this.api=api;this.policy=policy;this.image=image??policy.image;this.verifierDir=verifierDir;this.outputDir=outputDir;
+    if(typeof this.image!=='string' || !/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?\/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$/.test(this.image))
+      throw new Error('A fully qualified digest-pinned container image is required');
   }
   async prepare(pr) {
     const directory=await mkdtemp(join(tmpdir(),'review-remediation-'));

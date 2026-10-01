@@ -285,6 +285,10 @@ def _process_pr(args: argparse.Namespace, repo: str, number: int, required_actio
         print(f"PR #{number}: eligibility/head changed before merge; skipping")
         return False
 
+    if args.dry_run:
+        print(f"PR #{number}: eligible at expected head {initial_sha}; dry run performs no merge")
+        return False
+
     # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
     result = subprocess.run(
         [GH_EXECUTABLE, "pr", "merge", str(number), "--repo", repo, f"--{args.merge_method}", "--delete-branch", "--match-head-commit", initial_sha],
@@ -324,6 +328,7 @@ def _validate_options(args):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dry-run", action="store_true", help="inspect eligibility without merging")
     parser.add_argument("--repo", required=True, help="owner/name repository")
     parser.add_argument("--gate-workflow", required=True, help="required Actions workflow filename (Actions-only default)")
     parser.add_argument("--label", default="auto-merge", help="label opting a PR into merge")

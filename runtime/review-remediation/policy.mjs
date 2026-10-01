@@ -69,6 +69,10 @@ export function validateChanges(changes, policy) {
 }
 
 export function assertPolicySafety(policy) {
+  const workflows=policy.finalizationWorkflowNames;
+  if(!Array.isArray(workflows) || !workflows.length || workflows.length>20 ||
+      workflows.some(name=>typeof name!=='string' || !name.trim()) || new Set(workflows).size!==workflows.length)
+    throw new Error('Invalid finalization workflow names');
   const ceilings={maxAttempts:2,maxThreads:100,maxFiles:20,maxBytes:1048576,
     agentTimeoutSeconds:600,maxModelRequests:12,maxOutputTokens:4096,checkAppId:Number.MAX_SAFE_INTEGER};
   for(const [key,ceiling] of Object.entries(ceilings)) {
