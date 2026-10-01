@@ -8,3 +8,6 @@ Cloudflare skill documentation is derived from cloudflare/skills under Apache
 License 2.0. The immutable revision is recorded in skills/upstream-lock.json.
 The upstream license is retained in licenses/cloudflare-skills-LICENSE.
 Local changes and per-file hashes are recorded in skills/upstream-lock.json.
+
+The Turnstile Worker template retains its MIT license and Cloudflare copyright
+notice at skills/turnstile-spin/templates/worker/LICENSE.

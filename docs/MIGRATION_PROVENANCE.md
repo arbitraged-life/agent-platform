@@ -40,3 +40,15 @@ documentation references, and replace credential-shaped examples with explicit
 placeholders or environment references. `skills/upstream-lock.json` records original and installed SHA-256
 digests. Private-network addresses in upstream networking examples are generic
 documentation, not deployment configuration.
+
+The separately licensed Turnstile Worker template was clean-imported from
+`skills/turnstile-spin/templates/worker/` at source revision
+`92a774eae4528022982449d172801e6d891cfde3`. Its Cloudflare MIT license is retained.
+Offline tests are now separate from explicit network integration tests; repository
+metadata identifies this maintained template, and the package is not published to npm.
+The surrounding deployment skill and scripts are not part of this import.
+Wrangler and Workers types were upgraded together to exact compatible versions;
+the resulting lockfile passed the registry dependency audit with zero findings.
+Security normalization rejects missing configured hostnames, prevents non-2xx
+upstream data from overriding failure status, and logs custom-data presence only.
+Four regression cases cover these inherited defects before publication.
