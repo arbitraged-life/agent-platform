@@ -1,4 +1,3 @@
-import hashlib
 import importlib.util
 import io
 import json
@@ -54,7 +53,7 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'already exists'):
                 release.install(bundle, lock, root / 'installed')
 
-    def test_corruption_never_creates_an_install(self):
+    def test_corruption_denied(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             bundle, lock = self.bundle(root)

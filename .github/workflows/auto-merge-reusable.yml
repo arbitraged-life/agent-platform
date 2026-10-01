@@ -59,7 +59,9 @@ jobs:
       - name: Check out shared coordinator
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          # qlty-ignore(actionlint:expression): Supported GitHub.com job identity; older actionlint schemas omit it.
           repository: ${{ job.workflow_repository }}
+          # qlty-ignore(actionlint:expression): GitHub.com supplies the called workflow commit, not the caller commit.
           ref: ${{ job.workflow_sha }}
           path: .shared-github
           persist-credentials: false

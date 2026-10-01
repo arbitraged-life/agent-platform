@@ -315,7 +315,7 @@ def main() -> int:
             merged += _process_pr(args, args.repo, row["number"], required_actions, advisory, provider_workflows)
         print(f"Coordinator pass complete: considered={len(numbers)} merged={merged} limit={args.max_prs}")
         return 0
-    except (ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError, KeyError) as exc:
+    except (ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired, KeyError) as exc:
         detail = getattr(exc, "stderr", None)
         print(f"Coordinator unavailable or misconfigured; fail closed: {detail or exc}", file=sys.stderr)
         return 1
