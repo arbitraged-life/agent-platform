@@ -75,7 +75,7 @@ class ReleaseTests(unittest.TestCase):
     def test_traversal_duplicates_and_wrong_manifests_leave_no_install(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            for names in [[('../escape', b'x')], [('/absolute', b'x')], [('same', b'x'), ('same', b'y')]]:
+            for names in [[('../escape', b'x')], [('C:/outside', b'x')], [('C:relative', b'x')], [('/absolute', b'x')], [('same', b'x'), ('same', b'y')]]:
                 bundle, lock = self.bundle(root, names)
                 with self.assertRaisesRegex(ValueError, 'Unsafe'):
                     release.install(bundle, lock, root / 'installed')

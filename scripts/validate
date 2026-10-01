@@ -33,7 +33,7 @@ def boundaries(files, root=None):
         text = data.decode('utf-8')
         if re.search(r'(?:/(?:Users|home)/[^/\s]+(?:/|(?=\s|$))|[A-Za-z]:[\\/]Users[\\/][^\\/\s]+)', text):
             failures.append(f'{relative}: absolute user-directory reference')
-        if re.search(r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----', text):
+        if re.search(r'-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----', text):
             failures.append(f'{relative}: private key')
         if path.suffix in ['.mjs', '.js', '.ts']:
             for match in re.finditer(r'(?:from\s*|import\s*\(\s*|import\s+)[\x22\x27](\.[^\x22\x27]+)[\x22\x27]', text):

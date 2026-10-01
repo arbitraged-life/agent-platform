@@ -45,12 +45,19 @@ export function runCommand(command,args,{timeoutMs=30000,env={},input='',maxOutp
   return new Promise(resolveResult=>{
     const child=spawn(command,args,{cwd,env:{PATH:process.env.PATH,HOME:process.env.HOME,
       ...(process.env.DOCKER_HOST?{DOCKER_HOST:process.env.DOCKER_HOST}:{}),...env},stdio:['pipe','pipe','pipe']});
-    let stdout='',stderr='',forced=null;
+    let stdout='',stderr='',forced=null,outputBytes=0;
     const stop=code=>{forced=code;child.kill('SIGKILL');};
     const timer=setTimeout(()=>stop(124),timeoutMs);
     child.stdin.on('error',()=>{});
-    child.stdout.on('data',data=>{stdout+=data.toString();if(stdout.length>maxOutput)stop(125);});
-    child.stderr.on('data',data=>{stderr+=data.toString();if(stderr.length>maxOutput)stop(125);});
+    const collect=(stream,data)=>{
+      const remaining=Math.max(0,maxOutput-outputBytes);
+      outputBytes+=data.byteLength;
+      const text=data.subarray(0,remaining).toString();
+      if(stream==='stdout')stdout+=text;else stderr+=text;
+      if(outputBytes>maxOutput)stop(125);
+    };
+    child.stdout.on('data',data=>collect('stdout',data));
+    child.stderr.on('data',data=>collect('stderr',data));
     child.on('error',()=>{clearTimeout(timer);resolveResult({code:127,stdout:'',stderr:'command unavailable'});});
     child.on('close',code=>{clearTimeout(timer);resolveResult({code:forced??code??1,stdout:stdout.slice(-maxOutput),stderr:stderr.slice(-maxOutput)});});
     child.stdin.end(input);

@@ -272,6 +272,28 @@ class MergeGatePolicyTests(unittest.TestCase):
 
 
 class MergeGateDryRunTests(unittest.TestCase):
+    def test_dispatch_and_other_pr_runs_cannot_authorize_merge(self):
+        args = Namespace(label='auto-merge', provider_enabled=False,
+                         trusted_publisher_app_id=None, merge_method='squash', dry_run=False)
+        pr = dict(state='OPEN', headRefOid=SHA, mergeable='MERGEABLE', labels=[{'name':'auto-merge'}])
+        for event, numbers in [('workflow_dispatch', [42]), ('push', [42]), ('pull_request', [99])]:
+            run = dict(action(), event=event, pull_requests=[{'number': n} for n in numbers], id=10)
+            with patch.object(merge_gate, '_gh_pr_json', return_value=pr), \
+                 patch.object(merge_gate, '_gh_json', return_value={'workflow_runs': [run]}), \
+                 patch.object(merge_gate.subprocess, 'run') as command:
+                self.assertFalse(merge_gate._process_pr(args, 'owner/repo', 42, ['ci.yml'], [], []))
+            command.assert_not_called()
+
+    def test_same_head_check_rerun_blocks_merge(self):
+        args = Namespace(label='auto-merge', provider_enabled=False,
+                         trusted_publisher_app_id=None, merge_method='squash', dry_run=False)
+        pr = dict(state='OPEN', headRefOid=SHA, mergeable='MERGEABLE', labels=[{'name':'auto-merge'}])
+        with patch.object(merge_gate, '_gh_pr_json', return_value=pr), \
+             patch.object(merge_gate, '_get_action_runs', side_effect=[[action()], [action(status='in_progress', conclusion=None)]]), \
+             patch.object(merge_gate.subprocess, 'run') as command:
+            self.assertFalse(merge_gate._process_pr(args, 'owner/repo', 42, ['ci.yml'], [], []))
+        command.assert_not_called()
+
     def test_dry_run_never_invokes_merge(self):
         args = Namespace(label='auto-merge', provider_enabled=False,
                          trusted_publisher_app_id=None, merge_method='squash', dry_run=True)

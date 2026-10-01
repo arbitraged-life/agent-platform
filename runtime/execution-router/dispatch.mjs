@@ -136,6 +136,8 @@ export async function acceptResult(policy,id,evidence) {
   if(!Array.isArray(evidence.artifacts) || evidence.artifacts.length<1 || evidence.artifacts.length>20)throw new Error('At least one inspected artifact is required');
   const artifacts=[];const canonicalDir=await realpath(dir);
   for(const file of evidence.artifacts){const absolute=await realpath(file);if(!contained(canonicalDir,absolute)&&!contained(task.workspace,absolute))throw new Error('Evidence artifact outside run/workspace');const info=await stat(absolute);if(!info.isFile()||info.size>10*1024*1024)throw new Error('Evidence artifact too large or not a regular file');artifacts.push({path:absolute,sha256:digest(await readFile(absolute))});}
+  if(state.policy_digest!==policy.config_digest)throw new Error('Prepared policy changed before acceptance');
+  await resolveProfile(policy,task);
   const current=await workspaceFingerprint(task.workspace,policy.state_dir);
   if(!state.workspace_after?.digest || current.digest!==state.workspace_after.digest)throw new Error('Workspace changed since return; inspect before accepting');
   const result={...state,status:'verified-complete',verified:true,verification:{...evidence,artifacts,verified_at:now(),trust:'Controller-attested evidence, not cryptographic proof of human approval or independent authorship'}};

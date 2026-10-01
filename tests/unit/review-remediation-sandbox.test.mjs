@@ -111,3 +111,9 @@ with tarfile.open(sys.argv[1],'w:gz') as t:
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('combined subprocess output is capped in bytes',async()=>{
+ const result=await runCommand(process.execPath,['-e',"process.stdout.write('€'.repeat(80))"],{maxOutput:100});
+ assert.equal(result.code,125);
+ assert.ok(Buffer.byteLength(result.stdout)<=102);
+});

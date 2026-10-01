@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { eligibleEvent, selectThreads, fingerprint, attemptDecision, canResolve, validateChanges } from '../../runtime/review-remediation/policy.mjs';
+import { eligibleEvent, selectThreads, fingerprint, attemptDecision, canResolve, validateChanges, assertPolicySafety } from '../../runtime/review-remediation/policy.mjs';
 
 const policy = {
   repository: 'owner/project', maxAttempts: 2, maxFiles: 8, maxBytes: 10000,
@@ -141,4 +141,8 @@ test('malformed inference policy fails at startup before GitHub credentials or a
       return true;
     });
   } finally { await rm(dir,{recursive:true,force:true}); }
+});
+
+test('agent adapter selector is independent of credential provider',()=>{
+  assert.doesNotThrow(()=>assertPolicySafety({...safePolicy,model:'review-proxy/qwen/qwen3-coder'}));
 });

@@ -67,6 +67,8 @@ Verification JSON:
 ```
 
 Verification requires all approved packet criteria and at least one in-scope
-artifact; hashes identify the inspected bytes. Tampered packet criteria are
+artifact inside the run directory or task workspace (at most 20 files, each at most 10 MiB); hashes identify the inspected bytes. Tampered packet criteria are
 rejected at acceptance. It records controller attestation, not proof that an
 independent party verified it. Keep failed/unverified work explicitly open.
+
+Executable bytes are checked immediately before path-based launch. Installation updates must be coordinated with runs: this is not an atomic executable-handle guarantee against a concurrent local filesystem writer.

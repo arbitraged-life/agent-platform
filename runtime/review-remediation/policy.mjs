@@ -82,8 +82,7 @@ export function assertPolicySafety(policy) {
   const credentials={openrouter:'OPENROUTER_API_KEY',anthropic:'ANTHROPIC_API_KEY',openai:'OPENAI_API_KEY'};
   if (!Object.hasOwn(credentials,policy.provider)) throw new Error('Invalid inference provider');
   if (policy.providerEnv!==credentials[policy.provider]) throw new Error('Unsupported inference credential');
-  if (typeof policy.model!=='string' || !policy.model.startsWith(`${policy.provider}/`) ||
-      !/^[^\s]+$/.test(policy.model) || policy.model.length===policy.provider.length+1)
+  if (typeof policy.model!=='string' || !/^[^/\s]+\/[^\s]+$/.test(policy.model))
     throw new Error('Invalid inference model');
   if (typeof policy.upstreamModel!=='string' || !policy.upstreamModel.trim() ||
       /\s/.test(policy.upstreamModel)) throw new Error('Invalid upstream model');

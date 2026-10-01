@@ -155,8 +155,8 @@ def _parse_json_list(value: str, option: str) -> list[str]:
     return result
 
 
-def _get_action_runs(repo: str, workflow: str, sha: str) -> list[dict[str, Any]]:
-    data = _gh_json(f"repos/{repo}/actions/workflows/{workflow}/runs?head_sha={sha}&per_page=100")
+def _get_action_runs(repo: str, workflow: str, sha: str, number: int) -> list[dict[str, Any]]:
+    data = _gh_json(f"repos/{repo}/actions/workflows/{workflow}/runs?head_sha={sha}&event=pull_request&per_page=100")
     runs = data.get("workflow_runs", [])
     return [
         {
@@ -168,6 +168,7 @@ def _get_action_runs(repo: str, workflow: str, sha: str) -> list[dict[str, Any]]
             "run_attempt": run.get("run_attempt"),
         }
         for run in runs
+        if run.get("event") == "pull_request" and any(pr.get("number") == number for pr in run.get("pull_requests", []))
     ]
 
 
@@ -221,13 +222,13 @@ def _get_provider_checks(repo: str, sha: str) -> list[dict[str, Any]]:
 def _collect_action_runs(repo, sha, required_actions, advisory, number):
     action_runs: list[dict[str, Any]] = []
     for workflow in required_actions:
-        action_runs.extend(_get_action_runs(repo, workflow, sha))
+        action_runs.extend(_get_action_runs(repo, workflow, sha, number))
     required_action_set = set(required_actions)
     for workflow in advisory:
         if workflow in required_action_set:
             continue
         try:
-            action_runs.extend(_get_action_runs(repo, workflow, sha))
+            action_runs.extend(_get_action_runs(repo, workflow, sha, number))
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
             print(f"PR #{number}: advisory Actions workflow {workflow}: unavailable ({exc})")
     for workflow in advisory:
@@ -257,23 +258,27 @@ def _process_pr(args: argparse.Namespace, repo: str, number: int, required_actio
         print(f"PR #{number}: mergeability is {pr.get('mergeable')}; skipping")
         return False
 
-    action_runs = _collect_action_runs(repo, initial_sha, required_actions, advisory, number)
-    provider_checks = _get_provider_checks(repo, initial_sha) if args.provider_enabled else []
-    decision = evaluate_evidence(
-        head_sha=initial_sha,
-        pr_number=number,
-        required_actions=required_actions,
-        action_runs=action_runs,
-        provider_enabled=args.provider_enabled,
-        trusted_publisher_app_id=args.trusted_publisher_app_id,
-        required_provider_workflows=provider_workflows,
-        provider_checks=provider_checks,
-    )
+    def fresh_decision():
+        action_runs = _collect_action_runs(repo, initial_sha, required_actions, advisory, number)
+        provider_checks = _get_provider_checks(repo, initial_sha) if args.provider_enabled else []
+        return evaluate_evidence(
+            head_sha=initial_sha,
+            pr_number=number,
+            required_actions=required_actions,
+            action_runs=action_runs,
+            provider_enabled=args.provider_enabled,
+            trusted_publisher_app_id=args.trusted_publisher_app_id,
+            required_provider_workflows=provider_workflows,
+            provider_checks=provider_checks,
+        )
+
+    decision = fresh_decision()
     if not decision.allowed:
         print(f"PR #{number}: {decision.reason}; skipping")
         return False
 
-    # Re-read immediately before merge; the server-side SHA guard closes the remaining race.
+    # Refresh eligibility and evidence. Server-required checks close the final check race;
+    # match-head-commit only guards the branch revision.
     latest = _gh_pr_json("view", str(number), "--repo", repo, "--json", "state,headRefOid,mergeable,labels")
     latest_labels = {label["name"] for label in latest.get("labels", [])}
     if (
@@ -283,6 +288,11 @@ def _process_pr(args: argparse.Namespace, repo: str, number: int, required_actio
         or latest.get("mergeable") != "MERGEABLE"
     ):
         print(f"PR #{number}: eligibility/head changed before merge; skipping")
+        return False
+
+    decision = fresh_decision()
+    if not decision.allowed:
+        print(f"PR #{number}: evidence changed before merge; skipping")
         return False
 
     if args.dry_run:

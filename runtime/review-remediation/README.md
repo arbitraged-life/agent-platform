@@ -32,3 +32,5 @@ node --test tests/unit/review-remediation*.test.mjs
 ```
 
 The tests exercise event identity, fork/author restrictions, durable budgets, signed receipts, pagination, compare-and-swap publication, process timeouts, archive traversal, special-file rejection, credential isolation, and CI-gated resolution. A repository adapter must also test its independent oracles against both failing and fixed fixtures.
+
+`model` is the trusted agent adapter selector (for example `review-proxy/vendor/model`); `upstreamModel` is the exact model identifier accepted by the proxy. The credential provider is independent of the adapter prefix. Private adapters must be tested against the proxy before activation. Authenticated requests reserve their attempt budget before body buffering, including malformed requests. Docker bind paths containing commas, quotes, or newlines are rejected explicitly.

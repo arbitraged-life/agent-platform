@@ -1,10 +1,14 @@
 from importlib.machinery import SourceFileLoader
 from importlib.util import spec_from_loader, module_from_spec
 from pathlib import Path
+# qlty-ignore(bandit:B404): Git fixture operations use argv without a shell.
 import subprocess
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
+
+GIT_EXECUTABLE = shutil.which('git')
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/validate'
 SPEC = spec_from_loader('validation', SourceFileLoader('validation', str(SCRIPT)))
@@ -24,6 +28,14 @@ class BoundaryTests(unittest.TestCase):
                 file.write_text("import '../runtime/module.mjs';\n")
                 self.assertEqual(validation.boundaries([file]), [])
 
+    def test_private_key_labels_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            file = root / 'fixture.txt'
+            for label in ['DSA', 'ENCRYPTED', 'RSA', 'OPENSSH']:
+                file.write_text('-----BEGIN ' + label + ' PRIVATE KEY-----')
+                self.assertTrue(validation.boundaries([file], root))
+
     def test_environment_variants_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -35,10 +47,12 @@ class BoundaryTests(unittest.TestCase):
     def test_index_is_checked_even_when_worktree_differs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            # qlty-ignore(bandit:B603): Resolved Git executable with literal argv and local fixture paths.
+            subprocess.run([GIT_EXECUTABLE, 'init', '-q', str(root)], check=True)
             file = root / 'example.txt'
             file.write_text('-----BEGIN ' + 'PRIVATE KEY-----')
-            subprocess.run(['git', '-C', str(root), 'add', 'example.txt'], check=True)
+            # qlty-ignore(bandit:B603): Resolved Git executable with literal argv and local fixture paths.
+            subprocess.run([GIT_EXECUTABLE, '-C', str(root), 'add', 'example.txt'], check=True)
             file.write_text('safe working copy')
             with patch.object(validation, 'ROOT', root):
                 with self.assertRaisesRegex(SystemExit, 'private key'):
@@ -46,7 +60,8 @@ class BoundaryTests(unittest.TestCase):
                 file.unlink()
                 with self.assertRaisesRegex(SystemExit, 'private key'):
                     validation.lint_index()
-                subprocess.run(['git', '-C', str(root), 'rm', '--cached', '-f', 'example.txt'], check=True, capture_output=True)
+                # qlty-ignore(bandit:B603): Resolved Git executable with literal argv and local fixture paths.
+                subprocess.run([GIT_EXECUTABLE, '-C', str(root), 'rm', '--cached', '-f', 'example.txt'], check=True, capture_output=True)
                 validation.lint_index()
 
     def test_local_and_floating_package_dependencies_fail(self):

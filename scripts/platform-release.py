@@ -5,7 +5,7 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shutil
 # qlty-ignore(bandit:B404): Required CLI execution uses argv arrays without a shell.
@@ -40,6 +40,8 @@ def build(root, output):
                 continue
             if not member.isfile():
                 raise ValueError(f'Unsupported release entry: {member.name}')
+            if member.name == MANIFEST_NAME:
+                raise ValueError('Reserved release manifest in source')
             files[member.name] = source.extractfile(member).read()
     manifest = {'schema_version': 1, 'commit': commit, 'files': {name: sha(data) for name, data in files.items()}}
     files[MANIFEST_NAME] = (json.dumps(manifest, sort_keys=True, indent=2) + '\n').encode()
@@ -63,7 +65,7 @@ def _extract_bundle(data, temporary):
         seen = set()
         for member in members:
             name = PurePosixPath(member.name)
-            if not member.isfile() or name.is_absolute() or '..' in name.parts or '\\' in member.name or str(name) in seen:
+            if not member.isfile() or name.is_absolute() or PureWindowsPath(member.name).drive or '..' in name.parts or '\\' in member.name or str(name) in seen:
                 raise ValueError('Unsafe release entry')
             seen.add(str(name))
             total += member.size

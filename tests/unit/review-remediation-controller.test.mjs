@@ -28,7 +28,7 @@ function fixture({before=1,after=0,agentCode=0}={}) {
 
 test('dry run reads eligibility without invoking agent or writing state',async()=>{
   const f=fixture();const result=await remediate({...f,number:7,apply:false});
-  assert.equal(result.status,'eligible');assert.deepEqual(f.counts(),{published:0,agentCalls:0});
+  assert.equal(result.status,'eligible');assert.deepEqual(f.counts(),{published:0,agentCalls:0});assert.equal((await f.api.all()).length,0);
 });
 test('verified patch is published but thread waits for CI at the exact new SHA',async()=>{
   const f=fixture();const result=await remediate({...f,number:7,apply:true});
@@ -164,4 +164,14 @@ test('authenticated resolution receipt recovers a failed ledger update without r
   assert.equal((await finalize({...f,number:7})).resolved,1);
   assert.equal(resolutions,1);
   assert.equal((await finalize({...f,number:7})).resolved,0);
+});
+
+test('finalization stays pending until required checks pass',async()=>{
+  const f=fixture();await remediate({...f,number:7,apply:true});
+  await finalize({...f,number:7});assert.equal(f.thread.isResolved,false);
+  const checks=f.api.checks;
+  f.api.checks=async()=>[{name:'Verify',status:'completed',conclusion:'failure',appId:15368}];
+  await finalize({...f,number:7});assert.equal(f.thread.isResolved,false);
+  f.api.checks=checks;f.green();
+  await finalize({...f,number:7});assert.equal(f.thread.isResolved,true);
 });

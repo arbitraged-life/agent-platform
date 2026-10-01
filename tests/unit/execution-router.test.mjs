@@ -367,3 +367,29 @@ test('isolated read-only profiles allow omitted protected branches',async()=>{
  const policy=await loadPolicy(f.policyPath);
  assert.equal((await prepare(policy,packet(linked))).status,'prepared');
 });
+
+test('returned writes on an agent-selected protected branch cannot be accepted',async()=>{
+ const f=await fixture(),linked=path.join(f.root,'accept-linked');
+ await exec('git',['-C',f.workspace,'worktree','add','-qb','accept-feature',linked]);
+ f.data.workspace_roots=[f.root];f.data.protected_branches=['trunk'];
+ f.data.profiles['codex-write']={...f.data.profiles['codex-readonly'],sandbox:'workspace-write',actions:['read','edit'],requires_isolated_worktree:true};
+ const bin=f.data.profiles['codex-write'].executable;
+ const source=await readFile(bin,'utf8');
+ await writeFile(bin,source.replace("const i=args.indexOf", "const cp=await import('node:child_process');await new Promise((resolve,reject)=>cp.execFile('git',['checkout','-qb','trunk'],e=>e?reject(e):resolve()));const i=args.indexOf"));
+ await writeFile(f.policyPath,JSON.stringify(f.data));
+ const policy=await loadPolicy(f.policyPath),task=packet(linked,{profile:'codex-write',actions:['edit'],source_write_authorized:true});
+ const p=await prepare(policy,task);
+ assert.equal((await runPrepared(policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'})).status,'returned');
+ const evidence={verifier:'controller',summary:'Inspect returned change',criteria:[{criterion:task.acceptance_criteria[0],passed:true,evidence:'Inspected output'}],artifacts:[path.join(policy.state_dir,'runs','router-test','agent-final.txt')]};
+ await assert.rejects(()=>acceptResult(policy,'router-test',evidence),/non-protected feature branch/);
+});
+
+test('Unicode whitespace in protected branch names is preserved',async()=>{
+ const f=await fixture(),linked=path.join(f.root,'unicode-linked'),branch='trunk\u00a0';
+ await exec('git',['-C',f.workspace,'worktree','add','-qb',branch,linked]);
+ f.data.workspace_roots=[f.root];f.data.protected_branches=[branch];
+ f.data.profiles['codex-write']={...f.data.profiles['codex-readonly'],sandbox:'workspace-write',actions:['read','edit'],requires_isolated_worktree:true};
+ await writeFile(f.policyPath,JSON.stringify(f.data));
+ const policy=await loadPolicy(f.policyPath);
+ await assert.rejects(()=>prepare(policy,packet(linked,{profile:'codex-write',actions:['edit'],source_write_authorized:true})),/non-protected feature branch/);
+});
