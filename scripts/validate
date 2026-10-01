@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -109,7 +110,29 @@ def boundaries(files, root=None):
     return failures
 
 
+def validate_skills(root):
+    if not (root / 'skills/catalog.json').exists():
+        return
+    module = runpy.run_path(str(ROOT / 'scripts/skills.py'))
+    rows = module['catalog'](root)
+    lock = module['verify_upstream'](root)
+    for row in rows:
+        text = (root / row['path']).read_text()
+        metadata = yaml.safe_load(text.split('---', 2)[1])
+        if any(metadata.get(key) != row[key] for key in ['name', 'description']):
+            raise ValueError('Skill catalog metadata drift: ' + row['name'])
+    for name in lock['files']:
+        path = root / name
+        for target in re.findall(r'\]\(([^)\s]+)\)', path.read_text()):
+            target = target.split('#')[0]
+            if target and ':' not in target and target.endswith('.md'):
+                resolved = (path.parent / target).resolve()
+                if not resolved.is_relative_to(root.resolve()) or not resolved.is_file():
+                    raise ValueError('Broken bundled skill reference: ' + name + ': ' + target)
+
+
 def lint_sources(files, root):
+    validate_skills(root)
     errors = boundaries(files, root)
     if errors:
         raise SystemExit('\n'.join(errors))

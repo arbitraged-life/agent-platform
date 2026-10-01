@@ -1,0 +1,29 @@
+# Skill distribution and discovery
+
+`python3 scripts/skills.py list` emits the release's catalog as JSON. Skill
+entrypoints have matching kebab-case names and nonempty descriptions. The catalog
+contains the portable execution-router procedure and eight Cloudflare skills.
+The immutable platform release includes their referenced documentation.
+
+`python3 scripts/skills.py validate` checks the catalog, file inventory, hashes,
+license, pinned upstream revision, and declared overlays. `./scripts/validate`
+also checks frontmatter/catalog agreement and bundled Markdown references.
+Changing upstream content requires an explicit overlay with a rationale and hash;
+adding files without updating the inventory fails validation.
+
+The Cloudflare source revision and original file hashes are recorded in
+`skills/upstream-lock.json`; its license is retained under `licenses/`. Upstream
+updates are explicit dependency changes, not a fetch of current main. Examples
+are documentation, not live deployment configuration. Several deliberately
+illustrate incorrect code. Runtime credentials and account IDs are supplied by
+the consuming environment and are not part of a skill bundle.
+
+Clients consume skill directories from an installed, digest-verified release.
+A private frontend overlay may provide local command paths and available tools;
+it does not fork the generic instructions. Published plugin bundles are generated
+deployments of the pinned source and retain their source revision/digests.
+
+These reference skills assume the capabilities described by each skill. In
+particular, web-perf requires Chrome DevTools tracing; a generic browser tool is
+not an equivalent replacement. Installing documentation does not install a
+runtime, grant tool permissions, or authorize deployment/provider spending.
