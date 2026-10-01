@@ -175,3 +175,48 @@ test('finalization stays pending until required checks pass',async()=>{
   f.api.checks=checks;f.green();
   await finalize({...f,number:7});assert.equal(f.thread.isResolved,true);
 });
+
+test('one verifier result cannot establish proofs for multiple review threads',async()=>{
+ const f=fixture();f.api.threads=async()=>[f.thread,{...f.thread,id:'T2',comments:[{...f.thread.comments[0],id:124}]}];
+ assert.equal((await remediate({...f,number:7,apply:true})).status,'unverified');
+ assert.deepEqual(f.counts(),{published:0,agentCalls:0});
+});
+
+test('pending CI proof blocks another mutation even after new feedback',async()=>{
+ const f=fixture();await remediate({...f,number:7,apply:true});
+ f.thread.comments[0].body='Another bug';
+ assert.equal((await remediate({...f,number:7,apply:true})).status,'pending-ci');
+ assert.deepEqual(f.counts(),{published:1,agentCalls:1});
+});
+
+test('partial verifier success does not publish or consume a second head',async()=>{
+ const f=fixture();f.policy.verifiers=[{id:'first',path:'a.js$',body:'bug'},{id:'second',path:'b.js$',body:'bug'}];
+ f.api.threads=async()=>[f.thread,{...f.thread,id:'T2',path:'src/b.js',comments:[{...f.thread.comments[0],id:124}]}];
+ let pass=0;f.executor.verify=async()=>({syntax:0,first:pass++?0:1,second:1});
+ assert.equal((await remediate({...f,number:7,apply:true})).status,'unverified');
+ assert.equal(f.counts().published,0);
+});
+
+test('publication uses the freshly verified branch after a rename',async()=>{
+ const f=fixture(),run=f.executor.run,publish=f.api.publish;
+ f.executor.run=async()=>{const result=await run();f.pr.head.ref='renamed-feature';return result;};
+ f.api.publish=async(repo,branch,...rest)=>{assert.equal(branch,'renamed-feature');return publish(repo,branch,...rest);};
+ assert.equal((await remediate({...f,number:7,apply:true})).status,'pending-ci');
+});
+
+test('interrupted reservation and uncertain publication require reconciliation',async()=>{
+ for(const state of [{status:'reserved',stage:'prepare'},{status:'failed',stage:'publish'}]) {
+  const f=fixture();
+  const record={version:1,type:'attempt',repository:f.policy.repository,pr:7,key:'previous',...state};
+  f.api.all=async()=>[{id:55,user:{id:99},body:seal(record,f.api.signingKeys[0])}];
+  assert.equal((await remediate({...f,number:7,apply:true})).status,'reconciliation-required');
+  assert.deepEqual(f.counts(),{published:0,agentCalls:0});
+ }
+});
+
+test('rename to a consumer-protected branch blocks publication',async()=>{
+ const f=fixture(),run=f.executor.run;f.policy.protectedBranches=['release'];
+ f.executor.run=async()=>{const result=await run();f.pr.head.ref='release';return result;};
+ assert.equal((await remediate({...f,number:7,apply:true})).status,'failed');
+ assert.equal(f.counts().published,0);
+});

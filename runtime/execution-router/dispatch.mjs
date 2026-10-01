@@ -73,7 +73,9 @@ export async function runPrepared(policy,id,approval={}) {
  try{await mkdir(lock,{mode:0o700});}catch(e){if(e.code==='EEXIST')throw new Error('Workspace already has a run or stale lock; inspect before recovery');throw e;}
  let child,heartbeat,limit,hardKill,cancelPoll,outputPoll,started=false,closed=false,finalized=false,stopReason=null,buffered=0,ioError=null,keepLock=false;let logChain=Promise.resolve();
  let terminateOwned=()=>{};
- const signalStop=()=>terminateOwned('cancelled');
+ let pendingSignal=false;
+ const signalStop=()=>{pendingSignal=true;terminateOwned('cancelled');};
+ process.on('SIGTERM',signalStop);process.on('SIGINT',signalStop);
  try {
   // Re-read under the exclusive workspace lock to prevent double submission.
   if((await readJson(path.join(dir,'status.json'))).status!=='prepared')throw new Error('Run is not prepared');
@@ -89,10 +91,12 @@ export async function runPrepared(policy,id,approval={}) {
   let childError;
   const latestExecutable=await executableIdentity(profile);
   if(digest(latestExecutable)!==digest(state.executable_identity))throw new Error('Prepared executable changed; prepare a new handoff');
+  if(pendingSignal)throw new Error('Launch cancelled before child creation');
   child=spawn(latestExecutable.path,args,{cwd:workspace,env:cleanEnvironment(),shell:false,detached:process.platform!=='win32',stdio:['pipe','pipe','pipe']});
   const finished=new Promise(resolve=>{child.on('error',err=>{closed=true;childError=err;resolve({code:null,signal:null});});child.on('close',(code,signal)=>{closed=true;resolve({code,signal});});});
   const terminate=reason=>{if(closed||finalized||stopReason)return;stopReason=reason;try{stopChild(child);}catch(error){ioError??=error;}hardKill=setTimeout(()=>{try{killChild(child);}catch(error){ioError??=error;}},2000);};
   terminateOwned=terminate;
+  if(pendingSignal)terminate('cancelled');
   const log=operation=>{logChain=logChain.then(operation).catch(err=>{ioError=err;if(!stopReason){if(closed)stopReason='failed';else terminate('failed');}});};
   const checkFinalOutput=()=>stat(finalPath).then(info=>{if(buffered+info.size>outputLimit)terminate('output-limit');}).catch(error=>{if(error.code!=='ENOENT'){ioError??=error;terminate('failed');}});
   child.stdin.on('error',()=>{});child.stdin.end(input);
@@ -101,7 +105,6 @@ export async function runPrepared(policy,id,approval={}) {
   limit=setTimeout(()=>terminate('timed-out'),profile.max_seconds*1000);
   cancelPoll=setInterval(()=>{stat(path.join(dir,'cancel.request')).then(()=>terminate('cancelled')).catch(e=>{if(e.code!=='ENOENT')terminate('failed');});},100);
   outputPoll=setInterval(checkFinalOutput,100);
-  process.once('SIGTERM',signalStop);process.once('SIGINT',signalStop);
   const outcome=await finished;clearInterval(heartbeat);clearInterval(cancelPoll);clearInterval(outputPoll);clearTimeout(limit);clearTimeout(hardKill);await logChain;
   let finalBytes=0;try{finalBytes=(await stat(finalPath)).size;}catch(error){ioError??=error;if(!stopReason)stopReason='failed';}
   if(buffered+finalBytes>outputLimit&&!stopReason)stopReason='output-limit';

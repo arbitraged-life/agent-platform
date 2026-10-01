@@ -11,9 +11,13 @@ The controller accepts allowlisted GitHub review events, reserves a signed attem
 - `finalize`: no model invocation. Resolve only signed, failing-before/passing-after proof for an unchanged discussion, the exact current head, and successful required checks from the configured GitHub App.
 - `route`: turn supported GitHub event payloads into a per-PR Actions matrix. PR issue comments, summaries, billing notices, and unrelated bots are not remediation events.
 
+One verifier result can authorize at most one selected thread. Ambiguous mappings and partial fixes remain unverified and cannot publish. A pending CI receipt blocks another mutation until finalized; interrupted reservations and uncertain publication require explicit reconciliation.
+
 Verifier exit values inside the JSON report are `0` (passes), `1` (reproduced failure), and `2` (unavailable). The `syntax` check must pass after editing. A finding without a matching trusted regression oracle remains open; existing green tests alone are not proof that a review finding was fixed.
 
 Verifier expressions come only from the trusted runtime policy, never PR feedback. Review them for bounded matching against untrusted paths and comments; the 96 KiB feedback ceiling is not a regular-expression execution timeout.
+
+`authorIds`, when supplied, is an array of positive integer IDs; malformed values fail closed. `protectedBranches` adds consumer-specific protected head names to `main`, `master`, and the PR base.
 
 Runtime policy supplies reviewer IDs and logins, PR author IDs, allowed patch paths, model and inference credential name, independent check mappings, `finalizationWorkflowNames` (workflow display names), CI check names and App ID, and optional offline generator commands. Workflow names and check-run names are separate contracts. Directory prefixes end in `/`; other allowed paths match exactly. Protect the controller, policy, verification files, workflows, and credential paths from agent edits.
 
@@ -34,3 +38,5 @@ node --test tests/unit/review-remediation*.test.mjs
 The tests exercise event identity, fork/author restrictions, durable budgets, signed receipts, pagination, compare-and-swap publication, process timeouts, archive traversal, special-file rejection, credential isolation, and CI-gated resolution. A repository adapter must also test its independent oracles against both failing and fixed fixtures.
 
 `model` is the trusted agent adapter selector (for example `review-proxy/vendor/model`); `upstreamModel` is the exact model identifier accepted by the proxy. The credential provider is independent of the adapter prefix. Private adapters must be tested against the proxy before activation. Authenticated requests reserve their attempt budget before body buffering, including malformed requests. Docker bind paths containing commas, quotes, or newlines are rejected explicitly.
+
+Host subprocess supervision requires POSIX process groups. Timeout and output-limit termination kill owned descendants, and Windows hosts are rejected. The CLI returns failure for unverified work and reconciliation-required states.

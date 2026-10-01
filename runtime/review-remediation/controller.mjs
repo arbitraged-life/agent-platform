@@ -43,6 +43,8 @@ function verifierFor(thread, policy) {
 
 export async function remediate({api, policy, executor, number, apply=false}) {
   const {pr,identity,ledger} = await context(api,policy,number);
+  if(ledger.some(entry=>entry.data.status==='pending-ci'))return {status:'pending-ci',selected:0};
+  if(ledger.some(entry=>entry.data.status==='reserved'||entry.data.stage==='publish'&&entry.data.status==='failed'))return {status:'reconciliation-required',selected:0};
   const all = (await api.threads(policy.repository,number)).map(t=>visibleThread(t,identity,api.signingKeys));
   const threads = selectThreads(all,policy);
   if (!threads.length) return {status:'no-feedback',selected:0};
@@ -64,7 +66,8 @@ export async function remediate({api, policy, executor, number, apply=false}) {
     const before = await executor.verify(workspace);
     record.before=before;
     const actionable = threads.filter(t=>before[verifierFor(t,policy)?.id] === 1);
-    if (!actionable.length) record.status = 'unverified';
+    const verifierIds=actionable.map(t=>verifierFor(t,policy).id);
+    if (!actionable.length || new Set(verifierIds).size!==verifierIds.length) record.status = 'unverified';
     else {
       record.stage='agent';
       const agent = await executor.run(workspace,actionable,pr);
@@ -79,7 +82,7 @@ export async function remediate({api, policy, executor, number, apply=false}) {
           return before[id]===1 && after[id]===0 ? [{threadId:t.id,rootCommentId:t.comments[0].id,verifier:id,before:1,after:0}] : [];
         });
         const lostPassingCheck=Object.entries(before).some(([name,status])=>status===0 && after[name]!==0);
-        if (!proofs.length || after.syntax !== 0 || lostPassingCheck) record.status='unverified';
+        if (proofs.length!==actionable.length || after.syntax !== 0 || lostPassingCheck) record.status='unverified';
         else {
           validateChanges(changes,policy);
           const credentials=[api.token,...api.signingKeys,process.env[policy.providerEnv]].filter(Boolean);
@@ -91,8 +94,8 @@ export async function remediate({api, policy, executor, number, apply=false}) {
           const matching = selectThreads(fresh,policy);
           if (!eligiblePR(current,policy) || current.head.sha!==pr.head.sha || fingerprint(current,matching)!==key)
             throw new Error('PR or discussion changed during remediation');
-          const commit = await api.publish(policy.repository,pr.head.ref,pr.head.sha,changes);
-          const published = {...pr,head:{...pr.head,sha:commit.oid}};
+          const commit = await api.publish(policy.repository,current.head.ref,current.head.sha,changes);
+          const published = {...current,head:{...current.head,sha:commit.oid}};
           record.status='pending-ci';record.publishedSha=commit.oid;
           record.proofs=proofs.map(p=>({...p,headSha:commit.oid,threadHash:fingerprint(published,[threads.find(t=>t.id===p.threadId)])}));
         }

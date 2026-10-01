@@ -146,3 +146,10 @@ test('malformed inference policy fails at startup before GitHub credentials or a
 test('agent adapter selector is independent of credential provider',()=>{
   assert.doesNotThrow(()=>assertPolicySafety({...safePolicy,model:'review-proxy/qwen/qwen3-coder'}));
 });
+
+test('malformed author allowlists and configured protected heads fail closed',()=>{
+ const event={...reviewEvent,pull_request:{...pr,user:{id:7}}};
+ for(const authorIds of ['77',77,null,{},[7.5],['7']])assert.equal(eligibleEvent('pull_request_review',event,{...policy,authorIds}),false);
+ assert.equal(eligibleEvent('pull_request_review',event,{...policy,authorIds:[7]}),true);
+ assert.equal(eligibleEvent('pull_request_review',event,{...policy,protectedBranches:[pr.head.ref]}),false);
+});

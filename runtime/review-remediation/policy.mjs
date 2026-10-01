@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto';
 
 export function eligiblePR(pr, policy) {
+  if(policy.authorIds!==undefined && (!Array.isArray(policy.authorIds)||policy.authorIds.some(id=>!Number.isSafeInteger(id)||id<1)))return false;
+  if(policy.protectedBranches!==undefined && (!Array.isArray(policy.protectedBranches)||policy.protectedBranches.some(name=>typeof name!=='string'||!name)))return false;
   return pr?.state === 'open' && !pr.draft &&
     (!policy.authorIds || policy.authorIds.includes(pr.user?.id)) &&
     !(pr.labels??[]).some(label => label.name === 'review-remediation:hold') &&
     pr.head?.repo?.full_name === policy.repository &&
     /^[0-9a-f]{40}$/.test(pr.head.sha) &&
-    !['main', 'master', pr.base?.ref].includes(pr.head.ref);
+    !['main', 'master', pr.base?.ref, ...(policy.protectedBranches??[])].includes(pr.head.ref);
 }
 
 function reviewer(user, policy) {
@@ -69,6 +71,8 @@ export function validateChanges(changes, policy) {
 }
 
 export function assertPolicySafety(policy) {
+  if(policy.authorIds!==undefined && (!Array.isArray(policy.authorIds)||policy.authorIds.some(id=>!Number.isSafeInteger(id)||id<1)))throw new Error('Invalid author allowlist');
+  if(policy.protectedBranches!==undefined && (!Array.isArray(policy.protectedBranches)||policy.protectedBranches.some(name=>typeof name!=='string'||!name)))throw new Error('Invalid protected branches');
   const workflows=policy.finalizationWorkflowNames;
   if(!Array.isArray(workflows) || !workflows.length || workflows.length>20 ||
       workflows.some(name=>typeof name!=='string' || !name.trim()) || new Set(workflows).size!==workflows.length)

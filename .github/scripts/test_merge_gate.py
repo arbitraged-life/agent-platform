@@ -294,6 +294,20 @@ class MergeGateDryRunTests(unittest.TestCase):
             self.assertFalse(merge_gate._process_pr(args, 'owner/repo', 42, ['ci.yml'], [], []))
         command.assert_not_called()
 
+    def test_successful_merge_binds_expected_head_and_method(self):
+        pr = dict(state='OPEN', headRefOid=SHA, mergeable='MERGEABLE', labels=[{'name':'auto-merge'}])
+        for method in ['squash', 'merge', 'rebase']:
+            args = Namespace(label='auto-merge', provider_enabled=False,
+                             trusted_publisher_app_id=None, merge_method=method, dry_run=False)
+            with self.subTest(method=method), patch.object(merge_gate, '_gh_pr_json', return_value=pr), \
+                 patch.object(merge_gate, '_get_action_runs', return_value=[action()]), \
+                 patch.object(merge_gate.subprocess, 'run', return_value=Namespace(returncode=0)) as command:
+                self.assertTrue(merge_gate._process_pr(args, 'owner/repo', 42, ['ci.yml'], [], []))
+                command.assert_called_once_with(
+                    [merge_gate.GH_EXECUTABLE, 'pr', 'merge', '42', '--repo', 'owner/repo',
+                     '--' + method, '--delete-branch', '--match-head-commit', SHA],
+                    capture_output=True, text=True, timeout=30)
+
     def test_dry_run_never_invokes_merge(self):
         args = Namespace(label='auto-merge', provider_enabled=False,
                          trusted_publisher_app_id=None, merge_method='squash', dry_run=True)
