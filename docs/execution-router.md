@@ -158,3 +158,5 @@ upgrade running agents, create duplicate queues, or attach every transcript to
 memory. Existing maintenance workflows should report drift and unresolved runs.
 
 Automatic process execution supports POSIX process groups. Windows uses manual handoffs until process-tree supervision is available. Exceptional exits retain the workspace lock and report `cleanup-uncertain` if descendant termination cannot be confirmed.
+
+A test-only task can use a writable sandbox because tests execute repository code, but any resulting workspace change requires review unless the task also authorizes `edit`. This includes generated test artifacts; acceptance does not silently widen task actions.

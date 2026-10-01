@@ -88,12 +88,12 @@ export async function remediate({api, policy, executor, number, apply=false}) {
           const credentials=[api.token,...api.signingKeys,process.env[policy.providerEnv]].filter(Boolean);
           if(changes.some(c=>credentials.some(secret=>c.content?.includes(secret))))
             throw new Error('Credential material detected in proposed patch');
-          record.stage='publish';
           const current = await api.rest(`/repos/${policy.repository}/pulls/${number}`);
           const fresh = (await api.threads(policy.repository,number)).map(t=>visibleThread(t,identity,api.signingKeys));
           const matching = selectThreads(fresh,policy);
           if (!eligiblePR(current,policy) || current.head.sha!==pr.head.sha || fingerprint(current,matching)!==key)
             throw new Error('PR or discussion changed during remediation');
+          record.stage='publish';
           const commit = await api.publish(policy.repository,current.head.ref,current.head.sha,changes);
           const published = {...current,head:{...current.head,sha:commit.oid}};
           record.status='pending-ci';record.publishedSha=commit.oid;

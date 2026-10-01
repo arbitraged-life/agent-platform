@@ -41,18 +41,32 @@ def build(root, output):
     commit = subprocess.check_output([GIT_EXECUTABLE, '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
     files, modes = {}, {}
     # qlty-ignore(bandit:B603): Resolved executable and literal argv; shell interpretation is disabled.
-    committed = subprocess.check_output([GIT_EXECUTABLE, '-c', 'tar.umask=0000', '-C', str(root), 'archive', '--format=tar', commit])
-    with tarfile.open(fileobj=io.BytesIO(committed)) as source:
-        for member in source:
-            if member.isdir():
-                continue
-            if not member.isfile():
-                raise ValueError(f'Unsupported release entry: {member.name}')
-            release_path(member.name)
-            if member.name == MANIFEST_NAME:
-                raise ValueError('Reserved release manifest in source')
-            files[member.name] = source.extractfile(member).read()
-            modes[member.name] = 0o755 if member.mode & 0o111 else 0o644
+    process = subprocess.Popen([GIT_EXECUTABLE, '-c', 'tar.umask=0000', '-C', str(root), 'archive', '--format=tar', commit], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    total = 0
+    entries = 0
+    try:
+        with tarfile.open(fileobj=process.stdout, mode='r|') as source:
+            for member in source:
+                entries += 1
+                total += member.size
+                if entries >= 10000 or total > MAX_RELEASE_BYTES:
+                    raise ValueError('Expanded release exceeds size limit')
+                if member.isdir():
+                    continue
+                if not member.isfile():
+                    raise ValueError(f'Unsupported release entry: {member.name}')
+                release_path(member.name)
+                if member.name == MANIFEST_NAME:
+                    raise ValueError('Reserved release manifest in source')
+                files[member.name] = source.extractfile(member).read()
+                modes[member.name] = 0o755 if member.mode & 0o111 else 0o644
+        if process.wait(timeout=30) != 0:
+            raise RuntimeError('Git archive failed')
+    finally:
+        process.stdout.close()
+        if process.poll() is None:
+            process.kill()
+        process.wait()
     manifest = {'schema_version': 1, 'commit': commit, 'files': {name: sha(data) for name, data in files.items()}}
     files[MANIFEST_NAME] = (json.dumps(manifest, sort_keys=True, indent=2) + '\n').encode()
     if len(files)>10000 or sum(map(len,files.values()))>MAX_RELEASE_BYTES:
@@ -71,6 +85,7 @@ def build(root, output):
         if temporary.stat().st_size > MAX_RELEASE_BYTES:
             raise ValueError('Release bundle exceeds size limit')
         digest = sha(temporary.read_bytes())
+        temporary.chmod(0o644)
         os.replace(temporary, output)
         return {'schema_version': 1, 'commit': commit, 'sha256': digest, 'artifact': output.name}
     finally:
