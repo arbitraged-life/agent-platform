@@ -13,7 +13,7 @@ const policy = {
   allowedPrefixes: ['src/', 'tests/'], deniedPrefixes: ['.github/', 'src/policy/'],
   requiredChecks: ['Verify'],checkAppId:15368,checkWorkflowId:123,
 };
-const safePolicy = {requiredChecks:['Verify'],finalizationWorkflowNames:['CI'],maxAttempts:2,maxThreads:12,maxFiles:8,maxBytes:131072,agentTimeoutSeconds:390,
+const safePolicy = {allowedPrefixes:['src/'],deniedPrefixes:[],requiredChecks:['Verify'],finalizationWorkflowNames:['CI'],maxAttempts:2,maxThreads:12,maxFiles:8,maxBytes:131072,agentTimeoutSeconds:390,
   maxModelRequests:12,maxOutputTokens:4096,checkAppId:15368,checkWorkflowId:123,provider:'openrouter',
   providerEnv:'OPENROUTER_API_KEY',model:'openrouter/qwen/qwen3-coder',upstreamModel:'qwen/qwen3-coder',
   inferenceEndpoint:'https://openrouter.ai/api/v1/chat/completions'};
@@ -176,4 +176,14 @@ test('required checks are validated before remediation starts',()=>{
     assert.throws(()=>assertPolicySafety({...safePolicy,requiredChecks}),/required check/);
   }
   assert.doesNotThrow(()=>assertPolicySafety({...safePolicy,requiredChecks:['Verify','Test (linux)']}));
+});
+
+
+test('patch path lists fail admission before attempts can be reserved',()=>{
+ for(const key of ['allowedPrefixes','deniedPrefixes']) {
+  for(const value of [undefined,null,'src/',[null],[''],['../private'],['x'.repeat(4097)],Array(101).fill('src/')])
+   assert.throws(()=>assertPolicySafety({...safePolicy,[key]:value}),/patch path policy/);
+ }
+ assert.throws(()=>assertPolicySafety({...safePolicy,allowedPrefixes:[]}),/patch path policy/);
+ assert.doesNotThrow(()=>assertPolicySafety(safePolicy));
 });

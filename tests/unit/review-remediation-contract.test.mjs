@@ -52,7 +52,7 @@ test('malformed signing-key JSON is never echoed by the CLI',async()=>{
  const root=await mkdtemp(join(tmpdir(),'signing-input-'));
  try {
   const config=join(root,'policy.json');
-  await writeFile(config,JSON.stringify({requiredChecks:['Verify'],finalizationWorkflowNames:['CI'],maxAttempts:2,maxThreads:2,maxFiles:2,maxBytes:1024,
+  await writeFile(config,JSON.stringify({allowedPrefixes:['src/'],deniedPrefixes:[],requiredChecks:['Verify'],finalizationWorkflowNames:['CI'],maxAttempts:2,maxThreads:2,maxFiles:2,maxBytes:1024,
    agentTimeoutSeconds:30,maxModelRequests:2,maxOutputTokens:100,checkAppId:1,checkWorkflowId:123,provider:'openrouter',providerEnv:'OPENROUTER_API_KEY',
    model:'openrouter/example',upstreamModel:'example',inferenceEndpoint:'https://provider.example.invalid/chat'}));
   const result=await promisify(execFile)(process.execPath,['scripts/review/remediate.mjs','--config',config,'--mode','route'],{

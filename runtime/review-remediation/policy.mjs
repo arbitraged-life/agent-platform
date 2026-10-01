@@ -77,6 +77,12 @@ export function validateChanges(changes, policy) {
 }
 
 export function assertPolicySafety(policy) {
+  for(const key of ['allowedPrefixes','deniedPrefixes']) {
+    const prefixes=policy[key];
+    if(!Array.isArray(prefixes) || prefixes.length>100 || (key==='allowedPrefixes' && !prefixes.length) ||
+        prefixes.some(value=>typeof value!=='string' || !value.trim() || value.length>4096 || value.startsWith('/') || value.includes('\\') || value.split('/').includes('..') || /[\x00-\x1f]/.test(value)))
+      throw new Error(`Invalid patch path policy: ${key}`);
+  }
   if(policy.authorIds!==undefined && (!Array.isArray(policy.authorIds)||policy.authorIds.some(id=>!Number.isSafeInteger(id)||id<1)))throw new Error('Invalid author allowlist');
   if(policy.protectedBranches!==undefined && (!Array.isArray(policy.protectedBranches)||policy.protectedBranches.some(name=>typeof name!=='string'||!name)))throw new Error('Invalid protected branches');
   const checks=policy.requiredChecks;

@@ -95,3 +95,18 @@ test('pagination accounts for wire whitespace before retaining another page',asy
   await assert.rejects(()=>api.all('/comments'),/pagination byte limit/);
   assert.equal(pages,2);
 });
+
+
+test('check and workflow pages share one wire byte budget',async()=>{
+ for(const fullFirstPage of [true,false]) {
+  let pages=0;
+  const api=new GitHubClient('token',async url=>{
+   pages++;
+   if(pages>2)throw new Error('excessive page requested');
+   const value=url.includes('/check-runs?')?{check_runs:Array.from({length:fullFirstPage?100:1},(_,id)=>({id}))}:{workflow_runs:[],total_count:0};
+   return new Response(JSON.stringify(value)+' '.repeat(5*1024*1024));
+  });
+  await assert.rejects(()=>api.checks('owner/repo','sha'),/pagination byte limit/);
+  assert.equal(pages,2);
+ }
+});

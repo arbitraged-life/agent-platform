@@ -122,6 +122,12 @@ traffic are separate concerns. Agent-level instructions forbid commit/push/deplo
 and scope expansion; do not describe those prose restrictions as universal OS
 access controls. Review a workspace's configuration before authorizing its run.
 
+Verification evidence accepts only verifier, summary, criteria and artifact paths.
+The serialized payload is limited to 64 KiB; verifier names to 256 characters,
+summaries and criterion diagnostics to 8,192 characters, and paths/criterion
+labels to 4,096 characters. Unknown fields and oversized evidence are rejected
+without changing the returned status.
+
 Acceptance revalidates the packet digest against the approved packet before
 checking criteria, and compares the live workspace fingerprint with the one
 recorded when the child returned before recording `verified-complete`. Drift

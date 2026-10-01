@@ -110,13 +110,15 @@ export class GitHubClient {
 
   async checks(repository, sha) {
     const result = [];
+    const budget = {bytes:0};
     for (let page = 1; page <= 100; page++) {
-      const data = await this.rest(`/repos/${repository}/commits/${sha}/check-runs?filter=all&per_page=100&page=${page}`);
+      const data = await this.rest(`/repos/${repository}/commits/${sha}/check-runs?filter=all&per_page=100&page=${page}`, 'GET', undefined, budget);
+      if(!Array.isArray(data.check_runs) || data.check_runs.length>100)throw new Error('Invalid check-run page');
       result.push(...data.check_runs);
       if (data.check_runs.length < 100) {
         const runs = [];
         for (let runPage = 1; runPage <= 10; runPage++) {
-          const data = await this.rest(`/repos/${repository}/actions/runs?head_sha=${sha}&per_page=100&page=${runPage}`);
+          const data = await this.rest(`/repos/${repository}/actions/runs?head_sha=${sha}&per_page=100&page=${runPage}`, 'GET', undefined, budget);
           if (!Array.isArray(data.workflow_runs) || !Number.isSafeInteger(data.total_count) || data.total_count < 0 || data.total_count > 1000) throw new Error('Workflow provenance is incomplete');
           runs.push(...data.workflow_runs);
           if (runs.length === data.total_count) break;

@@ -105,6 +105,22 @@ class BoundaryTests(unittest.TestCase):
                 package.write_text('{"' + group + '":{"module":"1.2.3"}}')
                 self.assertTrue(validation.boundaries([package], root))
 
+    def test_workflow_named_action_is_not_composite_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workflow = root / '.github/workflows/action.yml'
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text('jobs: {test: {runs-on: ubuntu-latest, steps: [{run: echo ok}]}}')
+            self.assertEqual(validation.boundaries([workflow], root), [])
+
+    def test_machine_local_imports_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            module = root / 'entry.mjs'
+            for specifier in ['/opt/company/runtime.mjs', 'file:///opt/runtime.mjs', 'C:/runtime.mjs']:
+                module.write_text('im' + 'port ' + repr(specifier))
+                self.assertTrue(validation.boundaries([module], root))
+
 
 if __name__ == '__main__':
     unittest.main()

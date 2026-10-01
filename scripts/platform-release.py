@@ -40,6 +40,8 @@ def release_path(value):
 
 def register_path(value, spellings):
     name = release_path(value)
+    if len(name.parts) > 1 and name.parts[0].casefold() == MANIFEST_NAME.casefold():
+        raise ValueError('Unsafe release path alias')
     for count in range(1, len(name.parts) + 1):
         spelling = '/'.join(name.parts[:count])
         key = unicodedata.normalize('NFC', spelling).casefold()
