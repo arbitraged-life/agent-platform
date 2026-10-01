@@ -1,0 +1,96 @@
+name: Label Auto-Merge (reusable)
+
+# Actions-only is the default and preserves the existing named-workflow gate.
+# Provider results are strictly opt-in and require a trusted GitHub App ID plus
+# the exact required provider workflow set. Do not enable until the publisher
+# identity and live result bridge have been independently verified.
+#
+# Callers pin this reusable workflow to a reviewed commit SHA, declare their
+# own triggers, and grant contents:write, pull-requests:write, checks:read,
+# and actions:read. The job checks out its script at the called workflow SHA.
+
+"on":
+  workflow_call:
+    inputs:
+      gate-workflow:
+        description: Required Actions workflow filename (Actions-only default)
+        type: string
+        required: true
+      label:
+        description: PR label that opts into auto-merge
+        type: string
+        default: auto-merge
+      merge-method:
+        description: Merge method passed to gh pr merge
+        type: string
+        default: squash
+      advisory-workflows:
+        description: JSON array of Actions workflow filenames that are reported but do not block
+        type: string
+        default: "[]"
+      provider-enabled:
+        description: Explicitly use provider checks instead of the Actions gate (disabled until trusted bridge verification)
+        type: boolean
+        default: false
+      trusted-publisher-app-id:
+        description: Exact GitHub App ID allowed to publish required provider checks
+        type: string
+        default: ""
+      provider-required-workflows:
+        description: JSON array of required provider workflow names, matched as CircleCI / <workflow>
+        type: string
+        default: "[]"
+      max-prs:
+        description: Maximum labeled PRs processed in one bounded coordinator pass
+        type: number
+        default: 100
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: read
+
+jobs:
+  merge:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out shared coordinator
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # qlty-ignore(actionlint:expression): Supported GitHub.com job identity; older actionlint schemas omit it.
+          repository: ${{ job.workflow_repository }}
+          # qlty-ignore(actionlint:expression): GitHub.com supplies the called workflow commit, not the caller commit.
+          ref: ${{ job.workflow_sha }}
+          path: .shared-github
+          persist-credentials: false
+      - name: Run one bounded merge-gate pass
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          GATE_WORKFLOW: ${{ inputs.gate-workflow }}
+          MERGE_LABEL: ${{ inputs.label }}
+          MERGE_METHOD: ${{ inputs.merge-method }}
+          ADVISORY_WORKFLOWS: ${{ inputs.advisory-workflows }}
+          PROVIDER_ENABLED: ${{ inputs.provider-enabled }}
+          TRUSTED_PUBLISHER_APP_ID: ${{ inputs.trusted-publisher-app-id }}
+          PROVIDER_REQUIRED_WORKFLOWS: ${{ inputs.provider-required-workflows }}
+          MAX_PRS: ${{ inputs.max-prs }}
+          ROTATION_INDEX: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          args=(
+            --repo "$GH_REPO"
+            --gate-workflow "$GATE_WORKFLOW"
+            --label "$MERGE_LABEL"
+            --merge-method "$MERGE_METHOD"
+            --advisory-workflows "$ADVISORY_WORKFLOWS"
+            --provider-required-workflows "$PROVIDER_REQUIRED_WORKFLOWS"
+            --max-prs "$MAX_PRS"
+            --rotation-index "$ROTATION_INDEX"
+          )
+          if [[ "$PROVIDER_ENABLED" == "true" ]]; then
+            args+=(--provider-enabled --trusted-publisher-app-id "$TRUSTED_PUBLISHER_APP_ID")
+          fi
+          python3 .shared-github/.github/scripts/merge_gate.py "${args[@]}"

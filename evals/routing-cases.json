@@ -1,0 +1,72 @@
+[
+  {
+    "name": "owning connector",
+    "facts": {
+      "native_available": true,
+      "local_available": true
+    },
+    "expected": "chatgpt-native"
+  },
+  {
+    "name": "local code is direct",
+    "facts": {
+      "local_available": true,
+      "complexity": "high"
+    },
+    "expected": "chatgpt-local"
+  },
+  {
+    "name": "lifecycle advantage",
+    "facts": {
+      "native_available": true,
+      "local_available": true,
+      "delegate_reason": "execution-lifecycle",
+      "delegate_detail": "Needs independent resumable execution"
+    },
+    "expected": "local-agent"
+  },
+  {
+    "name": "permissions do not disappear",
+    "facts": {
+      "authority_blocked": true,
+      "local_available": true,
+      "delegate_reason": "local-harness",
+      "delegate_detail": "can access more"
+    },
+    "expected": "needs-user"
+  },
+  {
+    "name": "offline host cloud action",
+    "facts": {
+      "native_available": true,
+      "local_available": false
+    },
+    "expected": "chatgpt-native"
+  },
+  {
+    "name": "offline no alternative",
+    "facts": {
+      "local_available": false
+    },
+    "expected": "needs-user"
+  },
+  {
+    "name": "invented reason refused",
+    "facts": {
+      "local_available": true,
+      "delegate_reason": "complexity",
+      "delegate_detail": "large code task"
+    },
+    "expected": "chatgpt-local"
+  },
+  {
+    "name": "explicit local preference",
+    "facts": {
+      "native_available": true,
+      "local_available": true,
+      "delegate_reason": "explicit-user-choice",
+      "delegate_detail": "User requested local review"
+    },
+    "expected": "local-agent"
+  }
+]
