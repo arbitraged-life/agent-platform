@@ -121,11 +121,23 @@ test('combined subprocess output is capped in bytes',async()=>{
 test('command timeout terminates a forked descendant that would outlive its parent',async()=>{
  const root=await mkdtemp(join(tmpdir(),'review-process-group-')),marker=join(root,'escaped');
  try {
-  const descendant=`process.on('SIGTERM',()=>{});process.send('ready');setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(marker)},'escaped'),600);`;
+  const descendant=`process.on('SIGTERM',()=>{});process.send('ready');setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(marker)},'escaped'),1500);`;
   const parent=`const c=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore','ignore','ignore','ipc']});c.once('message',()=>{console.log('ready');setInterval(()=>{},1000);});`;
-  const result=await runCommand(process.execPath,['-e',parent],{timeoutMs:300});
+  const result=await runCommand(process.execPath,['-e',parent],{timeoutMs:1000});
   assert.equal(result.code,124);assert.match(result.stdout,/ready/);
-  await new Promise(resolve=>setTimeout(resolve,700));
+  await new Promise(resolve=>setTimeout(resolve,1600));
   await assert.rejects(()=>access(marker));
  } finally {await rm(root,{recursive:true,force:true});}
+});
+
+test('completed group termination is not repeated against an exited group',async()=>{
+ const original=process.kill;let groupKills=0;
+ process.kill=function(pid,signal){
+  if(pid<0 && signal==='SIGKILL' && ++groupKills>1)throw Object.assign(new Error('already terminated group'),{code:'EPERM'});
+  return original.call(this,pid,signal);
+ };
+ try {
+  const result=await runCommand(process.execPath,['-e','setInterval(()=>{},1000)'],{timeoutMs:150});
+  assert.equal(result.code,124);assert.equal(groupKills,1);
+ } finally {process.kill=original;}
 });

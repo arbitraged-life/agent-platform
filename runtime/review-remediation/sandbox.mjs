@@ -46,8 +46,12 @@ export function runCommand(command,args,{timeoutMs=30000,env={},input='',maxOutp
   return new Promise(resolveResult=>{
     const child=spawn(command,args,{cwd,detached:true,env:{PATH:process.env.PATH,HOME:process.env.HOME,
       ...(process.env.DOCKER_HOST?{DOCKER_HOST:process.env.DOCKER_HOST}:{}),...env},stdio:['pipe','pipe','pipe']});
-    const chunks={stdout:[],stderr:[]};let forced=null,outputBytes=0;
-    const killGroup=()=>{if(child.pid)try{process.kill(-child.pid,'SIGKILL');}catch(error){if(error.code!=='ESRCH')forced=126;}};
+    const chunks={stdout:[],stderr:[]};let forced=null,outputBytes=0,groupKilled=false;
+    const killGroup=()=>{
+      if(groupKilled||!child.pid)return;
+      try{process.kill(-child.pid,'SIGKILL');groupKilled=true;}
+      catch(error){if(error.code==='ESRCH')groupKilled=true;else forced=126;}
+    };
     const stop=code=>{forced??=code;killGroup();};
     const timer=setTimeout(()=>stop(124),timeoutMs);
     child.stdin.on('error',()=>{});
