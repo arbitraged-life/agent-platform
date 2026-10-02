@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: arbitraged-life/agent-platform
-          ref: 13e13429370fe0408fc6191be475062dd42c6061
+          ref: ae77a5fbd74c20e0ffb2aea7fa3eb8a62eefad68
           path: platform
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
