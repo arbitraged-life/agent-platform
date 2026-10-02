@@ -16,6 +16,7 @@ class ReviewWorkflowTests(unittest.TestCase):
         workflow = yaml.safe_load((ROOT / '.github/workflows/review-reusable.yml').read_text())
         step = next(step for step in workflow['jobs']['review']['steps']
                     if step.get('name') == 'Acquire explicitly requested provider identity')
+        # Execute only the trusted repository workflow fixture; no remote input is code.
         code = step['run'].split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / 'environment'
@@ -25,7 +26,8 @@ class ReviewWorkflowTests(unittest.TestCase):
             with patch.dict(os.environ, environment, clear=True):
                 with patch('runtime.review.transport.request', return_value={'value': 'header.payload.signature'}) as request:
                     printed = io.StringIO()
-                    with contextlib.redirect_stdout(printed): exec(compile(code, '<workflow>', 'exec'), {})
+                    with contextlib.redirect_stdout(printed):
+                        exec(compile(code, '<workflow>', 'exec'), {})
                     self.assertEqual(printed.getvalue(), '::add-mask::header.payload.signature\n')
                     self.assertEqual(output.read_text(), 'REVIEW_OIDC_TOKEN=header.payload.signature\n')
                     self.assertIn('audience=https%3A%2F%2Fprovider.example.invalid', request.call_args.args[0])
@@ -41,7 +43,8 @@ class ReviewWorkflowTests(unittest.TestCase):
                 os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN'] = 'synthetic'
                 with patch.dict(os.environ, {'SUPPLIED_PROVIDER_TOKEN': 'synthetic'}):
                     with patch('runtime.review.transport.request') as request:
-                        with self.assertRaises(SystemExit): exec(compile(code, '<workflow>', 'exec'), {})
+                        with self.assertRaisesRegex(SystemExit, '^Provider identity acquisition failed$'):
+                            exec(compile(code, '<workflow>', 'exec'), {})
                         request.assert_not_called()
 
 

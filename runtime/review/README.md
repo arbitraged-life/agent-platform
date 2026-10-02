@@ -81,3 +81,8 @@ immutable reusable-workflow identity. The optional `publisher_token` replaces th
 default GitHub Actions token; its exact App identity must match policy. Credentials
 and routing policy remain in the caller repository. No raw review artifacts are
 uploaded. A partial review remains a failing check with explicit coverage omissions.
+
+The job has a 120-minute hard ceiling to accommodate explicitly configured
+provider-call budgets (up to 100 calls with 45-second socket timeouts). Actual
+runs stop when their work finishes; the ceiling is not a scheduled wait. Transport
+or job termination remains a failure, never a clean-coverage result.
