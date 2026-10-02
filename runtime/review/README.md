@@ -66,3 +66,18 @@ Private adapters own any separately authorized notifications or provider routing
 
 Live GitHub identity acceptance is a manual main-branch CI job, separate from
 deterministic validation. It performs no writes and never calls a model.
+
+The reusable `.github/workflows/review-reusable.yml` workflow pins its runtime
+independently to a reviewed public commit. Consumers pin the workflow itself to an
+immutable commit and pass `policy_path`, a path in their trusted default branch.
+The caller uses `pull_request_target` or authorized `issue_comment` events and
+grants `contents: read`, `pull-requests: write`, and `id-token: write`. Candidate
+code is checked out only for Git diff reading; its scripts are never executed.
+
+Providers use the explicit `REVIEW_PROVIDER_TOKEN` credential reference in policy.
+Supply either the `provider_token` secret or `provider_oidc_audience`, not both.
+OIDC providers verify the caller repository, owner, workflow, event, audience and
+immutable reusable-workflow identity. The optional `publisher_token` replaces the
+default GitHub Actions token; its exact App identity must match policy. Credentials
+and routing policy remain in the caller repository. No raw review artifacts are
+uploaded. A partial review remains a failing check with explicit coverage omissions.
