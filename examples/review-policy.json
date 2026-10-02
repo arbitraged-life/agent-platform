@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "repository": "example/project",
+  "publisher": {"id": 1, "login": "review[bot]"},
+  "providers": [
+    {
+      "name": "configured-provider",
+      "endpoint": "https://provider.example.invalid/v1/chat/completions",
+      "model": "configured-model-version",
+      "credential_envs": ["REVIEW_PROVIDER_KEY"],
+      "max_chars": 24000
+    }
+  ]
+}
