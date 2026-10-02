@@ -22,6 +22,8 @@ def review(diff, config, peers='', *, environ=None, requester=request):
         result['omitted'] += [{'path': path, 'reason': 'no-configured-credential'} for chunk in packed for path in chunk['files']]
         return result
     for index, chunk in enumerate(packed):
+        chunk_parts = [part for part in parts if part['path'] in chunk['files']]
+        allowed_added_lines = {part['path']: sorted(part['added']) for part in chunk_parts}
         chain = active[index % len(active):] + active[:index % len(active)] if config['strategy'] == 'crossprovider' else active
         accepted = False
         for provider, credentials in chain:
@@ -32,7 +34,7 @@ def review(diff, config, peers='', *, environ=None, requester=request):
                     break
                 payload = {'model': provider['model'], 'max_tokens': config['max_output_tokens'], 'temperature': 0.1,
                            'response_format': {'type': 'json_object'},
-                           'messages': [{'role': 'system', 'content': PROMPT}, {'role': 'user', 'content': json.dumps({'diff': chunk['diff'], 'peer_context': peers[:config['max_peer_chars']]})}]}
+                           'messages': [{'role': 'system', 'content': PROMPT}, {'role': 'user', 'content': json.dumps({'diff': chunk['diff'], 'allowed_added_lines': allowed_added_lines, 'peer_context': peers[:config['max_peer_chars']]})}]}
                 result['calls'] += 1
                 try:
                     response = requester(provider['endpoint'], credential, payload)
@@ -43,7 +45,7 @@ def review(diff, config, peers='', *, environ=None, requester=request):
                     if choice.get('finish_reason') != 'stop' or not isinstance(choice.get('message'), dict):
                         raise ValueError('Incomplete provider output')
                     content = choice['message']['content']
-                    rows = findings(content, [p for p in parts if p['path'] in chunk['files']])
+                    rows = findings(content, chunk_parts)
                 except RequestFailure as error:
                     reason = f'provider-http-{error.status}' if type(error.status) is int and 100 <= error.status <= 599 else 'provider-transport'
                     result['failures'].append({'provider': provider['name'], 'chunk': index, 'reason': reason})
