@@ -35,7 +35,7 @@ class ReviewContracts(unittest.TestCase):
         self.assertEqual(parts[0]['path'], 'name with spaces.py')
         self.assertEqual(parts[0]['added'], {1, 2})
         row = {'path': parts[0]['path'], 'line': 2, 'severity': 'high', 'title': 'Defect', 'body': 'Evidence'}
-        self.assertTrue(findings(json.dumps({'findings': [row]}), parts)[0]['inline'])
+        self.assertEqual(findings(json.dumps({'findings': [row]}), parts), [row])
         for content in ['No blocking issues.', '{"findings": [], "approve": true}', json.dumps({'findings': [{**row, 'path': 'absent'}]})]:
             with self.assertRaises(ValueError):
                 findings(content, parts)
@@ -51,7 +51,7 @@ class ReviewContracts(unittest.TestCase):
         self.assertEqual(omitted[0]['reason'], 'file-exceeds-budget')
 
     def test_synthesis_preserves_distinct_evidence(self):
-        base = {'path': 'a', 'line': 1, 'severity': 'low', 'title': 'Bug', 'body': 'Evidence', 'inline': True}
+        base = {'path': 'a', 'line': 1, 'severity': 'low', 'title': 'Bug', 'body': 'Evidence'}
         result = combine([base, {**base, 'severity': 'high'}, {**base, 'body': 'Different evidence'}])
         self.assertEqual(len(result), 2)
         self.assertEqual(result[0]['severity'], 'high')

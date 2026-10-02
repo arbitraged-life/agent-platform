@@ -108,7 +108,7 @@ def findings(content, parts):
             raise ValueError('Invalid finding severity')
         if any(not isinstance(row[k], str) or not row[k].strip() or len(row[k]) > limit for k, limit in [('title', 200), ('body', 3000)]):
             raise ValueError('Invalid finding text')
-        result.append({**row, 'inline': row['line'] in paths[row['path']]})
+        result.append(dict(row))
     return result
 
 

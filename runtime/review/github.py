@@ -132,7 +132,7 @@ def publish(client, snapshot, result, config):
         response = client.call(f'/issues/{number}/comments', 'POST', {'body': body})
     if not owned(response, identity):
         raise ValueError('Published comment identity differs from configured publisher')
-    inline = [row for row in result['findings'] if row['inline']][:25]
+    inline = result['findings'][:25]
     if config['inline_comments'] and inline:
         reviews = client.all(f'/pulls/{number}/reviews')
         # Existing same-head review is immutable evidence, not something to
