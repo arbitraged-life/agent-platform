@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Validate policy, resolve event context, or review an exact checkout snapshot."""
 import argparse
+from collections import Counter
 import json
 import os
 from pathlib import Path
@@ -100,10 +101,19 @@ def main():
     diff = diff_at(args.checkout, snapshot)
     peers = peer_context(client, number, config['peer_reviewers'], config['max_peer_chars'])
     result = review(diff, config, peers)
-    publication = publish(client, snapshot, result, config)
-    print(json.dumps({'status': result['status'], 'findings': len(result['findings']),
+    print(json.dumps({'event': 'review.coverage', 'status': result['status'], 'findings': len(result['findings']),
                       'reviewed_files': len(result['reviewed_files']), 'omitted_files': len(result['omitted']),
-                      'calls': result['calls'], 'publication': publication}))
+                      'calls': result['calls'], 'failures': dict(Counter(row['reason'] for row in result['failures']))}), flush=True)
+    try:
+        publication = publish(client, snapshot, result, config)
+    except RequestFailure as error:
+        status = error.status if type(error.status) is int and 100 <= error.status <= 599 else None
+        print(json.dumps({'event': 'review.publication', 'status': 'failed', 'http_status': status}), flush=True)
+        raise
+    except ValueError:
+        print(json.dumps({'event': 'review.publication', 'status': 'refused'}), flush=True)
+        raise
+    print(json.dumps({'event': 'review.publication', 'status': publication}))
     return 0 if result['status'] == 'complete' else 2
 
 

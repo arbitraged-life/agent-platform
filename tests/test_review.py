@@ -1,5 +1,7 @@
 import json
 import http.client
+import contextlib
+import io
 import shutil
 from pathlib import Path
 import subprocess
@@ -11,7 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from runtime.review.engine import review
 from runtime.review.github import GitHub, publish, MARKER, owned, PublisherMismatch
-from scripts.review.review import diff_at
+from scripts.review.review import diff_at, main
 from runtime.review.policy import eligible, validate
 from runtime.review.core import chunks, combine, findings, segments
 from runtime.review.transport import NoRedirect, RequestFailure, request
@@ -98,6 +100,41 @@ class ReviewExecution(unittest.TestCase):
         result = review(self.diff(), self.config(), environ={'UNCONFIGURED_KEY': 'synthetic'}, requester=requester)
         self.assertEqual(result['status'], 'unavailable')
         self.assertEqual(len(calls), 2)
+
+    def test_json_contract_and_safe_transport_diagnostics(self):
+        def unavailable(url, token, payload):
+            self.assertEqual(payload['response_format'], {'type': 'json_object'})
+            raise RequestFailure(429)
+        result = review(self.diff(), self.config(), environ={'FIRST_KEY': 'synthetic'}, requester=unavailable)
+        self.assertEqual(result['failures'][0]['reason'], 'provider-http-429')
+        self.assertEqual(result['status'], 'unavailable')
+        result = review(self.diff(), self.config(), environ={'FIRST_KEY': 'synthetic'},
+                        requester=lambda *args: {'choices': [{'finish_reason': 'stop', 'message': {'content': 'private prose'}}]})
+        self.assertEqual(result['failures'][0]['reason'], 'invalid-response')
+        self.assertNotIn('private prose', json.dumps(result))
+
+    def test_coverage_survives_publication_failure_without_private_text(self):
+        result = {'status': 'complete', 'findings': [], 'reviewed_files': ['private-path'],
+                  'omitted': [], 'calls': 1, 'failures': []}
+        snapshot = {'number': 2, 'base': 'a' * 40, 'head': 'b' * 40}
+        args = ['review.py', 'run', '--config', 'config', '--event', 'event',
+                '--event-name', 'issue_comment', '--snapshot', 'snapshot', '--checkout', 'candidate']
+        output = io.StringIO()
+        with patch.object(sys, 'argv', args), patch.dict('os.environ', {'REVIEW_GITHUB_TOKEN': 'private-token'}), \
+             patch('scripts.review.review.read_json', side_effect=[self.config(), {}, snapshot]), \
+             patch('scripts.review.review.eligible', return_value=2), patch('scripts.review.review.GitHub', autospec=True), \
+             patch('scripts.review.review.diff_at', return_value='private-diff'), \
+             patch('scripts.review.review.peer_context', return_value='private-peer'), \
+             patch('scripts.review.review.review', return_value=result), \
+             patch('scripts.review.review.publish', side_effect=RequestFailure(403)), \
+             contextlib.redirect_stdout(output):
+            with self.assertRaises(RequestFailure):
+                main()
+        rows = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(rows[0]['event'], 'review.coverage')
+        self.assertEqual(rows[0]['reviewed_files'], 1)
+        self.assertEqual(rows[1], {'event': 'review.publication', 'status': 'failed', 'http_status': 403})
+        self.assertNotIn('private', output.getvalue())
 
     def test_truncated_or_prose_responses_never_mean_clean(self):
         for reason, content in [('length', '{"findings": []}'), ('stop', 'No blocking issues.')]:
