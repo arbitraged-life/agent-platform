@@ -2,7 +2,8 @@
 
 `python3 scripts/skills.py list` emits the release's catalog as JSON. Skill
 entrypoints have matching kebab-case names and nonempty descriptions. The catalog
-contains the portable execution-router procedure and eight Cloudflare skills.
+is the authoritative list of included procedures and reference skills; use its
+output instead of maintaining a separate count in installation instructions.
 The immutable platform release includes their referenced documentation.
 
 `python3 scripts/skills.py validate` checks the catalog, file inventory, hashes,
