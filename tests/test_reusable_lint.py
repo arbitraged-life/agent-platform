@@ -64,6 +64,10 @@ class ReusableLintTests(unittest.TestCase):
 
     def test_install_failure_is_not_advisory(self):
         self.assertEqual(self.run_cpp(False, install_status=47), 47)
+        job = WORKFLOW['jobs']['cpp']
+        self.assertNotIn('continue-on-error', job)
+        for step in job['steps']:
+            self.assertNotIn('continue-on-error', step)
 
     def run_biome(self, strict, report, status=1):
         with tempfile.TemporaryDirectory() as directory:
@@ -106,8 +110,10 @@ class ReusableLintTests(unittest.TestCase):
 
     def test_only_lint_step_is_advisory_after_python_install(self):
         steps = WORKFLOW['jobs']['python']['steps']
-        self.assertNotIn('continue-on-error', steps[-2])
-        self.assertEqual(steps[-1]['continue-on-error'], '${{ !inputs.strict }}')
+        install = next(step for step in steps if step.get('name') == 'Install Ruff')
+        check = next(step for step in steps if step.get('name') == 'Ruff check')
+        self.assertNotIn('continue-on-error', install)
+        self.assertEqual(check['continue-on-error'], '${{ !inputs.strict }}')
 
 
 if __name__ == '__main__':

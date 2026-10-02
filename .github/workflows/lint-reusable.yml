@@ -53,7 +53,7 @@ jobs:
           extensions = {'swift': {'.swift'}, 'python': {'.py'},
                         'js': {'.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts'}, 'shell': {'.sh', '.bash'},
                         'yaml': {'.yml', '.yaml'}, 'cpp': {'.c', '.cc', '.cpp', '.cxx', '.mm'}}
-          names = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          names = subprocess.check_output(['git', 'ls-files', '-z']).decode('utf-8', 'surrogateescape').split('\0')
           suffixes = {path.suffix for name in names if name
                       for path in [pathlib.PurePosixPath(name)]
                       if not excluded.intersection(path.parts)}
@@ -157,13 +157,26 @@ jobs:
         with:
           persist-credentials: false
       - name: ShellCheck
+        env:
+          LINT_STRICT: ${{ inputs.strict }}
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck=0.9.0-1
-          # collect tracked shell scripts, prune vendored
-          mapfile -d '' -t files < <(git ls-files -z '*.sh' '*.bash' | grep -zvE '(^|/)(node_modules|vendor|third_party)/' || true)
-          [ "${#files[@]}" -eq 0 ] && { echo "no shell files"; exit 0; }
-          shellcheck -- "${files[@]}" || { [ "${{ inputs.strict }}" = "true" ] && exit 1 || true; }
+          python3 - <<'PYTHON'
+          import json
+          import os
+          from pathlib import PurePosixPath
+          import subprocess
+          excluded = set(json.loads(os.environ['LINT_EXCLUDED_DIRECTORIES']))
+          names = subprocess.check_output(['git', 'ls-files', '-z']).decode('utf-8', 'surrogateescape').split('\0')
+          files = ['./' + name for name in names if name
+                   and PurePosixPath(name).suffix in {'.sh', '.bash'}
+                   and not excluded.intersection(PurePosixPath(name).parts)]
+          if files:
+              result = subprocess.run(['shellcheck', '--', *files])
+              status = result.returncode
+              raise SystemExit(0 if status == 1 and os.environ['LINT_STRICT'] == 'false' else status)
+          PYTHON
 
   yaml:
     needs: detect
@@ -179,7 +192,7 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/yamllint"
           "$RUNNER_TEMP/yamllint/bin/pip" install yamllint==1.37.1 pathspec==0.12.1 PyYAML==6.0.3
           export PATH="$RUNNER_TEMP/yamllint/bin:$PATH"
-          yamllint -f github -d "{extends: relaxed, rules: {line-length: disable}}" . \
+          yamllint -f github . \
             || { [ "${{ inputs.strict }}" = "true" ] && exit 1 || true; }
 
   cpp:
@@ -203,7 +216,7 @@ jobs:
           from pathlib import PurePosixPath
           import subprocess
           excluded = set(json.loads(os.environ['LINT_EXCLUDED_DIRECTORIES']))
-          names = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
+          names = subprocess.check_output(['git', 'ls-files', '-z']).decode('utf-8', 'surrogateescape').split('\0')
           files = ['./' + name for name in names if name
                    and PurePosixPath(name).suffix in {'.c', '.cc', '.cpp', '.cxx', '.mm'}
                    and not excluded.intersection(PurePosixPath(name).parts)]
