@@ -119,22 +119,27 @@ class ReviewExecution(unittest.TestCase):
         snapshot = {'number': 2, 'base': 'a' * 40, 'head': 'b' * 40}
         args = ['review.py', 'run', '--config', 'config', '--event', 'event',
                 '--event-name', 'issue_comment', '--snapshot', 'snapshot', '--checkout', 'candidate']
-        output = io.StringIO()
-        with patch.object(sys, 'argv', args), patch.dict('os.environ', {'REVIEW_GITHUB_TOKEN': 'private-token'}), \
-             patch('scripts.review.review.read_json', side_effect=[self.config(), {}, snapshot]), \
-             patch('scripts.review.review.eligible', return_value=2), patch('scripts.review.review.GitHub', autospec=True), \
-             patch('scripts.review.review.diff_at', return_value='private-diff'), \
-             patch('scripts.review.review.peer_context', return_value='private-peer'), \
-             patch('scripts.review.review.review', return_value=result), \
-             patch('scripts.review.review.publish', side_effect=RequestFailure(403)), \
-             contextlib.redirect_stdout(output):
-            with self.assertRaises(RequestFailure):
-                main()
-        rows = [json.loads(line) for line in output.getvalue().splitlines()]
-        self.assertEqual(rows[0]['event'], 'review.coverage')
-        self.assertEqual(rows[0]['reviewed_files'], 1)
-        self.assertEqual(rows[1], {'event': 'review.publication', 'status': 'failed', 'http_status': 403})
-        self.assertNotIn('private', output.getvalue())
+        failures = [(RequestFailure(403), {'status': 'failed', 'http_status': 403}),
+                    (ValueError('private-response'), {'status': 'refused'})]
+        failures.extend((kind('private-response'), {'status': 'failed'})
+                        for kind in [AttributeError, IndexError, KeyError, TypeError])
+        for failure, expected in failures:
+            output = io.StringIO()
+            with patch.object(sys, 'argv', args), patch.dict('os.environ', {'REVIEW_GITHUB_TOKEN': 'private-token'}), \
+                 patch('scripts.review.review.read_json', side_effect=[self.config(), {}, snapshot]), \
+                 patch('scripts.review.review.eligible', return_value=2), patch('scripts.review.review.GitHub', autospec=True), \
+                 patch('scripts.review.review.diff_at', return_value='private-diff'), \
+                 patch('scripts.review.review.peer_context', return_value='private-peer'), \
+                 patch('scripts.review.review.review', return_value=result), \
+                 patch('scripts.review.review.publish', side_effect=failure), \
+                 contextlib.redirect_stdout(output):
+                with self.assertRaises(type(failure)):
+                    main()
+            rows = [json.loads(line) for line in output.getvalue().splitlines()]
+            self.assertEqual(rows[0]['event'], 'review.coverage')
+            self.assertEqual(rows[0]['reviewed_files'], 1)
+            self.assertEqual(rows[1], {'event': 'review.publication', **expected})
+            self.assertNotIn('private', output.getvalue())
 
     def test_truncated_or_prose_responses_never_mean_clean(self):
         for reason, content in [('length', '{"findings": []}'), ('stop', 'No blocking issues.')]:

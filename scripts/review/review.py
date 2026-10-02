@@ -113,6 +113,9 @@ def main():
     except ValueError:
         print(json.dumps({'event': 'review.publication', 'status': 'refused'}), flush=True)
         raise
+    except (AttributeError, IndexError, KeyError, TypeError):
+        print(json.dumps({'event': 'review.publication', 'status': 'failed'}), flush=True)
+        raise
     print(json.dumps({'event': 'review.publication', 'status': publication}))
     return 0 if result['status'] == 'complete' else 2
 
@@ -120,7 +123,7 @@ def main():
 if __name__ == '__main__':
     try:
         raise SystemExit(main())
-    except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError, RequestFailure):
+    except (ValueError, AttributeError, IndexError, KeyError, TypeError, OSError, subprocess.SubprocessError, RequestFailure):
         # Exception strings may include user paths, credentials or upstream data.
         print('Review failed validation, transport or execution; no clean result is claimed.', file=sys.stderr)
         raise SystemExit(1) from None
