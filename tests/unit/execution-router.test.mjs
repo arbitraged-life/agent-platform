@@ -467,3 +467,16 @@ test('oversized or unknown verification fields leave returned status unchanged',
  }
  assert.equal((await acceptResult(f.policy,'router-test',evidence)).status,'verified-complete');
 });
+
+test('retargeting a tracked link through Git metadata invalidates approval',async()=>{
+ const f=await fixture(),metadataLink=path.join(f.workspace,'.git','selected');
+ await writeFile(path.join(f.workspace,'first.txt'),'same bytes');
+ await writeFile(path.join(f.workspace,'second.txt'),'same bytes');
+ await symlink('../first.txt',metadataLink);
+ await symlink('.git/selected',path.join(f.workspace,'entry.txt'));
+ await exec('git',['-C',f.workspace,'add','entry.txt','first.txt','second.txt']);
+ const p=await prepare(f.policy,packet(f.workspace));
+ await unlink(metadataLink);await symlink('../second.txt',metadataLink);
+ await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/workspace changed/);
+ await assert.rejects(()=>readFile(path.join(f.policy.state_dir,'runs','router-test','agent-final.txt')),{code:'ENOENT'});
+});
