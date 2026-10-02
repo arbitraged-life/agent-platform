@@ -1,9 +1,13 @@
 # Retired source guard
 
-`scripts/check-retired-paths.py` rejects additions, modifications, copies,
-renames and type changes under explicitly retired paths. It reads Git path names,
+`scripts/check-retired-paths.py` rejects additions, modifications and type changes
+under explicitly retired paths. It reads Git path names,
 not file contents, and never stages, rewrites or deletes work. Deletions remain
-possible for reviewed source removal.
+possible for reviewed source removal. Copies and renames are evaluated as
+additions at their destinations; moving a file out of a retired path is allowed
+as removal. This guard does not establish ownership for the destination. Rename
+detection is disabled explicitly so user Git configuration cannot change these
+semantics.
 
 A private consumer supplies a JSON policy with exactly these fields:
 
