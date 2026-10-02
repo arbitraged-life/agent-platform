@@ -52,3 +52,14 @@ the resulting lockfile passed the registry dependency audit with zero findings.
 Security normalization rejects missing configured hostnames, prevents non-2xx
 upstream data from overriding failure status, and logs custom-data presence only.
 Four regression cases cover these inherited defects before publication.
+
+
+Five repository-maintenance skills were adapted from source revision
+`92a774eae4528022982449d172801e6d891cfde3`: the four cleanup/audit/verification
+skills under `skills/devops/` and `skills/status-report/`. Their canonical homes
+are flat skill directories in the catalog. Normalization removes pre-audit
+quarantine moves, broad deletion recipes, fixed local roots and assumed private
+validation helpers. Existing authorization, dirty-work preservation, enumerated
+removals, independent acceptance and explicit unknown results are preserved.
+They carry this repository's original-code license; no private operational
+configuration or source history is imported.

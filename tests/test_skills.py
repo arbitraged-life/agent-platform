@@ -27,10 +27,17 @@ class SkillTests(unittest.TestCase):
 
     def test_discovery_and_installed_hashes(self):
         rows = MODULE['catalog'](self.root)
-        self.assertEqual(len(rows), 9)
+        self.assertEqual(len(rows), 14)
         lock = MODULE['verify_upstream'](self.root)
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
+
+    def test_original_skill_references_are_validated(self):
+        path = self.root / 'skills/repository-safe-cleanup/SKILL.md'
+        path.write_text(path.read_text() + '\n[Missing helper](../missing/SKILL.md)\n')
+        validator = runpy.run_path(str(ROOT / 'scripts/validate'))
+        with self.assertRaisesRegex(ValueError, 'Broken bundled skill reference'):
+            validator['validate_skills'](self.root)
 
     def test_catalog_duplicates_and_escape_are_rejected(self):
         self.edit('skills/catalog.json', lambda d: d['skills'].append(d['skills'][0]))
