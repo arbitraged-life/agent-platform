@@ -63,3 +63,14 @@ validation helpers. Existing authorization, dirty-work preservation, enumerated
 removals, independent acceptance and explicit unknown results are preserved.
 They carry this repository's original-code license; no private operational
 configuration or source history is imported.
+
+The structured review engine was reimplemented from the reusable reviewer
+responsibility at source revision `c1841e237f0d5f4709827f7e940f2eee4033e8dd`,
+path `.github/scripts/ai_review.py`. Provider accounts, destinations, credentials,
+repository and bot allowlists, private routing and deployment policy were excluded.
+Explicit configuration replaces secret-presence activation; coverage accounting
+replaces truncation; structured findings replace prose-based approval detection.
+Deterministic synthesis retains evidence without a second model discarding it.
+Publication verifies bot identity and the current PR commits. Raw artifact retention,
+automatic approval and deletion of prior review state are intentionally removed.
+Original source history was not imported.
