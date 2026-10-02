@@ -1,4 +1,5 @@
 """Exercise reusable lint discovery and failure propagation without network access."""
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -29,7 +30,7 @@ class ReusableLintTests(unittest.TestCase):
             (root / 'untracked.swift').write_text('')
             output = root / 'outputs'
             result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script('detect')],
-                                    cwd=root, env={**os.environ, 'GITHUB_OUTPUT': str(output)},
+                                    cwd=root, env={**os.environ, 'GITHUB_OUTPUT': str(output), **WORKFLOW['env']},
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(dict(line.split('=') for line in output.read_text().splitlines()),
@@ -40,6 +41,9 @@ class ReusableLintTests(unittest.TestCase):
     def run_cpp(self, strict, install_status=0):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            subprocess.run(['git', 'init', '-q', directory], check=True)
+            (root / 'clean.cpp').write_text('int doubled(int n) { return n * 2; }\n')
+            subprocess.run(['git', '-C', directory, 'add', 'clean.cpp'], check=True)
             sudo = root / 'sudo'
             sudo.write_text('#!/bin/sh\nexit ' + str(install_status) + '\n')
             cpp = root / 'cppcheck'
@@ -49,7 +53,7 @@ class ReusableLintTests(unittest.TestCase):
             cpp.chmod(0o700)
             command = script('cpp').replace('${{ inputs.strict }}', str(strict).lower())
             return subprocess.run(['bash', '-euo', 'pipefail', '-c', command], cwd=root,
-                                  env={**os.environ, 'PATH': directory + os.pathsep + os.environ['PATH']},
+                                  env={**os.environ, **WORKFLOW['env'], 'LINT_STRICT': str(strict).lower(), 'PATH': directory + os.pathsep + os.environ['PATH']},
                                   capture_output=True, text=True).returncode
 
     def test_cpp_strict_findings_fail(self):
@@ -61,6 +65,33 @@ class ReusableLintTests(unittest.TestCase):
     def test_install_failure_is_not_advisory(self):
         self.assertEqual(self.run_cpp(False, install_status=47), 47)
 
+    def run_biome(self, strict, report, status=1):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / 'biome'
+            executable.write_text('#!/usr/bin/env python3\nimport os\n'
+                                  'print(os.environ["FAKE_REPORT"])\n'
+                                  'raise SystemExit(int(os.environ["FAKE_STATUS"]))\n')
+            executable.chmod(0o700)
+            environment = {**os.environ, 'PATH': directory + os.pathsep + os.environ['PATH'],
+                           'LINT_STRICT': str(strict).lower(), 'FAKE_REPORT': report,
+                           'FAKE_STATUS': str(status)}
+            return subprocess.run(['bash', '-euo', 'pipefail', '-c', script('js')],
+                                  cwd=root, env=environment, capture_output=True).returncode
+
+    def test_biome_advisory_only_accepts_source_diagnostics(self):
+        source = json.dumps({'diagnostics': [{'category': 'lint/style/noVar'}]})
+        self.assertEqual(self.run_biome(False, source), 0)
+        self.assertEqual(self.run_biome(True, source), 1)
+
+    def test_biome_configuration_and_command_errors_fail(self):
+        config = json.dumps({'diagnostics': [{'category': 'configuration'}]})
+        self.assertNotEqual(self.run_biome(False, config), 0)
+        parse = json.dumps({'diagnostics': [{'category': 'parse'}]})
+        self.assertNotEqual(self.run_biome(False, parse), 0)
+        self.assertNotEqual(self.run_biome(False, '', status=127), 0)
+        self.assertNotEqual(self.run_biome(False, 'not-json'), 0)
+
     def test_secret_scan_is_independent_and_not_advisory(self):
         job = WORKFLOW['jobs']['secrets']
         self.assertNotIn('needs', job)
@@ -68,6 +99,8 @@ class ReusableLintTests(unittest.TestCase):
         self.assertNotIn('continue-on-error', job)
         for step in job['steps']:
             self.assertNotIn('continue-on-error', step)
+        self.assertEqual(job['steps'][0]['with']['fetch-depth'], 0)
+        self.assertIn('git . --log-opts="--all"', script('secrets'))
         self.assertLess(script('secrets').index('sha256sum --check'),
                         script('secrets').index('tar -xzf'))
 

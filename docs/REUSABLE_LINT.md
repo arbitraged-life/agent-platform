@@ -9,7 +9,9 @@ Call the workflow using an immutable commit SHA. Inputs `strict` and
 `swift_strict` preserve the existing interface. Ordinary lint findings are
 advisory by default; strict mode fails on findings, and Swift strict mode also
 fails on warnings. Installation failures and secret findings block in either
-mode. No inherited secrets, private repository access or provider calls are used.
+mode. Biome parse/configuration/internal errors also block: only structured lint,
+formatting and assist diagnostics are advisory. Full Git history is scanned for
+secrets, including deleted content. No inherited secrets, private repository access or provider calls are used.
 
 Actions and tool versions are pinned. Downloaded SwiftLint and Gitleaks archives
 are SHA-256 checked before extraction. Ubuntu package versions come from the
