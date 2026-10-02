@@ -53,7 +53,7 @@ def git(root, *arguments):
 
 
 def check(root, policy):
-    names = git(root, 'diff', '--name-only', '--diff-filter=ACMRT', '-z', '--cached', '--')
+    names = git(root, 'diff', '--no-renames', '--name-only', '--diff-filter=ACMRT', '-z', '--cached', '--')
     return violations([name for name in names.split('\0') if name], policy)
 
 
@@ -75,7 +75,7 @@ def check_push(root, policy, updates):
             raise ValueError('Push commit range exceeds size limit')
     findings = []
     for commit in sorted(commits):
-        names = git(root, 'diff-tree', '--root', '--no-commit-id', '--first-parent', '-m',
+        names = git(root, 'diff-tree', '--no-renames', '--root', '--no-commit-id', '--first-parent', '-m',
                     '--name-only', '--diff-filter=ACMRT', '-r', '-z', commit, '--')
         for finding in violations([name for name in names.split('\0') if name], policy):
             findings.append({'commit': commit, **finding})

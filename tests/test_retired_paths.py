@@ -47,6 +47,14 @@ class RetiredPathTests(unittest.TestCase):
         self.git('add', 'older.txt')
         self.assertEqual(MODULE['check'](self.root, self.policy), [])
 
+    def test_rename_destinations_are_checked_independently_of_git_config(self):
+        self.git('config', 'diff.renames', 'true')
+        self.git('mv', 'old/runtime.txt', 'moved.txt')
+        self.assertEqual(MODULE['check'](self.root, self.policy), [])
+        self.git('mv', 'other.txt', 'old/new.txt')
+        self.assertEqual(MODULE['check'](self.root, self.policy),
+                         [{'path': 'old/new.txt', 'replacement': 'platform/runtime'}])
+
     def test_pre_push_checks_committed_changes_against_immutable_baseline(self):
         (self.root / 'old/runtime.txt').write_text('new work')
         self.git('add', 'old/runtime.txt')
