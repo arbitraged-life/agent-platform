@@ -18,9 +18,9 @@ select `urls` entries with `packagetype == "bdist_wheel"`, collect their
 line under the exact version pin. Compare that set with the metadata when
 updating the lock; installation verifies the selected artifact with `--require-hashes`.
 
-The initial release contains the execution router, bounded review remediation,
-one portable execution-routing skill, deterministic routing evaluations, and
-reusable stale-item and merge-gate workflows. Additional components are admitted
+The platform contains the execution router, bounded review and remediation,
+portable skills, deterministic evaluations, and reusable validation, review,
+stale-item and merge-gate workflows. Additional components are admitted
 only after their own portability, provenance, and behavior checks pass.
 
 - [Execution router](docs/execution-router.md): explicit policy, bounded process
@@ -28,6 +28,8 @@ only after their own portability, provenance, and behavior checks pass.
 - [Review remediation](runtime/review-remediation/README.md): trusted policies,
   bounded attempts, isolated execution, and exact-revision publication checks.
 - [Release contract](docs/release-contract.md): immutable, digest-checked installs.
+- [Skills](docs/skills.md): catalog, provenance, licensing and consumer overlays.
+- [Merge coordinator](docs/merge-gate.md): trusted evidence, bounded scans and residual races.
 - [Migration provenance](docs/MIGRATION_PROVENANCE.md): source revisions and transformations.
 
 `./scripts/validate lint`, `test`, `eval`, and `security` select individual local
@@ -36,5 +38,3 @@ live GitHub mutations require explicit deployment configuration and credentials;
 the test suite uses isolated fixtures and fake clients.
 
 Original code is licensed under Apache-2.0. See LICENSE and NOTICE.
-
-The reusable merge coordinator enumerates up to 10,000 open PRs and rotates its labeled processing window using the caller workflow run number. Each pass processes at most `max-prs`; standalone callers supply an increasing `--rotation-index` for continued coverage. Larger inventories fail explicitly. Label, head and eligibility are refreshed after the final evidence fetch; server-required checks remain necessary for the final API race.
