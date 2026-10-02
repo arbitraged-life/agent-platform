@@ -30,11 +30,15 @@ class ReviewWorkflowTests(unittest.TestCase):
                     self.assertEqual(output.read_text(), 'REVIEW_OIDC_TOKEN=header.payload.signature\n')
                     self.assertIn('audience=https%3A%2F%2Fprovider.example.invalid', request.call_args.args[0])
                 output.unlink()
-                for response in (None, {'value': 'bad\nINJECT=1'}):
+                for response in (None, {'value': 'bad\nINJECT=1'}, {'value': '..'}, {'value': 'header..signature'}):
                     with patch('runtime.review.transport.request', return_value=response):
                         with self.assertRaisesRegex(SystemExit, '^Provider identity acquisition failed$'):
                             exec(compile(code, '<workflow>', 'exec'), {})
                     self.assertFalse(output.exists())
+                del os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN']
+                with self.assertRaisesRegex(SystemExit, '^Provider identity acquisition failed$'):
+                    exec(compile(code, '<workflow>', 'exec'), {})
+                os.environ['ACTIONS_ID_TOKEN_REQUEST_TOKEN'] = 'synthetic'
                 with patch.dict(os.environ, {'SUPPLIED_PROVIDER_TOKEN': 'synthetic'}):
                     with patch('runtime.review.transport.request') as request:
                         with self.assertRaises(SystemExit): exec(compile(code, '<workflow>', 'exec'), {})
