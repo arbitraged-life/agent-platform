@@ -63,3 +63,9 @@ validation helpers. Existing authorization, dirty-work preservation, enumerated
 removals, independent acceptance and explicit unknown results are preserved.
 They carry this repository's original-code license; no private operational
 configuration or source history is imported.
+
+The reusable lint workflow was normalized from `.github/workflows/lint-reusable.yml`
+at source revision `c1841e237f0d5f4709827f7e940f2eee4033e8dd`. Tracked-file
+discovery replaces shell evaluation, tool installations are pinned, downloaded
+binaries are checksum-verified, and strict C++ failures propagate. Account-specific
+comments and unused language advertising were removed.
