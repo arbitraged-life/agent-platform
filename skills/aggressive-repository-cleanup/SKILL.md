@@ -31,3 +31,8 @@ status with the initial dirty-path inventory; unrelated changes can remain, so
 report them accurately instead of forcing the whole checkout clean. Use
 [status-report](../status-report/SKILL.md) to distinguish verified removals from
 pending cleanup and operational blockers.
+
+The optional [retired-source guard](../../docs/SOURCE_RETIREMENT.md) provides
+commit and push enforcement once a component changes owner. Its private policy
+lists exact retired paths and replacements; installation preserves existing
+hooks. Reconcile historical work before retiring the source repository itself.
