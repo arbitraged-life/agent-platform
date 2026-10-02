@@ -109,6 +109,8 @@ class ReviewExecution(unittest.TestCase):
             validate({**config, 'max_calls': True})
         with self.assertRaises(ValueError):
             validate({**config, 'unknown': 1})
+        with self.assertRaises(ValueError):
+            validate({**config, 'publisher': {'id': 2, 'login': 'human'}})
         event = {'repository': {'full_name': 'example/project'}, 'action': 'created',
                  'issue': {'number': 2, 'pull_request': {'url': 'https://example.invalid'}},
                  'comment': {'body': '/review', 'user': {'type': 'User'}, 'author_association': 'NONE'}}
@@ -181,6 +183,23 @@ class ReviewExecution(unittest.TestCase):
             parts = segments(diff)
             self.assertEqual([part['path'] for part in parts], ['module'])
             self.assertIn('Subproject commit', parts[0]['text'])
+
+
+    def test_non_utf8_diff_is_rejected_before_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def git(*args):
+                return subprocess.check_output(['git', '-C', directory, *args], text=True).strip()
+            git('init', '-q')
+            (root / 'legacy.txt').write_bytes(b'before')
+            git('add', '.')
+            git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'before')
+            base = git('rev-parse', 'HEAD')
+            (root / 'legacy.txt').write_bytes(bytes([255, 254, 10]))
+            git('add', '.')
+            git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'after')
+            with self.assertRaises(UnicodeError):
+                diff_at(directory, {'base': base, 'head': git('rev-parse', 'HEAD')})
 
 
 if __name__ == '__main__':

@@ -11,7 +11,7 @@ python3 -I scripts/review/review.py validate --config examples/review-policy.jso
 
 Policy schema version 1 has required `repository`, `publisher` and `providers`
 fields. `publisher` and each optional `peer_reviewers` entry contain an immutable
-GitHub numeric `id` and exact `login`. Provider entries contain `name`, `endpoint`,
+GitHub numeric `id` and exact App-bot `login` ending in `[bot]`. Provider entries contain `name`, `endpoint`,
 `model`, `credential_envs` and `max_chars`. Only explicitly listed credential
 references can activate a provider; endpoint/account policy belongs to the caller.
 Endpoints are HTTPS without userinfo, query or fragment. Providers implement the
@@ -43,7 +43,8 @@ as untrusted context. Provider output is validated before publication.
 
 Complete files are packed without truncation. Binary, metadata-only, oversized
 and over-budget files appear in coverage omissions. Quoted or control-character
-Git paths currently fail validation rather than receive an ambiguous line anchor.
+Git paths and non-UTF-8 text currently fail validation before provider execution
+rather than receive a lossy or ambiguous line anchor.
 All provider failures and incomplete JSON result in explicit unavailable coverage.
 A partial review exits 2; validation, transport or execution failure exits 1.
 Only complete coverage exits 0. Zero findings never means automatic approval.

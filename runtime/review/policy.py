@@ -31,7 +31,7 @@ def validate(value):
         raise ValueError('Invalid peer reviewers')
     identities += config['peer_reviewers']
     for identity in identities:
-        if not isinstance(identity, dict) or set(identity) != {'id', 'login'} or type(identity['id']) is not int or identity['id'] < 1 or not isinstance(identity['login'], str) or not re.fullmatch(r'[A-Za-z0-9_-]+(?:\[bot\])?', identity['login']):
+        if not isinstance(identity, dict) or set(identity) != {'id', 'login'} or type(identity['id']) is not int or identity['id'] < 1 or not isinstance(identity['login'], str) or not re.fullmatch(r'[A-Za-z0-9_-]+\[bot\]', identity['login']):
             raise ValueError('Invalid reviewer identity')
     if not isinstance(config['commands'], list) or not config['commands'] or any(not isinstance(c, str) or not re.fullmatch(r'/[a-z][a-z-]{0,30}', c) for c in config['commands']):
         raise ValueError('Invalid review commands')
