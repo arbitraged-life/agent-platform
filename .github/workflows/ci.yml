@@ -29,6 +29,11 @@ jobs:
           python-version: '3.12.10'
       - run: ./scripts/setup
       - run: ./scripts/validate
+      - name: Verify authenticated review identity (read-only)
+        env:
+          REVIEW_IDENTITY_TOKEN: ${{ github.token }}
+          REVIEW_IDENTITY_REPOSITORY: ${{ github.repository }}
+        run: python3 -I tests/integration/review-identity.py
   secrets:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
