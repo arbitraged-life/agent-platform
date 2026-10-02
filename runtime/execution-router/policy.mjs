@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
-export const VERSION = '1.0.4';
+export const VERSION = '1.0.5';
 export const exec = promisify(execFile);
 const REASONS = new Set(['missing-capability','execution-lifecycle','local-harness','explicit-user-choice']);
 const ACTIONS = new Set(['read','edit','test']);
@@ -214,7 +214,7 @@ export async function workspaceFingerprint(workspace,stateDir) {
    const resolved=await realpath(file);
    check(contained(workspace,resolved),`Tracked symlink points outside workspace: ${name}`);
    links.push([name,resolved]);
-   tracked[index]=[mode,name,'symlink',await readlink(file)];
+   tracked[index]=[mode,name,'symlink',await readlink(file),resolved];
   } else {
    check(info.isFile()&&info.size<=10*1024*1024,`Unsupported tracked file: ${name}`);
    check(info.nlink===1,`Hard-linked tracked file: ${name}`);
