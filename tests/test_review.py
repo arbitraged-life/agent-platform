@@ -113,6 +113,17 @@ class ReviewExecution(unittest.TestCase):
         self.assertEqual(result['failures'][0]['reason'], 'invalid-response')
         self.assertNotIn('private prose', json.dumps(result))
 
+    def test_provider_gets_exact_added_lines_excluding_context_and_deletions(self):
+        diff = ('diff --git a/example.py b/example.py\n--- a/example.py\n+++ b/example.py\n'
+                '@@ -10,3 +10,3 @@\n context\n-old\n+new\n more context\n')
+        def requester(url, token, payload):
+            supplied = json.loads(payload['messages'][1]['content'])
+            self.assertEqual(supplied['allowed_added_lines'], {'example.py': [11]})
+            self.assertEqual(supplied['diff'], diff)
+            return {'choices': [{'finish_reason': 'stop', 'message': {'content': '{"findings": []}'}}]}
+        result = review(diff, self.config(), environ={'FIRST_KEY': 'synthetic'}, requester=requester)
+        self.assertEqual(result['status'], 'complete')
+
     def test_coverage_survives_publication_failure_without_private_text(self):
         result = {'status': 'complete', 'findings': [], 'reviewed_files': ['private-path'],
                   'omitted': [], 'calls': 1, 'failures': []}
