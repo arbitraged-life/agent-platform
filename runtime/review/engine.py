@@ -31,6 +31,7 @@ def review(diff, config, peers='', *, environ=None, requester=request):
                 if result['calls'] >= config['max_calls']:
                     break
                 payload = {'model': provider['model'], 'max_tokens': config['max_output_tokens'], 'temperature': 0.1,
+                           'response_format': {'type': 'json_object'},
                            'messages': [{'role': 'system', 'content': PROMPT}, {'role': 'user', 'content': json.dumps({'diff': chunk['diff'], 'peer_context': peers[:config['max_peer_chars']]})}]}
                 result['calls'] += 1
                 try:
@@ -43,8 +44,12 @@ def review(diff, config, peers='', *, environ=None, requester=request):
                         raise ValueError('Incomplete provider output')
                     content = choice['message']['content']
                     rows = findings(content, [p for p in parts if p['path'] in chunk['files']])
-                except (RequestFailure, ValueError, KeyError, IndexError, TypeError):
-                    result['failures'].append({'provider': provider['name'], 'chunk': index, 'reason': 'unavailable-or-invalid-response'})
+                except RequestFailure as error:
+                    reason = f'provider-http-{error.status}' if type(error.status) is int and 100 <= error.status <= 599 else 'provider-transport'
+                    result['failures'].append({'provider': provider['name'], 'chunk': index, 'reason': reason})
+                    continue
+                except (ValueError, KeyError, IndexError, TypeError):
+                    result['failures'].append({'provider': provider['name'], 'chunk': index, 'reason': 'invalid-response'})
                     continue
                 result['findings'].extend(rows)
                 result['reviewed_files'].extend(chunk['files'])

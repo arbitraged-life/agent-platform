@@ -15,7 +15,9 @@ GitHub numeric `id` and exact App-bot `login` ending in `[bot]`. Provider entrie
 `model`, `credential_envs` and `max_chars`. Only explicitly listed credential
 references can activate a provider; endpoint/account policy belongs to the caller.
 Endpoints are HTTPS without userinfo, query or fragment. Providers implement the
-OpenAI-compatible chat completions shape and return a structured findings object.
+OpenAI-compatible chat completions shape, support `response_format: {"type": "json_object"}`,
+and return a structured findings object. Prose and incomplete responses still fail
+validation; JSON mode does not replace findings-schema validation.
 
 `runtime/review/policy.py` is the executable configuration schema. It rejects
 unknown fields, unsupported versions, malformed identities and unsafe budgets.
@@ -38,7 +40,9 @@ Provider fallback rotates explicitly configured credentials with a global call
 budget. Each request has a socket timeout and a 1 MiB response ceiling, rejects
 redirects and suppresses raw upstream errors. The surrounding job must also impose
 a wall-clock timeout. Model messages, responses and raw diffs are not logged or
-persisted by the CLI. Peer comments are selected by exact bot identity and treated
+persisted by the CLI. Coverage counts and bounded failure categories are emitted
+before publication, including on unavailable reviews. Publication emits a separate
+status and, on HTTP failure, only its numeric status code. Peer comments are selected by exact bot identity and treated
 as untrusted context. Provider output is validated before publication.
 
 Complete files are packed without truncation. Binary, metadata-only, oversized
