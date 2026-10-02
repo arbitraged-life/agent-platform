@@ -74,3 +74,9 @@ Deterministic synthesis retains evidence without a second model discarding it.
 Publication verifies bot identity and the current PR commits. Raw artifact retention,
 automatic approval and deletion of prior review state are intentionally removed.
 Original source history was not imported.
+
+The reusable lint workflow was normalized from `.github/workflows/lint-reusable.yml`
+at source revision `c1841e237f0d5f4709827f7e940f2eee4033e8dd`. Tracked-file
+discovery replaces shell evaluation, tool installations are pinned, downloaded
+binaries are checksum-verified, and strict C++ failures propagate. Account-specific
+comments and unused language advertising were removed.

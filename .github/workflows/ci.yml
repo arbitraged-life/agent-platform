@@ -48,3 +48,6 @@ jobs:
       checks: read
       actions: read
     uses: ./.github/workflows/merge-gate-validation.yml
+
+  reusable-lint:
+    uses: ./.github/workflows/lint-reusable.yml
