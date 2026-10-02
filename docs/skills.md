@@ -5,6 +5,9 @@ entrypoints have matching kebab-case names and nonempty descriptions. The catalo
 is the authoritative list of included procedures and reference skills; use its
 output instead of maintaining a separate count in installation instructions.
 The immutable platform release includes their referenced documentation.
+Platform-original skills use the repository LICENSE; pinned upstream skills retain their
+recorded upstream license and lock evidence. Fresh migration replacements are re-authored
+from capability requirements rather than copied from held private source text.
 
 `python3 scripts/skills.py validate` checks the catalog, file inventory, hashes,
 license, pinned upstream revision, and declared overlays. `./scripts/validate`

@@ -27,10 +27,46 @@ class SkillTests(unittest.TestCase):
 
     def test_discovery_and_installed_hashes(self):
         rows = MODULE['catalog'](self.root)
-        self.assertEqual(len(rows), 14)
+        self.assertEqual(len(rows), 19)
         lock = MODULE['verify_upstream'](self.root)
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
+
+    def test_fresh_migration_replacements_are_bundled_and_bounded(self):
+        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
+        expected = {
+            "acquire-codebase-knowledge",
+            "autonomous-pr-integration",
+            "evaluating-new-projects",
+            "javascript-typescript-jest",
+            "session-close-out",
+        }
+        self.assertTrue(expected.issubset(rows))
+        for name in expected:
+            self.assertEqual(rows[name]["license"], "LICENSE")
+
+        pr = (self.root / "skills/autonomous-pr-integration/SKILL.md").read_text()
+        self.assertIn("exact revision", pr)
+        self.assertIn("does not expand authority", pr)
+        self.assertIn("stale successful check", pr)
+
+        jest = (self.root / "skills/javascript-typescript-jest/SKILL.md").read_text()
+        self.assertIn("jest.clearAllMocks()", jest)
+        self.assertIn("jest.resetAllMocks()", jest)
+        self.assertIn("jest.restoreAllMocks()", jest)
+
+        evaluation = (self.root / "skills/evaluating-new-projects/SKILL.md").read_text()
+        self.assertIn("Do not install a candidate globally", evaluation)
+        self.assertIn("same inputs and measurement method", evaluation)
+
+        closeout = (self.root / "skills/session-close-out/SKILL.md").read_text()
+        self.assertIn("Never claim coverage", closeout)
+        self.assertIn("do not clean, reset, stash, commit, or push", closeout)
+
+        knowledge = (self.root / "skills/acquire-codebase-knowledge/SKILL.md").read_text()
+        self.assertIn("git ls-files", knowledge)
+        self.assertIn("Do not follow symlinks", knowledge)
+        self.assertIn("Do not read entire large files", knowledge)
 
     def test_original_skill_references_are_validated(self):
         path = self.root / 'skills/repository-safe-cleanup/SKILL.md'
