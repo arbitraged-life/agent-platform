@@ -1,4 +1,5 @@
 """Bounded HTTPS with no redirect forwarding or raw upstream error logging."""
+import http.client
 import json
 import urllib.error
 import urllib.parse
@@ -35,5 +36,5 @@ def request(url, token, payload=None, *, method='POST', timeout=45, max_bytes=1_
         status = error.code
         error.close()
         raise RequestFailure(status) from None
-    except (OSError, UnicodeError, ValueError):
+    except (OSError, ValueError, RecursionError, http.client.HTTPException):
         raise RequestFailure() from None

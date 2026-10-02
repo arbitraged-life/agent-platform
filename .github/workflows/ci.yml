@@ -29,6 +29,14 @@ jobs:
           python-version: '3.12.10'
       - run: ./scripts/setup
       - run: ./scripts/validate
+  review-identity:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - name: Verify authenticated review identity (read-only)
         env:
           REVIEW_IDENTITY_TOKEN: ${{ github.token }}

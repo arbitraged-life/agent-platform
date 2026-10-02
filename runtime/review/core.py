@@ -26,12 +26,16 @@ def path_name(header):
     value = value[2:]
     if not value or PurePosixPath(value).is_absolute() or '..' in PurePosixPath(value).parts or any(ord(c) < 32 for c in value):
         raise ValueError('Unsupported diff path')
+    try:
+        value.encode('utf-8')
+    except UnicodeError:
+        raise ValueError('Unsupported diff path encoding') from None
     return value
 
 
 def segments(diff):
     """Keep complete files; never discard an oversized file silently."""
-    if not isinstance(diff, str) or '\0' in diff:
+    if not isinstance(diff, str):
         raise ValueError('Invalid textual diff')
     blocks = re.split(r'(?m)(?=^diff --git )', diff)
     result = []
@@ -43,8 +47,8 @@ def segments(diff):
         old = new = None
         added = set()
         line_number = None
-        binary = False
-        for line in block.splitlines():
+        binary = '\0' in block or bool(re.search(r'[\udc80-\udcff]', block))
+        for line in block.split('\n'):
             if line_number is None and line.startswith('--- '):
                 old = path_name(line)
             elif line_number is None and line.startswith('+++ '):
@@ -89,7 +93,7 @@ def findings(content, parts):
     """Validate model output before it can affect a review or approval."""
     try:
         value = json.loads(content)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         raise ValueError('Provider returned invalid review JSON') from None
     if not isinstance(value, dict) or set(value) != {'findings'} or not isinstance(value['findings'], list) or len(value['findings']) > 100:
         raise ValueError('Invalid findings envelope')

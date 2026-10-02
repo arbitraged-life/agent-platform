@@ -43,10 +43,12 @@ as untrusted context. Provider output is validated before publication.
 
 Complete files are packed without truncation. Binary, metadata-only, oversized
 and over-budget files appear in coverage omissions. Quoted or control-character
-Git paths and non-UTF-8 text currently fail validation before provider execution
-rather than receive a lossy or ambiguous line anchor.
+Git paths fail validation before provider execution. Non-UTF-8 and NUL-containing
+file contents are explicitly omitted without blocking other files. Git attributes
+cannot hide text changes as binary. Diff capture stops at 16 MiB or 60 seconds.
 All provider failures and incomplete JSON result in explicit unavailable coverage.
-A partial review exits 2; validation, transport or execution failure exits 1.
+A partial review or invalid CLI usage exits 2; validation, transport or execution
+failure exits 1.
 Only complete coverage exits 0. Zero findings never means automatic approval.
 Deterministic synthesis retains distinct evidence and the strongest duplicate
 severity; it cannot discard findings through a prose reduction call.
@@ -61,3 +63,6 @@ workflow concurrency must serialize runs for the same PR. Older review comments
 and approvals are never deleted or dismissed. Raw provider transcripts, automatic
 approvals, severity-label mutation and webhook fan-out are intentionally absent.
 Private adapters own any separately authorized notifications or provider routing.
+
+Live GitHub identity acceptance is a manual main-branch CI job, separate from
+deterministic validation. It performs no writes and never calls a model.

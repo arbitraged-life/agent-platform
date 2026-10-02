@@ -4,9 +4,11 @@ import argparse
 import json
 import os
 from pathlib import Path
+import selectors
+import shutil
 import subprocess
 import sys
-import tempfile
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from runtime.review.engine import review
@@ -23,18 +25,38 @@ def read_json(path):
     return json.loads(data)
 
 
-def diff_at(checkout, snapshot):
-    with tempfile.TemporaryFile() as stream:
-        subprocess.run(['git', '-C', str(checkout), '-c', 'core.quotePath=false',
-                        '-c', 'core.hooksPath=/dev/null', 'diff', '--no-ext-diff', '--no-textconv',
-                        '--no-renames', '--ignore-submodules=none', '--unified=3',
-                        snapshot['base'] + '...' + snapshot['head'], '--'],
-                       stdout=stream, stderr=subprocess.DEVNULL, check=True, timeout=60)
-        stream.seek(0)
-        data = stream.read(16_777_217)
-        if len(data) > 16_777_216:
-            raise ValueError('Diff exceeds input ceiling')
-        return data.decode('utf-8')
+def diff_at(checkout, snapshot, max_bytes=16_777_216):
+    executable = shutil.which('git')
+    if not executable:
+        raise ValueError('Git executable missing')
+    command = [executable, '--no-pager', '-C', str(checkout), '-c', 'core.quotePath=false',
+               '-c', 'core.hooksPath=' + os.devnull, '-c', 'core.fsmonitor=false',
+               'diff', '--no-ext-diff', '--no-textconv', '--text', '--no-renames',
+               '--ignore-submodules=none', '--unified=3', snapshot['base'] + '...' + snapshot['head'], '--']
+    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0) as process:
+        data = bytearray()
+        deadline = time.monotonic() + 60
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not selector.select(remaining):
+                        raise subprocess.TimeoutExpired(command, 60)
+                    chunk = os.read(process.stdout.fileno(), min(65536, max_bytes - len(data) + 1))
+                    if not chunk:
+                        break
+                    data.extend(chunk)
+                    if len(data) > max_bytes:
+                        raise ValueError('Diff exceeds input ceiling')
+            code = process.wait(timeout=max(0.01, deadline - time.monotonic()))
+            if code:
+                raise subprocess.CalledProcessError(code, command)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+        return data.decode('utf-8', errors='surrogateescape')
 
 
 def main():

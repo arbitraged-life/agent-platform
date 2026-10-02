@@ -7,33 +7,40 @@ from .transport import request
 MARKER = '<!-- agent-platform-review:v1 -->'
 
 
+class PublisherMismatch(ValueError):
+    pass
+
+
 class GitHub:
     def __init__(self, repository, token, requester=request):
         self.prefix = '/repos/' + repository
         self.token = token
         self.requester = requester
 
-    def call(self, path, method='GET', payload=None):
+    def call(self, path, method='GET', payload=None, *, max_bytes=1_048_576):
         return self.requester('https://api.github.com' + self.prefix + path,
-                              self.token, payload, method=method)
+                              self.token, payload, method=method, max_bytes=max_bytes)
 
     def assert_publisher(self, identity):
         response = self.requester('https://api.github.com/graphql', self.token,
                                   {'query': 'query { viewer { login databaseId } }'}, method='POST')
         if not isinstance(response, dict) or response.get('errors'):
             raise ValueError('Cannot establish authenticated publisher identity')
-        viewer = (response.get('data') or {}).get('viewer')
+        data = response.get('data')
+        viewer = data.get('viewer') if isinstance(data, dict) else None
+        if not isinstance(viewer, dict) or type(viewer.get('databaseId')) is not int or not isinstance(viewer.get('login'), str):
+            raise ValueError('Invalid authenticated publisher response')
         if not isinstance(viewer, dict) or viewer.get('login') != identity['login'] or viewer.get('databaseId') != identity['id']:
-            raise ValueError('Authenticated publisher differs from policy')
+            raise PublisherMismatch('Authenticated publisher differs from policy')
 
     def all(self, path):
         result = []
-        for page in range(1, 11):
-            rows = self.call(f'{path}?per_page=100&page={page}')
-            if not isinstance(rows, list) or len(rows) > 100:
+        for page in range(1, 52):
+            rows = self.call(f'{path}?per_page=20&page={page}', max_bytes=8_388_608)
+            if not isinstance(rows, list) or len(rows) > 20 or len(result) + len(rows) > 1000:
                 raise ValueError('Invalid GitHub pagination response')
             result.extend(rows)
-            if len(rows) < 100:
+            if len(rows) < 20:
                 return result
         raise ValueError('GitHub pagination limit reached')
 
@@ -54,7 +61,9 @@ class GitHub:
 
 
 def owned(record, identity):
-    user = record.get('user', {})
+    user = record.get('user')
+    if not isinstance(user, dict):
+        return False
     return user.get('type') == 'Bot' and user.get('id') == identity['id'] and user.get('login') == identity['login']
 
 

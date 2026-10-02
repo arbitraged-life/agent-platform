@@ -19,7 +19,7 @@ def review(diff, config, peers='', *, environ=None, requester=request):
               'omitted': omitted, 'calls': 0, 'failures': [], 'providers': []}
     if not active:
         result['status'] = 'unavailable'
-        result['omitted'] += [{'path': p['path'], 'reason': 'no-configured-credential'} for p in parts if p['path']]
+        result['omitted'] += [{'path': path, 'reason': 'no-configured-credential'} for chunk in packed for path in chunk['files']]
         return result
     for index, chunk in enumerate(packed):
         chain = active[index % len(active):] + active[:index % len(active)] if config['strategy'] == 'crossprovider' else active

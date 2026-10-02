@@ -4,21 +4,17 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from runtime.review.github import GitHub
-from runtime.review.transport import request
+from runtime.review.github import GitHub, PublisherMismatch
 
 
 def main():
     token = os.environ['REVIEW_IDENTITY_TOKEN']
-    response = request('https://api.github.com/graphql', token,
-                       {'query': 'query { viewer { login databaseId } }'})
-    viewer = response['data']['viewer']
     client = GitHub(os.environ['REVIEW_IDENTITY_REPOSITORY'], token)
-    identity = {'id': viewer['databaseId'], 'login': viewer['login']}
+    identity = {'id': 41898282, 'login': 'github-actions[bot]'}
     client.assert_publisher(identity)
     try:
         client.assert_publisher({**identity, 'id': 0})
-    except ValueError:
+    except PublisherMismatch:
         print('Authenticated GitHub identity accepted; mismatched identity rejected. No writes.')
         return
     raise RuntimeError('Mismatched identity was accepted')

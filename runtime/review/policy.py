@@ -49,6 +49,8 @@ def validate(value):
         if not isinstance(provider['endpoint'], str):
             raise ValueError('Invalid provider endpoint')
         endpoint = urlsplit(provider['endpoint'])
+        if endpoint.port is not None and not 1 <= endpoint.port <= 65535:
+            raise ValueError('Invalid endpoint port')
         if endpoint.scheme != 'https' or not endpoint.hostname or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
             raise ValueError('Provider endpoint must be explicit HTTPS without credentials or query')
         if not isinstance(provider['model'], str) or not provider['model'].strip() or len(provider['model']) > 200:
@@ -61,16 +63,23 @@ def validate(value):
     return config
 
 
+def mapping(value):
+    return value if isinstance(value, dict) else {}
+
+
 def eligible(event_name, event, config):
-    if event.get('repository', {}).get('full_name') != config['repository']:
+    event = mapping(event)
+    if mapping(event.get('repository')).get('full_name') != config['repository']:
         return None
-    if event_name == 'pull_request' and event.get('action') in ['opened', 'synchronize', 'reopened']:
-        pr = event.get('pull_request', {})
-        if pr.get('user', {}).get('type') == 'User' and not pr.get('draft'):
+    if event_name in ['pull_request', 'pull_request_target'] and event.get('action') in ['opened', 'synchronize', 'reopened']:
+        pr = mapping(event.get('pull_request'))
+        if mapping(pr.get('user')).get('type') == 'User' and not pr.get('draft'):
             return pr.get('number')
-    if event_name == 'issue_comment' and event.get('action') == 'created' and event.get('issue', {}).get('pull_request'):
-        comment = event.get('comment', {})
-        command = comment.get('body', '').strip().split()
-        if comment.get('user', {}).get('type') == 'User' and comment.get('author_association') in ['OWNER', 'MEMBER', 'COLLABORATOR'] and command and command[0] in config['commands']:
-            return event['issue'].get('number')
+    issue = mapping(event.get('issue'))
+    if event_name == 'issue_comment' and event.get('action') == 'created' and issue.get('pull_request'):
+        comment = mapping(event.get('comment'))
+        body = comment.get('body')
+        command = body.strip().split() if isinstance(body, str) else []
+        if mapping(comment.get('user')).get('type') == 'User' and comment.get('author_association') in ['OWNER', 'MEMBER', 'COLLABORATOR'] and command and command[0] in config['commands']:
+            return issue.get('number')
     return None
