@@ -39,6 +39,8 @@ class GitHub:
             rows = self.call(f'{path}?per_page=20&page={page}', max_bytes=8_388_608)
             if not isinstance(rows, list) or len(rows) > 20 or len(result) + len(rows) > 1000:
                 raise ValueError('Invalid GitHub pagination response')
+            if any(not isinstance(row, dict) or (row.get('body') is not None and not isinstance(row['body'], str)) for row in rows):
+                raise ValueError('Malformed GitHub record')
             result.extend(rows)
             if len(rows) < 20:
                 return result
@@ -61,6 +63,8 @@ class GitHub:
 
 
 def owned(record, identity):
+    if not isinstance(record, dict):
+        return False
     user = record.get('user')
     if not isinstance(user, dict):
         return False
@@ -114,13 +118,13 @@ def publish(client, snapshot, result, config):
     client.assert_publisher(identity)
     body = render(result, snapshot['head'])
     comments = client.all(f'/issues/{number}/comments')
-    candidates = [c for c in comments if owned(c, identity) and c.get('body', '').startswith(MARKER)]
+    candidates = [c for c in comments if owned(c, identity) and (c.get('body') or '').startswith(MARKER)]
     if len(candidates) > 1:
         raise ValueError('Ambiguous owned summary comments')
     client.assert_current(snapshot)
     if candidates:
         current = client.call(f'/issues/comments/{candidates[0]["id"]}')
-        if not owned(current, identity) or not current.get('body', '').startswith(MARKER):
+        if not owned(current, identity) or not (current.get('body') or '').startswith(MARKER):
             raise ValueError('Summary comment ownership changed')
         client.assert_current(snapshot)
         response = client.call(f'/issues/comments/{current["id"]}', 'PATCH', {'body': body})
@@ -133,7 +137,7 @@ def publish(client, snapshot, result, config):
         reviews = client.all(f'/pulls/{number}/reviews')
         # Existing same-head review is immutable evidence, not something to
         # delete and recreate. Workflow concurrency serializes same-PR runs.
-        prior = [r for r in reviews if owned(r, identity) and r.get('commit_id') == snapshot['head'] and r.get('body', '').startswith(MARKER)]
+        prior = [r for r in reviews if owned(r, identity) and r.get('commit_id') == snapshot['head'] and (r.get('body') or '').startswith(MARKER)]
         if not prior:
             client.assert_current(snapshot)
             response = client.call(f'/pulls/{number}/reviews', 'POST', {

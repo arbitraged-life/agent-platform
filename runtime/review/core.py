@@ -102,7 +102,7 @@ def findings(content, parts):
     for row in value['findings']:
         if not isinstance(row, dict) or set(row) != {'path', 'line', 'severity', 'title', 'body'}:
             raise ValueError('Invalid finding fields')
-        if not isinstance(row['path'], str) or row['path'] not in paths or type(row['line']) is not int or row['line'] < 1:
+        if not isinstance(row['path'], str) or row['path'] not in paths or type(row['line']) is not int or row['line'] not in paths[row['path']]:
             raise ValueError('Invalid finding location')
         if row['severity'] not in SEVERITIES:
             raise ValueError('Invalid finding severity')

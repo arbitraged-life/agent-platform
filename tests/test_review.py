@@ -275,5 +275,16 @@ class ReviewExecution(unittest.TestCase):
         self.assertNotIsInstance(caught.exception, PublisherMismatch)
 
 
+    def test_invalid_lines_and_malformed_records_fail_closed(self):
+        parts = segments(self.diff())
+        for line in (0, 999):
+            row = {'path': parts[0]['path'], 'line': line, 'severity': 'high', 'title': 'Defect', 'body': 'Evidence'}
+            with self.assertRaises(ValueError): findings(json.dumps({'findings': [row]}), parts)
+        self.assertFalse(owned(None, self.config()['publisher']))
+        for row in (None, [], {'body': 12}):
+            client = GitHub('example/project', 'synthetic', lambda *args, **kw: [row])
+            with self.assertRaises(ValueError): client.all('/issues/2/comments')
+
+
 if __name__ == '__main__':
     unittest.main()
