@@ -8,6 +8,18 @@
       "license": "licenses/cloudflare-skills-LICENSE"
     },
     {
+      "name": "aggressive-repository-cleanup",
+      "description": "Remove verified obsolete repository state after authorized migration and independent acceptance.",
+      "path": "skills/aggressive-repository-cleanup/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
+      "name": "cleanup-verification-qa",
+      "description": "Independently verify a cleanup diff against its audited decisions before merge or final removal.",
+      "path": "skills/cleanup-verification-qa/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
       "name": "cloudflare",
       "description": "Use as the fallback Cloudflare platform reference when no more specific Cloudflare skill matches the task, especially for products not covered by installed Workers, Wrangler, Durable Objects, Agents SDK, Sandbox, Email, or Turnstile skills.",
       "path": "skills/cloudflare/SKILL.md",
@@ -32,10 +44,28 @@
       "license": "LICENSE"
     },
     {
+      "name": "repository-safe-cleanup",
+      "description": "Apply authorized repository migrations while preserving dirty work, explicit ownership and rollback.",
+      "path": "skills/repository-safe-cleanup/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
+      "name": "repository-systematic-audit",
+      "description": "Audit repository ownership, dependencies, duplicates and migration risks before changing structure.",
+      "path": "skills/repository-systematic-audit/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
       "name": "sandbox-sdk",
       "description": "Build sandboxed applications for secure code execution. Load when building AI code execution, code interpreters, CI/CD systems, interactive dev environments, or executing untrusted code. Covers Sandbox SDK lifecycle, commands, files, code interpreter, and preview URLs. Biases towards retrieval from Cloudflare docs over pre-trained knowledge.",
       "path": "skills/sandbox-sdk/SKILL.md",
       "license": "licenses/cloudflare-skills-LICENSE"
+    },
+    {
+      "name": "status-report",
+      "description": "Use when handing completed engineering work back to the user, opening a pull request, or switching tasks after substantive repository changes.",
+      "path": "skills/status-report/SKILL.md",
+      "license": "LICENSE"
     },
     {
       "name": "web-perf",

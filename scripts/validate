@@ -121,7 +121,8 @@ def validate_skills(root):
         metadata = yaml.safe_load(text.split('---', 2)[1])
         if any(metadata.get(key) != row[key] for key in ['name', 'description']):
             raise ValueError('Skill catalog metadata drift: ' + row['name'])
-    for name in lock['files']:
+    reference_files = set(lock['files']) | {row['path'] for row in rows}
+    for name in sorted(reference_files):
         path = root / name
         for target in re.findall(r'\]\(([^)\s]+)\)', path.read_text()):
             target = target.split('#')[0]
