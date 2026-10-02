@@ -5,8 +5,10 @@
 choose their own triggers, and grant the declared repository permissions. The
 workflow loads the coordinator from the called workflow's commit.
 
-The default requires exactly one successful run of `gate-workflow` for the current
-PR head, the configured opt-in `label`, and GitHub's `MERGEABLE` state. Optional
+The default requires exactly one run of `gate-workflow` for the current PR head,
+and that run must be successful; additional matching runs are ambiguous even if
+they failed. It also requires the configured opt-in `label` and GitHub's
+`MERGEABLE` state. Optional
 `advisory-workflows` never replace required evidence. `merge-method` selects the
 merge strategy. The coordinator rechecks eligibility after fetching evidence and
 passes the same head to `gh pr merge --match-head-commit`.
