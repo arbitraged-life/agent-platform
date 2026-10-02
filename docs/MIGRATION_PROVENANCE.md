@@ -80,3 +80,11 @@ at source revision `c1841e237f0d5f4709827f7e940f2eee4033e8dd`. Tracked-file
 discovery replaces shell evaluation, tool installations are pinned, downloaded
 binaries are checksum-verified, and strict C++ failures propagate. Account-specific
 comments and unused language advertising were removed.
+
+Five generic skill replacements were independently authored in this public repository from
+capability requirements and migration audit findings rather than copied from held legacy
+prose or helper scripts: `autonomous-pr-integration`, `javascript-typescript-jest`, `evaluating-new-projects`, `session-close-out`, `acquire-codebase-knowledge`.
+They intentionally remove account-specific roots, hidden runtime dependencies, unbounded
+host installation/scanning, and unsupported completeness claims. They carry the platform
+Apache-2.0 license. Detailed legacy evidence remains private; publication depends only on
+the public files and tests in this repository.
