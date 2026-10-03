@@ -98,3 +98,13 @@ Three behavior-policy replacements were independently authored from migration re
 Four additional provenance-held capabilities were independently re-authored from audit requirements rather than copied from external wrappers or reference corpora: `codeql`, `diagram-design`, `hallmark`, and `skillspector`. The replacements rely on current authoritative documentation or explicit observable inputs, avoid floating installers and popularity/product claims, and preserve bounded verification and trust boundaries.
 
 `turnstile-spin` was independently re-authored from the audited capability and security requirements rather than copied from the legacy provider-derived tree. The replacement removes secret-printing, floating deployment/template behavior, and arbitrary deployment-directory deletion while preserving the client/server Turnstile integration capability.
+
+## Review and skill helper tooling
+
+The legacy private agent-framework checkout also contained generic helper tooling
+that is not personal configuration: a tool-free OMP adversarial push-review
+gate, its bounded JSONL verdict parser, and the canonical new-skill path
+resolver. These utilities were migrated by content review into agent-platform.
+Legacy skill metadata wrapper scripts were not copied because agent-platform's
+existing catalog validation in scripts/validate and scripts/skills.py provides
+the canonical, stricter replacement.
