@@ -6,9 +6,11 @@ merge_protections_settings:
   reporting_method: check-runs
   post_comment: false
   auto_merge_conditions:
-    - and:
-        - label = renovate-automerge
-        - -label = security
+    - or:
+        - and:
+            - label = renovate-automerge
+            - -label = security
+        - label = merge-ready
 
 merge_protections:
   - name: main branch validation
