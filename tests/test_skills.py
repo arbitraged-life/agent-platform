@@ -27,7 +27,7 @@ class SkillTests(unittest.TestCase):
 
     def test_discovery_and_installed_hashes(self):
         rows = MODULE['catalog'](self.root)
-        self.assertEqual(len(rows), 25)
+        self.assertEqual(len(rows), 28)
         lock = MODULE['verify_upstream'](self.root)
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
@@ -104,6 +104,25 @@ class SkillTests(unittest.TestCase):
         grok = (self.root / "skills/ultragrokking-articles/SKILL.md").read_text()
         self.assertIn("not a mandatory one", grok)
         self.assertIn("false-positive risk", grok)
+
+    def test_behavior_policy_replacements_preserve_safety_and_scope(self):
+        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
+        for name in {"caveman", "i-have-adhd", "ponytail"}:
+            self.assertIn(name, rows)
+            self.assertEqual(rows[name]["license"], "LICENSE")
+
+        caveman = (self.root / "skills/caveman/SKILL.md").read_text()
+        self.assertIn("does not persist user state", caveman)
+        self.assertIn("destructive-action warnings", caveman)
+
+        action_first = (self.root / "skills/i-have-adhd/SKILL.md").read_text()
+        self.assertIn("Do not invent time estimates", action_first)
+        self.assertIn("output preference", action_first)
+
+        ponytail = (self.root / "skills/ponytail/SKILL.md").read_text()
+        self.assertIn("root cause", ponytail)
+        self.assertIn("security controls", ponytail)
+        self.assertIn("rather than line count alone", ponytail)
 
     def test_original_skill_references_are_validated(self):
         path = self.root / 'skills/repository-safe-cleanup/SKILL.md'

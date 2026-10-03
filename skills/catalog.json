@@ -26,6 +26,12 @@
       "license": "LICENSE"
     },
     {
+      "name": "caveman",
+      "description": "Opt-in terse-response mode that compresses wording while preserving technical meaning, uncertainty, required warnings, and task structure.",
+      "path": "skills/caveman/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
       "name": "cleanup-verification-qa",
       "description": "Independently verify a cleanup diff against its audited decisions before merge or final removal.",
       "path": "skills/cleanup-verification-qa/SKILL.md",
@@ -74,6 +80,12 @@
       "license": "LICENSE"
     },
     {
+      "name": "i-have-adhd",
+      "description": "Opt-in action-first response mode that surfaces the immediate next step, bounds multi-step work, and keeps state visible without reducing necessary technical detail.",
+      "path": "skills/i-have-adhd/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
       "name": "javascript-typescript-jest",
       "description": "Write and review focused JavaScript or TypeScript Jest tests with explicit mock lifecycle, deterministic async behavior, and repository-consistent structure.",
       "path": "skills/javascript-typescript-jest/SKILL.md",
@@ -89,6 +101,12 @@
       "name": "officecli",
       "description": "Create or edit DOCX, XLSX, and PPTX files with a version-pinned Office document CLI, explicit structural read-back, bounded host changes, and visual verification when available.",
       "path": "skills/officecli/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
+      "name": "ponytail",
+      "description": "Prefer the smallest maintainable code change by checking existing code, standard-library features, platform capabilities, and installed dependencies before adding new abstractions.",
+      "path": "skills/ponytail/SKILL.md",
       "license": "LICENSE"
     },
     {
