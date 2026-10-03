@@ -27,7 +27,7 @@ class SkillTests(unittest.TestCase):
 
     def test_discovery_and_installed_hashes(self):
         rows = MODULE['catalog'](self.root)
-        self.assertEqual(len(rows), 34)
+        self.assertEqual(len(rows), 39)
         lock = MODULE['verify_upstream'](self.root)
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
@@ -67,6 +67,21 @@ class SkillTests(unittest.TestCase):
         self.assertIn("git ls-files", knowledge)
         self.assertIn("Do not follow symlinks", knowledge)
         self.assertIn("Do not read entire large files", knowledge)
+
+    def test_research_workflow_migrations_are_public_and_portable(self):
+        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
+        expected = {"workflow-designer", "skill-audit", "repo-framework-analyst", "evaluator-comparer", "tool-hunter"}
+        self.assertTrue(expected.issubset(rows))
+        for name in expected:
+            self.assertEqual(rows[name]["license"], "LICENSE")
+            content = (self.root / f"skills/{name}/SKILL.md").read_text()
+            self.assertNotIn("agent-framework", content)
+            self.assertNotIn("$HOMELAB_ROOT", content)
+            self.assertNotIn("/" + "Users/", content)
+
+        audit = (self.root / "skills/skill-audit/SKILL.md").read_text()
+        self.assertIn("declared skill catalog/index", audit)
+        self.assertNotIn("NERV purity", audit)
 
     def test_chatgpt_harness_is_portable_and_runtime_bounded(self):
         rows = {row["name"]: row for row in MODULE["catalog"](self.root)}

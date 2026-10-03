@@ -86,6 +86,12 @@
       "license": "LICENSE"
     },
     {
+      "name": "evaluator-comparer",
+      "description": "Normalize multiple AI tools and repos into comparable dimensions and present them as Markdown tables with clear 'choose this if\u2026' guidance.",
+      "path": "skills/evaluator-comparer/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
       "name": "execution-router",
       "description": "Use when a task requires connected-app actions, local filesystem or shell work, a handoff between execution surfaces, or a decision about which reasoning/execution brain should act. Also use when setting up execution routing for an agent or scheduled workflow.",
       "path": "skills/execution-router/SKILL.md",
@@ -140,6 +146,12 @@
       "license": "LICENSE"
     },
     {
+      "name": "repo-framework-analyst",
+      "description": "Analyze GitHub repos and AI/LLM frameworks for maturity, integration complexity, and fit with typical TypeScript/Python/DevOps stacks.",
+      "path": "skills/repo-framework-analyst/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
       "name": "repository-safe-cleanup",
       "description": "Apply authorized repository migrations while preserving dirty work, explicit ownership and rollback.",
       "path": "skills/repository-safe-cleanup/SKILL.md",
@@ -164,6 +176,12 @@
       "license": "LICENSE"
     },
     {
+      "name": "skill-audit",
+      "description": "Evaluate agentic skills for overlap, quality, coverage, and compliance with architectural and purity standards.",
+      "path": "skills/skill-audit/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
       "name": "skillspector",
       "description": "Perform a bounded pre-install security review of an agent skill, plugin, or MCP package by inspecting its instructions, scripts, dependencies, permissions, and data flows before execution.",
       "path": "skills/skillspector/SKILL.md",
@@ -173,6 +191,12 @@
       "name": "status-report",
       "description": "Use when handing completed engineering work back to the user, opening a pull request, or switching tasks after substantive repository changes.",
       "path": "skills/status-report/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
+      "name": "tool-hunter",
+      "description": "Discover and shortlist applied AI tools, products, and GitHub repos that solve a given software engineering or productivity problem.",
+      "path": "skills/tool-hunter/SKILL.md",
       "license": "LICENSE"
     },
     {
@@ -198,6 +222,12 @@
       "description": "Reviews and authors Cloudflare Workers code against production best practices. Load when writing new Workers, reviewing Worker code, configuring wrangler.jsonc, or checking for common Workers anti-patterns (streaming, floating promises, global state, secrets, bindings, observability). Biases towards retrieval from Cloudflare docs over pre-trained knowledge.",
       "path": "skills/workers-best-practices/SKILL.md",
       "license": "licenses/cloudflare-skills-LICENSE"
+    },
+    {
+      "name": "workflow-designer",
+      "description": "Design concrete AI-enhanced workflows and stack slices (e.g., LangGraph + Promptfoo + Helicone + Grafana) and map them to software engineering and productivity use cases.",
+      "path": "skills/workflow-designer/SKILL.md",
+      "license": "LICENSE"
     },
     {
       "name": "wrangler",
