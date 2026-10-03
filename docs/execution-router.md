@@ -15,6 +15,20 @@ app-owned state; coding/local agents can be better for sustained implementation,
 repository-native harnesses, local test loops, or resumable execution. Handoff is
 a routing choice, not an escalation hierarchy.
 
+### Desktop Commander transport selection
+
+If ChatGPT has multiple Desktop Commander paths to the same machine, the
+private/direct path should be selected first when healthy: for example an
+OpenAI Secure MCP Tunnel that terminates at the machine's local stdio Desktop
+Commander. A vendor-hosted Remote Desktop Commander bridge is a fallback for
+surfaces or incidents where the private/direct path is unavailable. Transport
+selection does not change state ownership or authorization.
+
+Never blindly retry a failed mutating call over the fallback. Verify whether the
+first path changed local state, then continue or retry deliberately. Keep the
+hosted bridge installed when it provides useful resilience, but do not spend its
+quota for ordinary work while the private/direct path is healthy.
+
 ## Ownership
 
 - `skills/execution-router/`: portable workflow and contract.
