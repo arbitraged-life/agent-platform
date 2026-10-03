@@ -39,7 +39,6 @@ queue_rules:
     merge_method: squash
     queue_conditions:
       - base = main
-    merge_conditions:
       - check-success = @github-actions/validate (ubuntu-24.04)
       - check-success = @github-actions/validate (macos-14)
       - check-success = @github-actions/secrets
