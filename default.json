@@ -11,24 +11,38 @@
   "prConcurrentLimit": 5,
   "prHourlyLimit": 2,
   "automerge": false,
-  "automergeType": "pr-comment",
-  "automergeComment": "@Mergifyio queue",
   "rebaseWhen": "behind-base-branch",
   "packageRules": [
     {
-      "description": "Queue non-major updates through Mergify after Renovate sees green checks",
-      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
-      "automerge": true
+      "description": "Let Mergify auto-queue stable minor and patch updates",
+      "matchCurrentVersion": "!/^0/",
+      "matchUpdateTypes": ["minor", "patch"],
+      "addLabels": ["renovate-automerge"]
+    },
+    {
+      "description": "Let Mergify auto-queue pins and digest refreshes",
+      "matchUpdateTypes": ["pin", "pinDigest", "digest"],
+      "addLabels": ["renovate-automerge"]
+    },
+    {
+      "description": "Let Mergify auto-queue lock-file maintenance",
+      "matchUpdateTypes": ["lockFileMaintenance"],
+      "addLabels": ["renovate-automerge"]
     },
     {
       "description": "Require explicit approval before creating major-update PRs",
       "matchUpdateTypes": ["major"],
       "dependencyDashboardApproval": true,
-      "automerge": false
+      "addLabels": ["renovate-major"]
     }
   ],
-  "lockFileMaintenance": {
+  "vulnerabilityAlerts": {
     "enabled": true,
-    "automerge": true
+    "labels": ["security"],
+    "automerge": false,
+    "prConcurrentLimit": 10
+  },
+  "lockFileMaintenance": {
+    "enabled": true
   }
 }
