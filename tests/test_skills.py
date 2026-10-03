@@ -27,7 +27,7 @@ class SkillTests(unittest.TestCase):
 
     def test_discovery_and_installed_hashes(self):
         rows = MODULE['catalog'](self.root)
-        self.assertEqual(len(rows), 22)
+        self.assertEqual(len(rows), 25)
         lock = MODULE['verify_upstream'](self.root)
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
@@ -86,6 +86,24 @@ class SkillTests(unittest.TestCase):
         self.assertIn("Do not run vendor", office)
         self.assertIn("Read the modified element back", office)
         self.assertIn("Persistent agent configuration", office)
+
+    def test_generic_policy_replacements_fail_closed(self):
+        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
+        for name in {"cross-language-purity", "prompt-refiner", "ultragrokking-articles"}:
+            self.assertIn(name, rows)
+            self.assertEqual(rows[name]["license"], "LICENSE")
+
+        purity = (self.root / "skills/cross-language-purity/SKILL.md").read_text()
+        self.assertIn("Fail closed", purity)
+        self.assertIn("private hook names", purity)
+
+        refiner = (self.root / "skills/prompt-refiner/SKILL.md").read_text()
+        self.assertIn("does not grant additional authority", refiner)
+        self.assertIn("Do not write them to logs", refiner)
+
+        grok = (self.root / "skills/ultragrokking-articles/SKILL.md").read_text()
+        self.assertIn("not a mandatory one", grok)
+        self.assertIn("false-positive risk", grok)
 
     def test_original_skill_references_are_validated(self):
         path = self.root / 'skills/repository-safe-cleanup/SKILL.md'

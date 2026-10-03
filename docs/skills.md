@@ -33,3 +33,5 @@ not an equivalent replacement. Installing documentation does not install a
 runtime, grant tool permissions, or authorize deployment/provider spending.
 
 The migration bundle also includes independently authored generic wrappers for context compression (`headroom`), document-to-Markdown conversion (`markitdown`), and native Office document editing (`officecli`). These skills require pinned tooling, bounded data/installation scope, and explicit verification rather than inheriting historical benchmark claims.
+
+Additional migration skills cover fail-closed cross-language structural verification, permission-bounded prompt refinement, and evidence-linked long-form technical analysis. These are generic policies; repository-specific overlays remain private.

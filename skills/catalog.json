@@ -44,6 +44,12 @@
       "license": "licenses/cloudflare-skills-LICENSE"
     },
     {
+      "name": "cross-language-purity",
+      "description": "Verify repository-level invariants across languages and configuration using fail-closed, repository-root-aware checks with explicit evidence and no private-environment assumptions.",
+      "path": "skills/cross-language-purity/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
       "name": "durable-objects",
       "description": "Create and review Cloudflare Durable Objects. Use when building stateful coordination (chat rooms, multiplayer games, booking systems), implementing RPC methods, SQLite storage, alarms, WebSockets, or reviewing DO code for best practices. Covers Workers integration, wrangler config, and testing with Vitest. Biases towards retrieval from Cloudflare docs over pre-trained knowledge.",
       "path": "skills/durable-objects/SKILL.md",
@@ -86,6 +92,12 @@
       "license": "LICENSE"
     },
     {
+      "name": "prompt-refiner",
+      "description": "Turn ambiguous or multi-system requests into explicit execution directives with bounded assumptions, acceptance criteria, and optional adapters, without persisting raw prompts by default.",
+      "path": "skills/prompt-refiner/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
       "name": "repository-safe-cleanup",
       "description": "Apply authorized repository migrations while preserving dirty work, explicit ownership and rollback.",
       "path": "skills/repository-safe-cleanup/SKILL.md",
@@ -113,6 +125,12 @@
       "name": "status-report",
       "description": "Use when handing completed engineering work back to the user, opening a pull request, or switching tasks after substantive repository changes.",
       "path": "skills/status-report/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
+      "name": "ultragrokking-articles",
+      "description": "Analyze long-form technical material against a concrete engineering problem, separate source claims from inference, and derive proportionate verification or guardrail options.",
+      "path": "skills/ultragrokking-articles/SKILL.md",
       "license": "LICENSE"
     },
     {
