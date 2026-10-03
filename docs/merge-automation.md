@@ -17,3 +17,9 @@ Mergify is the merge authority for `agent-platform`.
 
 The fallback operator command is `@Mergifyio queue` when a pull request should be
 queued manually.
+
+## Failure behavior
+
+A failed required check or merge conflict leaves the pull request unmerged. Workflow
+Automation may comment on conflicts, but only Merge Protections plus the Merge Queue
+authorize an automated merge.
