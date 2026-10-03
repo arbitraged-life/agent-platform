@@ -39,3 +39,5 @@ Additional migration skills cover fail-closed cross-language structural verifica
 Opt-in behavior policies are also available for terse wording (`caveman`), action-first presentation (`i-have-adhd`), and minimal-change engineering (`ponytail`). They affect presentation or implementation preference only and do not weaken verification or safety requirements.
 
 The public catalog also includes independently authored CodeQL operations guidance, semantic diagram design, product-specific UI quality auditing, and static pre-install skill security inspection. External references remain untrusted inputs rather than executable policy.
+
+`turnstile-spin` provides a secret-safe Turnstile integration contract with explicit server validation and a separate deployment boundary; it does not vendor or execute the quarantined legacy deployment helpers.

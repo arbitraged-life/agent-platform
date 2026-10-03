@@ -170,6 +170,12 @@
       "license": "LICENSE"
     },
     {
+      "name": "turnstile-spin",
+      "description": "Integrate Cloudflare Turnstile into web applications with explicit client/server boundaries, secret-safe validation, framework-appropriate rendering, and no floating deployment or destructive helper behavior.",
+      "path": "skills/turnstile-spin/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
       "name": "ultragrokking-articles",
       "description": "Analyze long-form technical material against a concrete engineering problem, separate source claims from inference, and derive proportionate verification or guardrail options.",
       "path": "skills/ultragrokking-articles/SKILL.md",
