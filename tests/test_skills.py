@@ -27,7 +27,7 @@ class SkillTests(unittest.TestCase):
 
     def test_discovery_and_installed_hashes(self):
         rows = MODULE['catalog'](self.root)
-        self.assertEqual(len(rows), 39)
+        self.assertEqual(len(rows), 40)
         lock = MODULE['verify_upstream'](self.root)
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
@@ -67,6 +67,22 @@ class SkillTests(unittest.TestCase):
         self.assertIn("git ls-files", knowledge)
         self.assertIn("Do not follow symlinks", knowledge)
         self.assertIn("Do not read entire large files", knowledge)
+
+    def test_tax_prep_migration_is_privacy_bounded_and_self_contained(self):
+        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
+        self.assertIn("tax-prep", rows)
+        self.assertEqual(rows["tax-prep"]["license"], "LICENSE")
+        content = (self.root / "skills/tax-prep/SKILL.md").read_text()
+        self.assertIn("Never commit taxpayer names", content)
+        self.assertIn("runtime-provided " + "`TAX_ROOT`", content)
+        self.assertNotIn("agent-framework", content)
+        for rel in [
+            "references/full-tax-pipeline.md",
+            "references/missing-forms-checker.md",
+            "references/receipt-organizer.md",
+            "scripts/pdf_text_overlay.py",
+        ]:
+            self.assertTrue((self.root / "skills/tax-prep" / rel).is_file())
 
     def test_research_workflow_migrations_are_public_and_portable(self):
         rows = {row["name"]: row for row in MODULE["catalog"](self.root)}

@@ -194,6 +194,12 @@
       "license": "LICENSE"
     },
     {
+      "name": "tax-prep",
+      "description": "Use when organizing, OCRing, reconciling, or auditing a tax-document package; checking for missing forms; categorizing receipts; or building a repeatable tax-preparation workflow from source documents. Keep taxpayer data outside the repository and treat generated OCR/extraction files as disposable working state.",
+      "path": "skills/tax-prep/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
       "name": "tool-hunter",
       "description": "Discover and shortlist applied AI tools, products, and GitHub repos that solve a given software engineering or productivity problem.",
       "path": "skills/tool-hunter/SKILL.md",
