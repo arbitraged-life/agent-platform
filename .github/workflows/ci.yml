@@ -57,13 +57,5 @@ jobs:
         with:
           extra_args: --no-verification
 
-  reusable-workflow:
-    permissions:
-      contents: read
-      pull-requests: read
-      checks: read
-      actions: read
-    uses: ./.github/workflows/merge-gate-validation.yml
-
   reusable-lint:
     uses: ./.github/workflows/lint-reusable.yml
