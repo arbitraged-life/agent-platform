@@ -1,0 +1,9 @@
+name: qlty-eval
+on:
+  workflow_dispatch:
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show deliberately invalid context reference
+        run: echo "${{ github.event.not_a_real_property }}"
