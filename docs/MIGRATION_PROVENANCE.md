@@ -90,3 +90,5 @@ Apache-2.0 license. Detailed legacy evidence remains private; publication depend
 the public files and tests in this repository.
 
 Three additional generic migration replacements were independently authored from capability requirements and audit findings rather than copied from held legacy prose: `headroom`, `markitdown`, and `officecli`. Their public contracts preserve the useful capability boundaries while discarding historical benchmark assertions, private-environment assumptions, floating installation behavior, and agent-wide mutation defaults. Each uses this repository's `LICENSE`.
+
+Three generic policy/extraction replacements were independently authored from migration requirements rather than copied from held legacy prose: `cross-language-purity`, `prompt-refiner`, and `ultragrokking-articles`. The replacements fail closed on unavailable verification, avoid private-environment rules and implicit prompt persistence, and make executable guardrails proportional rather than mandatory.
