@@ -9,8 +9,8 @@ Mergify is the merge authority for `agent-platform`.
 - Safe Renovate updates receive `renovate-automerge`; security updates remain manual.
 - Human-authored pull requests opt into automation with the `merge-ready` label.
 - Auto-Merge sends eligible pull requests to the Merge Queue.
-- The Merge Queue uses serial, single-PR squash merges and revalidates the required
-  GitHub Actions checks against the queue candidate.
+- The Merge Queue uses serial, single-PR squash merges with single-step in-place
+  checks, preserving compatibility with GitHub's strict up-to-date required-status policy.
 - Workflow Automation is limited to non-merge housekeeping; currently it comments
   when a pull request has a merge conflict.
 - Security fixes have high queue priority; routine Renovate updates have low priority.
