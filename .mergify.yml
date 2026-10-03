@@ -29,7 +29,7 @@ merge_protections:
       - check-success = @github-actions/reusable-lint / swift
       - check-success = @github-actions/reusable-lint / shell
       - check-success = @gitguardian/GitGuardian Security Checks
-      - check-success = @socket-security/Socket Security: Pull Request Alerts
+      - "check-success = @socket-security/Socket Security: Pull Request Alerts"
 
 queue_rules:
   - name: default
