@@ -11,12 +11,24 @@
   "prConcurrentLimit": 5,
   "prHourlyLimit": 2,
   "automerge": false,
+  "automergeType": "pr-comment",
+  "automergeComment": "@Mergifyio queue",
   "rebaseWhen": "behind-base-branch",
   "packageRules": [
     {
+      "description": "Queue non-major updates through Mergify after Renovate sees green checks",
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "automerge": true
+    },
+    {
       "description": "Require explicit approval before creating major-update PRs",
       "matchUpdateTypes": ["major"],
-      "dependencyDashboardApproval": true
+      "dependencyDashboardApproval": true,
+      "automerge": false
     }
-  ]
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true
+  }
 }
