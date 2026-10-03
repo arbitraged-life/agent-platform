@@ -27,7 +27,7 @@ class SkillTests(unittest.TestCase):
 
     def test_discovery_and_installed_hashes(self):
         rows = MODULE['catalog'](self.root)
-        self.assertEqual(len(rows), 33)
+        self.assertEqual(len(rows), 34)
         lock = MODULE['verify_upstream'](self.root)
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
@@ -67,6 +67,16 @@ class SkillTests(unittest.TestCase):
         self.assertIn("git ls-files", knowledge)
         self.assertIn("Do not follow symlinks", knowledge)
         self.assertIn("Do not read entire large files", knowledge)
+
+    def test_chatgpt_harness_is_portable_and_runtime_bounded(self):
+        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
+        self.assertIn("chatgpt-harness", rows)
+        self.assertEqual(rows["chatgpt-harness"]["license"], "LICENSE")
+        content = (self.root / "skills/chatgpt-harness/SKILL.md").read_text()
+        self.assertIn("Desktop Commander", content)
+        self.assertIn("enforcement hooks remain runtime-enforced", content)
+        self.assertIn("verify the requested outcome", content)
+        self.assertNotIn("agent-framework", content)
 
     def test_generic_wrapper_replacements_are_bounded(self):
         rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
