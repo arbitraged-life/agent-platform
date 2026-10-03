@@ -33,10 +33,21 @@ merge_protections:
       - check-success = @gitguardian/GitGuardian Security Checks
       - "check-success = @socket-security/Socket Security: Pull Request Alerts"
 
+  - name: conventional pull request title
+    description: The squash commit inherits the PR title, so main history must use Conventional Commits.
+    if:
+      - base = main
+    success_conditions:
+      - 'title ~= ^(fix|feat|docs|style|refactor|perf|test|build|ci|chore|revert)(?:\(.+\))?: .+'
+
 queue_rules:
   - name: default
     batch_size: 1
     merge_method: squash
+    commit_message_format:
+      title: pr-title
+      body: pr-body
+      trailers: []
     queue_conditions:
       - base = main
       - check-success = @github-actions/validate (ubuntu-24.04)
@@ -70,3 +81,34 @@ pull_request_rules:
     actions:
       comment:
         message: "Mergify detected a merge conflict. Resolve it before queueing this pull request."
+
+  - name: mark stale pull requests
+    description: Mark inactive PRs stale after 60 days while exempting pinned/security/keep work.
+    conditions:
+      - base = main
+      - -closed
+      - -label = stale
+      - -label = pinned
+      - -label = security
+      - -label = keep
+      - updated-at < 60 days ago
+    actions:
+      label:
+        add:
+          - stale
+      comment:
+        message: "This pull request has had no activity for 60 days and is now marked stale. Comment, update it, or remove the stale label to keep it open."
+
+  - name: close stale pull requests
+    description: Close stale PRs after a further 14 days without activity.
+    conditions:
+      - base = main
+      - -closed
+      - label = stale
+      - -label = pinned
+      - -label = security
+      - -label = keep
+      - updated-at < 14 days ago
+    actions:
+      close:
+        message: "Closing after the 14-day stale grace period. Reopen if this work becomes active again."
