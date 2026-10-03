@@ -27,7 +27,7 @@ class SkillTests(unittest.TestCase):
 
     def test_discovery_and_installed_hashes(self):
         rows = MODULE['catalog'](self.root)
-        self.assertEqual(len(rows), 32)
+        self.assertEqual(len(rows), 33)
         lock = MODULE['verify_upstream'](self.root)
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
@@ -146,6 +146,17 @@ class SkillTests(unittest.TestCase):
         self.assertIn("static by default", inspector)
         self.assertIn("No findings", inspector)
         self.assertIn("separate authorized action", inspector)
+
+    def test_turnstile_replacement_is_secret_safe_and_non_destructive(self):
+        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
+        self.assertIn("turnstile-spin", rows)
+        self.assertEqual(rows["turnstile-spin"]["license"], "LICENSE")
+        content = (self.root / "skills/turnstile-spin/SKILL.md").read_text()
+        self.assertIn("server-only credential material", content)
+        self.assertIn("Do not trust the presence of a client token alone", content)
+        self.assertIn("does not own deployment", content)
+        self.assertIn("recursively delete an arbitrary deployment directory", content)
+        self.assertIn("provider-supported test credentials", content)
 
     def test_original_skill_references_are_validated(self):
         path = self.root / 'skills/repository-safe-cleanup/SKILL.md'
