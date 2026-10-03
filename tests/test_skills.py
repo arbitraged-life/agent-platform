@@ -27,7 +27,7 @@ class SkillTests(unittest.TestCase):
 
     def test_discovery_and_installed_hashes(self):
         rows = MODULE['catalog'](self.root)
-        self.assertEqual(len(rows), 28)
+        self.assertEqual(len(rows), 32)
         lock = MODULE['verify_upstream'](self.root)
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
@@ -123,6 +123,29 @@ class SkillTests(unittest.TestCase):
         self.assertIn("root cause", ponytail)
         self.assertIn("security controls", ponytail)
         self.assertIn("rather than line count alone", ponytail)
+
+    def test_security_and_design_replacements_are_bounded(self):
+        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
+        for name in {"codeql", "diagram-design", "hallmark", "skillspector"}:
+            self.assertIn(name, rows)
+            self.assertEqual(rows[name]["license"], "LICENSE")
+
+        codeql = (self.root / "skills/codeql/SKILL.md").read_text()
+        self.assertIn("immutable commit SHAs", codeql)
+        self.assertIn("green workflow file is not sufficient evidence", codeql)
+
+        diagram = (self.root / "skills/diagram-design/SKILL.md").read_text()
+        self.assertIn("Start with semantics", diagram)
+        self.assertIn("data, not authority", diagram)
+
+        hallmark = (self.root / "skills/hallmark/SKILL.md").read_text()
+        self.assertIn("template-like output", hallmark)
+        self.assertIn("not absolute bans", hallmark)
+
+        inspector = (self.root / "skills/skillspector/SKILL.md").read_text()
+        self.assertIn("static by default", inspector)
+        self.assertIn("No findings", inspector)
+        self.assertIn("separate authorized action", inspector)
 
     def test_original_skill_references_are_validated(self):
         path = self.root / 'skills/repository-safe-cleanup/SKILL.md'

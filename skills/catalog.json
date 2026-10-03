@@ -50,9 +50,21 @@
       "license": "licenses/cloudflare-skills-LICENSE"
     },
     {
+      "name": "codeql",
+      "description": "Configure, run, and troubleshoot CodeQL scanning using current repository language evidence, pinned workflow actions, least-privilege permissions, and explicit SARIF/result verification.",
+      "path": "skills/codeql/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
       "name": "cross-language-purity",
       "description": "Verify repository-level invariants across languages and configuration using fail-closed, repository-root-aware checks with explicit evidence and no private-environment assumptions.",
       "path": "skills/cross-language-purity/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
+      "name": "diagram-design",
+      "description": "Create clear architecture, flow, sequence, state, data-model, and other technical diagrams from explicit semantics, with readable layout, stable labels, and verifiable source-to-visual fidelity.",
+      "path": "skills/diagram-design/SKILL.md",
       "license": "LICENSE"
     },
     {
@@ -71,6 +83,12 @@
       "name": "execution-router",
       "description": "Use when a task requires connected-app actions, local filesystem or shell work, a handoff between execution surfaces, or a decision about which reasoning/execution brain should act. Also use when setting up execution routing for an agent or scheduled workflow.",
       "path": "skills/execution-router/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
+      "name": "hallmark",
+      "description": "Design or audit application interfaces for deliberate visual hierarchy, coherent design language, responsive behavior, and avoidance of repetitive template-like UI patterns.",
+      "path": "skills/hallmark/SKILL.md",
       "license": "LICENSE"
     },
     {
@@ -137,6 +155,12 @@
       "name": "session-close-out",
       "description": "Determine whether an engineering session is safe to close by checking only the repositories and obligations actually observed, with explicit coverage and no hidden cleanup.",
       "path": "skills/session-close-out/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
+      "name": "skillspector",
+      "description": "Perform a bounded pre-install security review of an agent skill, plugin, or MCP package by inspecting its instructions, scripts, dependencies, permissions, and data flows before execution.",
+      "path": "skills/skillspector/SKILL.md",
       "license": "LICENSE"
     },
     {

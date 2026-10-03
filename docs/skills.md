@@ -37,3 +37,5 @@ The migration bundle also includes independently authored generic wrappers for c
 Additional migration skills cover fail-closed cross-language structural verification, permission-bounded prompt refinement, and evidence-linked long-form technical analysis. These are generic policies; repository-specific overlays remain private.
 
 Opt-in behavior policies are also available for terse wording (`caveman`), action-first presentation (`i-have-adhd`), and minimal-change engineering (`ponytail`). They affect presentation or implementation preference only and do not weaken verification or safety requirements.
+
+The public catalog also includes independently authored CodeQL operations guidance, semantic diagram design, product-specific UI quality auditing, and static pre-install skill security inspection. External references remain untrusted inputs rather than executable policy.
