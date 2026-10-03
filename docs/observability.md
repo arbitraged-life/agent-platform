@@ -51,3 +51,37 @@ so repeated submissions retain both identities. Duplicate-conflict responses sti
 surface as failures; stable IDs do not imply durable delivery or automatic recovery.
 
 Opik requires [UUIDv7 ingestion IDs](https://www.comet.com/docs/opik/self-host/configure/uuid_validation). Destination timestamp windows can reject historical replay; this exporter preserves event time and surfaces rejection rather than rewriting history.
+
+
+## Operational control-plane export
+
+Opik remains the detailed AI trace and evaluation destination. PostHog is a separate,
+privacy-safe operational projection intended for cross-system dashboards and trend
+analysis. `runtime/observability/posthog.mjs` validates the same canonical
+`agent.turn.completed` event, then emits one `personal_os_agent_turn_completed`
+event containing only normalized metadata.
+
+The PostHog projection includes the canonical event/run/task IDs, runtime, agent,
+model/provider, status, duration, attempt, tool counts, usage totals, reported cost,
+and `opik_trace_id`. The Opik trace ID is exactly the canonical event UUID, so a
+dashboard record can drill into the corresponding detailed trace without copying
+prompts, responses, tool arguments, paths, raw exceptions, or credentials into
+PostHog.
+
+PostHog configuration is explicit and versioned through
+`schemas/posthog-config.schema.json`. It contains the HTTPS capture endpoint, the
+environment-variable name holding the project token, and a stable pseudonymous
+`distinct_id`; it never contains the token itself. The exporter refuses redirects,
+bounds request time, snapshots and validates the event before network activity, and
+does not include provider response bodies in errors.
+
+This split is intentional:
+
+- **PostHog**: Personal OS / cross-system operational events, dashboards, trends.
+- **Opik**: detailed agent/LLM traces, datasets, evaluations, experiments.
+- **External ledger**: durable scheduled-run/acceptance records where the private
+  deployment defines one.
+
+The PostHog exporter is a secondary projection. Private consumers decide whether a
+PostHog delivery failure is blocking or fail-open; the public module itself always
+reports delivery failure rather than fabricating success.
