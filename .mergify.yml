@@ -2,12 +2,21 @@ merge_queue:
   mode: serial
   max_parallel_checks: 1
 
-queue_rules:
-  - name: default
-    batch_size: 1
-    merge_method: squash
-    queue_conditions:
+merge_protections_settings:
+  reporting_method: check-runs
+  post_comment: false
+  auto_merge_conditions:
+    - and:
+        - label = renovate-automerge
+        - -label = security
+
+merge_protections:
+  - name: main branch validation
+    description: Require deterministic CI and security checks before Mergify can merge to main.
+    if:
       - base = main
+    success_conditions:
+      - "#changes-requested-reviews-by = 0"
       - check-success = @github-actions/validate (ubuntu-24.04)
       - check-success = @github-actions/validate (macos-14)
       - check-success = @github-actions/secrets
@@ -19,3 +28,32 @@ queue_rules:
       - check-success = @github-actions/reusable-lint / cpp
       - check-success = @github-actions/reusable-lint / swift
       - check-success = @github-actions/reusable-lint / shell
+      - check-success = @gitguardian/GitGuardian Security Checks
+      - check-success = @socket-security/Socket Security: Pull Request Alerts
+
+queue_rules:
+  - name: default
+    batch_size: 1
+    merge_method: squash
+    queue_conditions:
+      - base = main
+
+priority_rules:
+  - name: security fixes first
+    conditions:
+      - title ~= \[security\]
+    priority: high
+
+  - name: routine Renovate updates
+    conditions:
+      - author = renovate[bot]
+    priority: low
+
+pull_request_rules:
+  - name: notify merge conflicts
+    conditions:
+      - base = main
+      - conflict
+    actions:
+      comment:
+        message: "Mergify detected a merge conflict. Resolve it before queueing this pull request."
