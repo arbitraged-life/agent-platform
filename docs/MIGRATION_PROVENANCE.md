@@ -88,3 +88,5 @@ They intentionally remove account-specific roots, hidden runtime dependencies, u
 host installation/scanning, and unsupported completeness claims. They carry the platform
 Apache-2.0 license. Detailed legacy evidence remains private; publication depends only on
 the public files and tests in this repository.
+
+Three additional generic migration replacements were independently authored from capability requirements and audit findings rather than copied from held legacy prose: `headroom`, `markitdown`, and `officecli`. Their public contracts preserve the useful capability boundaries while discarding historical benchmark assertions, private-environment assumptions, floating installation behavior, and agent-wide mutation defaults. Each uses this repository's `LICENSE`.

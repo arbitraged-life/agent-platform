@@ -31,3 +31,5 @@ These reference skills assume the capabilities described by each skill. In
 particular, web-perf requires Chrome DevTools tracing; a generic browser tool is
 not an equivalent replacement. Installing documentation does not install a
 runtime, grant tool permissions, or authorize deployment/provider spending.
+
+The migration bundle also includes independently authored generic wrappers for context compression (`headroom`), document-to-Markdown conversion (`markitdown`), and native Office document editing (`officecli`). These skills require pinned tooling, bounded data/installation scope, and explicit verification rather than inheriting historical benchmark claims.

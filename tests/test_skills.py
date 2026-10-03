@@ -27,7 +27,7 @@ class SkillTests(unittest.TestCase):
 
     def test_discovery_and_installed_hashes(self):
         rows = MODULE['catalog'](self.root)
-        self.assertEqual(len(rows), 19)
+        self.assertEqual(len(rows), 22)
         lock = MODULE['verify_upstream'](self.root)
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
@@ -67,6 +67,25 @@ class SkillTests(unittest.TestCase):
         self.assertIn("git ls-files", knowledge)
         self.assertIn("Do not follow symlinks", knowledge)
         self.assertIn("Do not read entire large files", knowledge)
+
+    def test_generic_wrapper_replacements_are_bounded(self):
+        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
+        for name in {"headroom", "markitdown", "officecli"}:
+            self.assertIn(name, rows)
+            self.assertEqual(rows[name]["license"], "LICENSE")
+
+        headroom = (self.root / "skills/headroom/SKILL.md").read_text()
+        self.assertIn("Do not repeat vendor benchmark claims as local evidence", headroom)
+        self.assertIn("proxy or agent wrapper", headroom)
+
+        markitdown = (self.root / "skills/markitdown/SKILL.md").read_text()
+        self.assertIn("empty output is not success", markitdown)
+        self.assertIn("Do not silently upload private documents", markitdown)
+
+        office = (self.root / "skills/officecli/SKILL.md").read_text()
+        self.assertIn("Do not run vendor", office)
+        self.assertIn("Read the modified element back", office)
+        self.assertIn("Persistent agent configuration", office)
 
     def test_original_skill_references_are_validated(self):
         path = self.root / 'skills/repository-safe-cleanup/SKILL.md'
