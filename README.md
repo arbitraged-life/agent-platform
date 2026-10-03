@@ -19,9 +19,9 @@ line under the exact version pin. Compare that set with the metadata when
 updating the lock; installation verifies the selected artifact with `--require-hashes`.
 
 The platform contains the execution router, bounded review and remediation,
-portable skills, deterministic evaluations, and reusable validation, review,
-stale-item and merge-gate workflows. Additional components are admitted
-only after their own portability, provenance, and behavior checks pass.
+portable skills, deterministic evaluations, and reusable validation, review and
+stale-item workflows. Commodity dependency updates and merge coordination are
+delegated to Renovate and Mergify rather than maintained as platform runtime code.
 
 - [Execution router](docs/execution-router.md): explicit policy, bounded process
   execution, immutable approval records, and independently verified completion.
@@ -29,7 +29,6 @@ only after their own portability, provenance, and behavior checks pass.
   bounded attempts, isolated execution, and exact-revision publication checks.
 - [Release contract](docs/release-contract.md): immutable, digest-checked installs.
 - [Skills](docs/skills.md): catalog, provenance, licensing and consumer overlays.
-- [Merge coordinator](docs/merge-gate.md): trusted evidence, bounded scans and residual races.
 - [Migration provenance](docs/MIGRATION_PROVENANCE.md): source revisions and transformations.
 
 `./scripts/validate lint`, `test`, `eval`, and `security` select individual local

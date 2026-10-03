@@ -172,7 +172,9 @@ def main():
     if args.command in ['ci', 'test']:
         tests = sorted(str(p.relative_to(ROOT)) for p in ROOT.glob('tests/unit/*.test.mjs'))
         subprocess.run(['node', '--test', *tests], check=True, cwd=ROOT)
-        subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', '.github/scripts', '-p', 'test_*.py'], check=True, cwd=ROOT)
+        github_scripts = ROOT / '.github/scripts'
+        if github_scripts.is_dir():
+            subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', '.github/scripts', '-p', 'test_*.py'], check=True, cwd=ROOT)
         subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_*.py'], check=True, cwd=ROOT)
         for task in ['test', 'typecheck']:
             subprocess.run(['npm', 'run', task, '--prefix', 'skills/turnstile-spin/templates/worker'], check=True, cwd=ROOT)

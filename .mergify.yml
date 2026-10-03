@@ -1,0 +1,21 @@
+merge_queue:
+  mode: serial
+  max_parallel_checks: 1
+
+queue_rules:
+  - name: default
+    batch_size: 1
+    merge_method: squash
+    queue_conditions:
+      - base = main
+      - check-success = @github-actions/validate (ubuntu-24.04)
+      - check-success = @github-actions/validate (macos-14)
+      - check-success = @github-actions/secrets
+      - check-success = @github-actions/reusable-lint / secrets
+      - check-success = @github-actions/reusable-lint / detect
+      - check-success = @github-actions/reusable-lint / js
+      - check-success = @github-actions/reusable-lint / python
+      - check-success = @github-actions/reusable-lint / yaml
+      - check-success = @github-actions/reusable-lint / cpp
+      - check-success = @github-actions/reusable-lint / swift
+      - check-success = @github-actions/reusable-lint / shell
