@@ -32,6 +32,12 @@
       "license": "LICENSE"
     },
     {
+      "name": "chatgpt-harness",
+      "description": "Use when a ChatGPT task should follow repository harness conventions, load portable agent-platform skills, operate across connected tools, or approximate OMP/Codex behavior inside ChatGPT.",
+      "path": "skills/chatgpt-harness/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
       "name": "cleanup-verification-qa",
       "description": "Independently verify a cleanup diff against its audited decisions before merge or final removal.",
       "path": "skills/cleanup-verification-qa/SKILL.md",
