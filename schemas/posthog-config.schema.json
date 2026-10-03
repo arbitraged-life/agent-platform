@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PostHog operational telemetry configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "endpoint",
+    "credential_env",
+    "distinct_id"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "endpoint": {
+      "type": "string",
+      "pattern": "^https://[^?#]+$"
+    },
+    "credential_env": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "distinct_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f]+$"
+    }
+  }
+}
