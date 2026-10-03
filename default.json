@@ -1,0 +1,22 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": ["Shared Renovate policy for arbitraged-life platform repositories"],
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "dependencyDashboard": true,
+  "timezone": "America/Cancun",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "automerge": false,
+  "rebaseWhen": "behind-base-branch",
+  "packageRules": [
+    {
+      "description": "Require explicit approval before creating major-update PRs",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    }
+  ]
+}
