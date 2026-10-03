@@ -62,9 +62,27 @@
       "license": "LICENSE"
     },
     {
+      "name": "headroom",
+      "description": "Evaluate and use context-compression tooling with reproducible fixtures, explicit losslessness checks, bounded installation, and clear separation between library and proxy interception.",
+      "path": "skills/headroom/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
       "name": "javascript-typescript-jest",
       "description": "Write and review focused JavaScript or TypeScript Jest tests with explicit mock lifecycle, deterministic async behavior, and repository-consistent structure.",
       "path": "skills/javascript-typescript-jest/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
+      "name": "markitdown",
+      "description": "Convert documents to Markdown for downstream analysis using format-aware, version-pinned tooling with explicit OCR, privacy, and verification boundaries.",
+      "path": "skills/markitdown/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
+      "name": "officecli",
+      "description": "Create or edit DOCX, XLSX, and PPTX files with a version-pinned Office document CLI, explicit structural read-back, bounded host changes, and visual verification when available.",
+      "path": "skills/officecli/SKILL.md",
       "license": "LICENSE"
     },
     {
