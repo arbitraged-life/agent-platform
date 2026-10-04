@@ -32,6 +32,14 @@ TEST_PATTERNS = (
     re.compile(r"\.(test|spec)\.[^.]+$", re.I),
 )
 
+HARD_METRICS = {
+    "max_changed_files": "changed_files",
+    "max_additions": "additions",
+    "max_deletions": "deletions",
+    "max_total_changes": "total_changes",
+    "max_single_file_additions": "max_single_file_additions",
+}
+
 
 def load_config(path: Path | None) -> dict:
     config = {
@@ -118,10 +126,14 @@ def measure(diff: str) -> dict:
 def evaluate(metrics: dict, config: dict) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
-    for key, maximum in config["hard"].items():
-        value = metrics[key]
+    for budget_key, maximum in config["hard"].items():
+        metric_key = HARD_METRICS.get(budget_key)
+        if metric_key is None:
+            errors.append(f"unknown hard budget: {budget_key}")
+            continue
+        value = metrics[metric_key]
         if value > maximum:
-            errors.append(f"{key}={value} exceeds hard maximum {maximum}")
+            errors.append(f"{metric_key}={value} exceeds hard maximum {maximum}")
 
     comment_max = config["advisory"].get("max_comment_only_addition_ratio")
     if comment_max is not None and metrics["comment_only_addition_ratio"] > comment_max:
