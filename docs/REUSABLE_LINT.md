@@ -1,23 +1,29 @@
-# Reusable lint contract
+# Generic code-quality checks
 
-`lint-reusable.yml` detects tracked Swift, Python, JavaScript/TypeScript, shell,
-YAML and C/C++ sources. Vendored/generated directory names are excluded from
-language discovery. Each linter retains its native configuration behavior.
-Rust was never checked by the source workflow and is not advertised here.
+The repository-owned reusable lint workflow was retired on 2026-10-03 after a
+controlled Qlty Cloud bake-off.
 
-Call the workflow using an immutable commit SHA. Inputs `strict` and
-`swift_strict` preserve the existing interface. Ordinary lint findings are
-advisory by default; strict mode fails on findings, and Swift strict mode also
-fails on warnings. Installation failures and secret findings block in either
-mode. Biome parse/configuration/internal errors also block: only structured lint,
-formatting and assist diagnostics are advisory. Full Git history is scanned for
-secrets, including deleted content. No inherited secrets, private repository access or provider calls are used.
+Qlty Cloud is now the canonical generic code-quality gate for pull requests. It
+publishes the `qlty check` commit status and covers the commodity checks that
+were previously maintained here (including Ruff, Bandit, ShellCheck, formatting,
+and additional static analyzers).
 
-Actions and tool versions are pinned. Downloaded SwiftLint and Gitleaks archives
-are SHA-256 checked before extraction. Ubuntu package versions come from the
-Ubuntu 24.04 signed repository; hosted runner images and OS transitive packages
-remain externally maintained, so this is not a hermetic build environment.
+The GitHub Actions CI remains responsible for repository-specific validation,
+platform/runtime tests, and the independent TruffleHog secret job. Mergify
+requires `qlty check` plus those deterministic checks before merge.
 
-A reusable workflow runs in the caller's billing and permission context. Hosting
-its definition publicly does not turn private caller jobs into public CI.
-Public platform CI validates workflow behavior with synthetic fixtures.
+The old reusable workflow had no active external default-branch consumers when
+retired. Migration provenance remains in `docs/MIGRATION_PROVENANCE.md` and
+`docs/migration/validation/reusable-lint.json`.
+
+## Acceptance evidence
+
+A controlled PR seeded:
+
+- Ruff F401 (unused Python import)
+- Bandit B404/B602 (subprocess / `shell=True`)
+- ShellCheck SC2086 and SC2164
+
+Qlty reported all six issues and failed `qlty check`. SonarQube Cloud reported
+zero new issues on the same fixture. The prior GitHub Actions linters annotated
+findings but remained advisory/green.
