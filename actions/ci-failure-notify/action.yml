@@ -1,0 +1,70 @@
+name: Concise CI failure notification
+description: Post one bounded failure notification to an HTTPS webhook without polling.
+inputs:
+  repository:
+    description: Repository name, for example owner/repo.
+    required: true
+  workflow:
+    description: Workflow name that failed.
+    required: true
+  conclusion:
+    description: Workflow conclusion.
+    required: true
+  run-url:
+    description: Canonical URL for the failed run.
+    required: true
+  sha:
+    description: Commit SHA tested by the failed run.
+    required: true
+  webhook-url:
+    description: HTTPS endpoint that accepts a JSON notification payload.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Send concise failure notification
+      if: ${{ inputs.conclusion == 'failure' }}
+      shell: bash
+      env:
+        CI_NOTIFY_REPOSITORY: ${{ inputs.repository }}
+        CI_NOTIFY_WORKFLOW: ${{ inputs.workflow }}
+        CI_NOTIFY_RUN_URL: ${{ inputs.run-url }}
+        CI_NOTIFY_SHA: ${{ inputs.sha }}
+        CI_NOTIFY_WEBHOOK_URL: ${{ inputs.webhook-url }}
+      run: |
+        python3 - <<'PY'
+        import json
+        import os
+        import urllib.parse
+        import urllib.request
+
+        url = os.environ["CI_NOTIFY_WEBHOOK_URL"]
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise SystemExit("webhook-url must be an absolute HTTPS URL")
+
+        repository = os.environ["CI_NOTIFY_REPOSITORY"]
+        workflow = os.environ["CI_NOTIFY_WORKFLOW"]
+        run_url = os.environ["CI_NOTIFY_RUN_URL"]
+        sha = os.environ["CI_NOTIFY_SHA"]
+        short_sha = sha[:12]
+        message = f"CI failed: {repository} · {workflow} · {short_sha} · {run_url}"
+        payload = json.dumps({
+            "text": message,
+            "repository": repository,
+            "workflow": workflow,
+            "sha": sha,
+            "run_url": run_url,
+            "status": "failure",
+        }).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            if not 200 <= response.status < 300:
+                raise SystemExit(f"notification webhook returned HTTP {response.status}")
+        print(message)
+        PY
