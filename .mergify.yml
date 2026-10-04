@@ -22,34 +22,31 @@ merge_protections:
       - check-success = @github-actions/validate (ubuntu-24.04)
       - check-success = @github-actions/validate (macos-14)
       - check-success = @github-actions/secrets
-      - check-success = @github-actions/reusable-lint / secrets
-      - check-success = @github-actions/reusable-lint / detect
-      - check-success = @github-actions/reusable-lint / js
-      - check-success = @github-actions/reusable-lint / python
-      - check-success = @github-actions/reusable-lint / yaml
-      - check-success = @github-actions/reusable-lint / cpp
-      - check-success = @github-actions/reusable-lint / swift
-      - check-success = @github-actions/reusable-lint / shell
+      - check-success = qlty check
       - check-success = @gitguardian/GitGuardian Security Checks
       - "check-success = @socket-security/Socket Security: Pull Request Alerts"
+
+  - name: conventional pull request title
+    description: The squash commit inherits the PR title, so main history must use Conventional Commits.
+    if:
+      - base = main
+    success_conditions:
+      - 'title ~= ^(fix|feat|docs|style|refactor|perf|test|build|ci|chore|revert)(?:\(.+\))?: .+'
 
 queue_rules:
   - name: default
     batch_size: 1
     merge_method: squash
+    commit_message_format:
+      title: pr-title
+      body: pr-body
+      trailers: []
     queue_conditions:
       - base = main
       - check-success = @github-actions/validate (ubuntu-24.04)
       - check-success = @github-actions/validate (macos-14)
       - check-success = @github-actions/secrets
-      - check-success = @github-actions/reusable-lint / secrets
-      - check-success = @github-actions/reusable-lint / detect
-      - check-success = @github-actions/reusable-lint / js
-      - check-success = @github-actions/reusable-lint / python
-      - check-success = @github-actions/reusable-lint / yaml
-      - check-success = @github-actions/reusable-lint / cpp
-      - check-success = @github-actions/reusable-lint / swift
-      - check-success = @github-actions/reusable-lint / shell
+      - check-success = qlty check
 
 priority_rules:
   - name: security fixes first
@@ -70,3 +67,16 @@ pull_request_rules:
     actions:
       comment:
         message: "Mergify detected a merge conflict. Resolve it before queueing this pull request."
+
+  - name: close inactive pull requests
+    description: Close non-exempt PRs after 74 days without activity; any new activity resets the clock.
+    conditions:
+      - base = main
+      - -closed
+      - -label = pinned
+      - -label = security
+      - -label = keep
+      - updated-at < 74 days ago
+    actions:
+      close:
+        message: "Closing after 74 days without activity. Reopen if this work becomes active again."
