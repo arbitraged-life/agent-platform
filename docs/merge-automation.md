@@ -23,3 +23,25 @@ queued manually.
 A failed required check or merge conflict leaves the pull request unmerged. Workflow
 Automation may comment on conflicts, but only Merge Protections plus the Merge Queue
 authorize an automated merge.
+
+
+## Renovate ownership
+
+Renovate is the only dependency pull-request producer for the active platform
+repositories. The shared `default.json` preset uses Renovate
+`config:best-practices`, which already supplies weekly lock-file maintenance,
+Docker digest pinning, GitHub Action SHA pinning, configuration migrations,
+development-dependency pinning, abandoned-package detection, and the npm
+minimum-release-age safeguard.
+
+To reduce PR noise without coupling unrelated application upgrades, the shared
+policy groups only low-coupling infrastructure families:
+
+- GitHub Actions minor/patch/pin/digest updates
+- Terraform provider minor/patch/pin/digest updates
+- CircleCI minor/patch/pin/digest updates
+
+Application/runtime package updates remain independently reviewable. Multiple
+major releases are separated into sequential major upgrades. Renovate never
+merges directly; it labels eligible stable updates and Mergify remains the sole
+automated merge authority.
