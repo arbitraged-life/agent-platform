@@ -31,13 +31,13 @@ runs:
         CI_NOTIFY_RUN_URL: ${{ inputs.run-url }}
         CI_NOTIFY_SHA: ${{ inputs.sha }}
         CI_NOTIFY_WEBHOOK_URL: ${{ inputs.webhook-url }}
+        CI_NOTIFY_PAYLOAD_FILE: ${{ runner.temp }}/ci-failure-notification.json
       run: |
         python3 - <<'PY'
+        import ipaddress
         import json
         import os
-        import urllib.error
         import urllib.parse
-        import urllib.request
 
         values = {
             "repository": os.environ["CI_NOTIFY_REPOSITORY"].strip(),
@@ -56,8 +56,22 @@ runs:
 
         url = values["webhook-url"]
         parsed = urllib.parse.urlparse(url)
-        if parsed.scheme != "https" or not parsed.netloc:
-            raise SystemExit("webhook-url must be an absolute HTTPS URL")
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.fragment
+        ):
+            raise SystemExit("webhook-url must be an absolute HTTPS URL without userinfo or fragment")
+        if parsed.hostname.casefold() == "localhost":
+            raise SystemExit("webhook-url must not target localhost")
+        try:
+            address = ipaddress.ip_address(parsed.hostname)
+        except ValueError:
+            address = None
+        if address and not address.is_global:
+            raise SystemExit("webhook-url must not use a non-public IP literal")
 
         repository = values["repository"]
         workflow = values["workflow"]
@@ -65,32 +79,32 @@ runs:
         sha = values["sha"]
         short_sha = sha[:12]
         message = f"CI failed: {repository} · {workflow} · {short_sha} · {run_url}"
-        payload = json.dumps({
+        payload = {
             "text": message,
             "repository": repository,
             "workflow": workflow,
             "sha": sha,
             "run_url": run_url,
             "status": "failure",
-        }).encode("utf-8")
-        request = urllib.request.Request(
-            url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-
-        class NoRedirect(urllib.request.HTTPRedirectHandler):
-            def redirect_request(self, req, fp, code, msg, headers, newurl):
-                return None
-
-        opener = urllib.request.build_opener(NoRedirect)
-        try:
-            with opener.open(request, timeout=10):
-                pass
-        except urllib.error.HTTPError as exc:
-            if 300 <= exc.code < 400:
-                raise SystemExit("notification webhook redirects are not allowed") from None
-            raise SystemExit(f"notification webhook returned HTTP {exc.code}") from None
+        }
+        with open(os.environ["CI_NOTIFY_PAYLOAD_FILE"], "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
         print(message)
         PY
+
+        if [ "$CI_NOTIFY_CONCLUSION" != "failure" ]; then
+          exit 0
+        fi
+
+        curl \
+          --fail-with-body \
+          --silent \
+          --show-error \
+          --proto '=https' \
+          --max-redirs 0 \
+          --connect-timeout 5 \
+          --max-time 10 \
+          --noproxy '*' \
+          --header 'Content-Type: application/json' \
+          --data-binary "@$CI_NOTIFY_PAYLOAD_FILE" \
+          "$CI_NOTIFY_WEBHOOK_URL"

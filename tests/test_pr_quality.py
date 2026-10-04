@@ -289,11 +289,13 @@ class TestExamples(unittest.TestCase):
         self.assertEqual(pr_config, self.pr.DEFAULT)
         self.assertEqual(budget_config["schema_version"], 1)
 
-    def test_ci_failure_action_has_required_input_and_redirect_guards(self):
+    def test_ci_failure_action_has_required_input_and_transport_guards(self):
         action = (ROOT / "actions/ci-failure-notify/action.yml").read_text(encoding="utf-8")
         self.assertIn("required action inputs are empty", action)
-        self.assertIn("class NoRedirect", action)
-        self.assertIn("notification webhook redirects are not allowed", action)
+        self.assertIn("--proto '=https'", action)
+        self.assertIn("--max-redirs 0", action)
+        self.assertIn("--noproxy '*'", action)
+        self.assertNotIn("urllib.request", action)
 
 
 if __name__ == "__main__":
