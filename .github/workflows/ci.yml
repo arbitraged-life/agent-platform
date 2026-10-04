@@ -72,3 +72,5 @@ jobs:
         with:
           extra_args: --no-verification
 
+  reusable-lint:
+    uses: ./.github/workflows/lint-reusable.yml
