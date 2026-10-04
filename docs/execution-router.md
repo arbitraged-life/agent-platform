@@ -17,17 +17,19 @@ a routing choice, not an escalation hierarchy.
 
 ### Desktop Commander transport selection
 
-If ChatGPT has multiple Desktop Commander paths to the same machine, the
-private/direct path should be selected first when healthy: for example an
-OpenAI Secure MCP Tunnel that terminates at the machine's local stdio Desktop
-Commander. A vendor-hosted Remote Desktop Commander bridge is a fallback for
-surfaces or incidents where the private/direct path is unavailable. Transport
-selection does not change state ownership or authorization.
+Transport preference is consumer-owned deployment policy. The reusable
+`routeTask` decision stops at `chatgpt-local`; transport sub-selection within
+that route is performed by the consuming controller using its trusted
+configuration rather than a universal private/direct or hosted preference.
 
-Never blindly retry a failed mutating call over the fallback. Verify whether the
-first path changed local state, then continue or retry deliberately. Keep the
-hosted bridge installed when it provides useful resilience, but do not spend its
-quota for ordinary work while the private/direct path is healthy.
+Treat the selected transport and target device as part of the execution context:
+different devices may intentionally expose different filesystems, permissions,
+or sandboxes. A fallback used for replay must resolve to the same target device.
+Changing target devices is a new explicitly authorized operation, not a retry.
+Before same-device replay, establish that the original invocation has terminated,
+or use an idempotency/operation-status mechanism that makes replay safe; then
+inspect authoritative target state. Transport selection does not change
+ownership, authorization, or approval boundaries.
 
 ## Ownership
 
