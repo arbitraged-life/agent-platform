@@ -1,0 +1,9 @@
+# Example only. Replace every placeholder with real repository/team handles.
+# Do not deploy placeholders to a live repository.
+
+* @ORG/repo-maintainers
+
+# Prefer ownership by stable architectural boundary, not file extension.
+src/frontend/ @ORG/frontend-reviewers
+src/backend/ @ORG/backend-reviewers
+.github/ @ORG/platform-reviewers
