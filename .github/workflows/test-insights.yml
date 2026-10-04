@@ -1,0 +1,72 @@
+name: Test Insights
+
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */12 * * 1-5'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-insights-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      RUN_COUNT: ${{ github.event_name == 'schedule' && 5 || 1 }}
+    steps:
+      - name: Harden Runner
+        if: ${{ github.event.repository.private == false }}
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - name: Check Test Insights credential availability
+        id: uploader
+        env:
+          MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
+        shell: bash
+        run: |
+          if [ -n "$MERGIFY_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        if: steps.uploader.outputs.available == 'true'
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        if: steps.uploader.outputs.available == 'true'
+        with:
+          node-version: '24.14.0'
+      - name: Run Node tests with JUnit
+        id: tests
+        if: steps.uploader.outputs.available == 'true'
+        continue-on-error: true
+        shell: bash
+        run: |
+          failed=0
+          for i in $(seq "$RUN_COUNT"); do
+            node --test \
+              --test-reporter=junit \
+              --test-reporter-destination="test-results-$i.xml" \
+              tests/unit/*.test.mjs || failed=1
+          done
+          exit "$failed"
+      - name: Upload test results to Mergify Test Insights
+        if: always() && steps.uploader.outputs.available == 'true'
+        uses: Mergifyio/gha-mergify-ci@ce0d6bef01217d90fb9e908e6966b0f6f4ea26d5 # v26
+        with:
+          action: junit-process
+          token: ${{ secrets.MERGIFY_TOKEN }}
+          report_path: test-results-*.xml
+          job_name: node-tests
+          test_step_outcome: ${{ steps.tests.outcome }}
+      - name: Preserve test failure
+        if: always() && steps.uploader.outputs.available == 'true' && steps.tests.outcome == 'failure'
+        run: exit 1

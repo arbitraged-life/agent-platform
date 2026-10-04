@@ -103,7 +103,8 @@ class ReusableLintTests(unittest.TestCase):
         self.assertNotIn('continue-on-error', job)
         for step in job['steps']:
             self.assertNotIn('continue-on-error', step)
-        self.assertEqual(job['steps'][0]['with']['fetch-depth'], 0)
+        checkout = next(step for step in job['steps'] if step.get('uses', '').startswith('actions/checkout@'))
+        self.assertEqual(checkout['with']['fetch-depth'], 0)
         self.assertIn('git . --log-opts="--all"', script('secrets'))
         self.assertLess(script('secrets').index('sha256sum --check'),
                         script('secrets').index('tar -xzf'))
