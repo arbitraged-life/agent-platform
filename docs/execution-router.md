@@ -17,17 +17,18 @@ a routing choice, not an escalation hierarchy.
 
 ### Desktop Commander transport selection
 
-Transport preference is consumer-owned deployment policy. If more than one
-authorized Desktop Commander path is available, the reusable router follows the
-trusted consuming configuration instead of assuming a private/direct or hosted
-transport is universally primary.
+Transport preference is consumer-owned deployment policy. The reusable
+`routeTask` decision stops at `chatgpt-local`; transport sub-selection within
+that route is performed by the consuming controller using its trusted
+configuration rather than a universal private/direct or hosted preference.
 
 Treat the selected transport and target device as part of the execution identity:
 different devices may intentionally expose different filesystems, permissions,
-or sandboxes. Never blindly replay a failed mutating operation through another
-transport. First establish that the original invocation has terminated, or use
-an idempotency/operation-status mechanism that makes replay safe; then inspect
-authoritative target state before retrying. Transport selection does not change
+or sandboxes. A fallback used for replay must resolve to the same target device.
+Changing target devices is a new explicitly authorized operation, not a retry.
+Before same-device replay, establish that the original invocation has terminated,
+or use an idempotency/operation-status mechanism that makes replay safe; then
+inspect authoritative target state. Transport selection does not change
 ownership, authorization, or approval boundaries.
 
 ## Ownership
