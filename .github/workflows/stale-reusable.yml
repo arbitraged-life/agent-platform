@@ -1,0 +1,54 @@
+name: Close Stale Issues (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      runs_on:
+        description: Runner label. Default GitHub-hosted free; pass `self-hosted` for private consumers when needed.
+        type: string
+        default: ubuntu-latest
+      days-before-stale:
+        type: number
+        default: 60
+      days-before-close:
+        type: number
+        default: 14
+      stale-issue-label:
+        type: string
+        default: stale
+      exempt-issue-labels:
+        type: string
+        default: 'pinned,security,keep'
+      stale-issue-message:
+        type: string
+        default: >
+          This issue has been automatically marked as stale because it has had
+          no recent activity. Remove the stale label or comment to keep it open.
+      close-issue-message:
+        type: string
+        default: >
+          This issue was closed because it reached this repository's configured stale threshold with no activity.
+
+permissions:
+  issues: write
+  pull-requests: read
+
+jobs:
+  stale:
+    runs-on: ${{ inputs.runs_on }}
+    steps:
+      - name: Harden Runner
+        if: ${{ github.event.repository.private == false }}
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          days-before-issue-stale: ${{ inputs.days-before-stale }}
+          days-before-issue-close: ${{ inputs.days-before-close }}
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          stale-issue-label: ${{ inputs.stale-issue-label }}
+          exempt-issue-labels: ${{ inputs.exempt-issue-labels }}
+          stale-issue-message: ${{ inputs.stale-issue-message }}
+          close-issue-message: ${{ inputs.close-issue-message }}
