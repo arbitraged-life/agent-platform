@@ -160,7 +160,7 @@ def main() -> int:
     diff = args.diff_file.read_text(encoding="utf-8") if args.diff_file else sys.stdin.read()
     try:
         config = load_config(args.config)
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         raise SystemExit(f"invalid codegen budget config: {exc}") from None
     metrics = measure(diff)
     errors, warnings = evaluate(metrics, config)
