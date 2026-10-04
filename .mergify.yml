@@ -68,33 +68,15 @@ pull_request_rules:
       comment:
         message: "Mergify detected a merge conflict. Resolve it before queueing this pull request."
 
-  - name: mark stale pull requests
-    description: Mark inactive PRs stale after 60 days while exempting pinned/security/keep work.
+  - name: close inactive pull requests
+    description: Close non-exempt PRs after 74 days without activity; any new activity resets the clock.
     conditions:
       - base = main
       - -closed
-      - -label = stale
       - -label = pinned
       - -label = security
       - -label = keep
-      - updated-at < 60 days ago
-    actions:
-      label:
-        add:
-          - stale
-      comment:
-        message: "This pull request has had no activity for 60 days and is now marked stale. Comment, update it, or remove the stale label to keep it open."
-
-  - name: close stale pull requests
-    description: Close stale PRs after a further 14 days without activity.
-    conditions:
-      - base = main
-      - -closed
-      - label = stale
-      - -label = pinned
-      - -label = security
-      - -label = keep
-      - updated-at < 14 days ago
+      - updated-at < 74 days ago
     actions:
       close:
-        message: "Closing after the 14-day stale grace period. Reopen if this work becomes active again."
+        message: "Closing after 74 days without activity. Reopen if this work becomes active again."
