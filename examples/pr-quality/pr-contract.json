@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "required_sections": [
+    "Why",
+    "What",
+    "Verification",
+    "Risk / Rollback"
+  ],
+  "minimum_section_characters": {
+    "Why": 20,
+    "What": 20,
+    "Verification": 8,
+    "Risk / Rollback": 8
+  },
+  "maximum_body_characters": 12000,
+  "title_pattern": "^(feat|fix|chore|refactor|docs|test|perf|ci)(\\([a-z0-9._-]+\\))?: .{8,}$"
+}
