@@ -1,13 +1,16 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": ["Shared Renovate policy for arbitraged-life platform repositories"],
+  "description": [
+    "Shared Renovate policy for arbitraged-life platform repositories"
+  ],
   "extends": [
-    "config:recommended",
-    "helpers:pinGitHubActionDigests"
+    "config:best-practices"
   ],
   "dependencyDashboard": true,
   "timezone": "America/Cancun",
-  "schedule": ["before 6am on monday"],
+  "schedule": [
+    "before 6am on monday"
+  ],
   "prConcurrentLimit": 5,
   "prHourlyLimit": 2,
   "automerge": false,
@@ -16,33 +19,54 @@
     {
       "description": "Let Mergify auto-queue stable minor and patch updates",
       "matchCurrentVersion": "!/^0/",
-      "matchUpdateTypes": ["minor", "patch"],
-      "addLabels": ["renovate-automerge"]
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "addLabels": [
+        "renovate-automerge"
+      ]
     },
     {
       "description": "Let Mergify auto-queue pins and digest refreshes",
-      "matchUpdateTypes": ["pin", "pinDigest", "digest"],
-      "addLabels": ["renovate-automerge"]
+      "matchUpdateTypes": [
+        "pin",
+        "pinDigest",
+        "digest"
+      ],
+      "addLabels": [
+        "renovate-automerge"
+      ]
     },
     {
       "description": "Let Mergify auto-queue lock-file maintenance",
-      "matchUpdateTypes": ["lockFileMaintenance"],
-      "addLabels": ["renovate-automerge"]
+      "matchUpdateTypes": [
+        "lockFileMaintenance"
+      ],
+      "addLabels": [
+        "renovate-automerge"
+      ]
     },
     {
       "description": "Require explicit approval before creating major-update PRs",
-      "matchUpdateTypes": ["major"],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "dependencyDashboardApproval": true,
-      "addLabels": ["renovate-major"]
+      "addLabels": [
+        "renovate-major"
+      ]
     }
   ],
   "vulnerabilityAlerts": {
     "enabled": true,
-    "labels": ["security"],
     "automerge": false,
-    "prConcurrentLimit": 10
+    "prConcurrentLimit": 10,
+    "addLabels": [
+      "security"
+    ]
   },
-  "lockFileMaintenance": {
-    "enabled": true
-  }
+  "labels": [
+    "dependencies"
+  ]
 }
