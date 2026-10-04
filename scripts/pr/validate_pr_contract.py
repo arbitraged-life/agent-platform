@@ -26,13 +26,38 @@ def normalize_heading(value: str) -> str:
     return " ".join(value.strip().split()).casefold()
 
 
-def parse_sections(body: str) -> dict[str, str]:
-    matches = list(re.finditer(r"(?m)^##\s+(.+?)\s*$", body))
+def _document_lines(body: str) -> list[tuple[int, str]]:
+    """Return lines outside fenced code blocks with their original offsets."""
+    out: list[tuple[int, str]] = []
+    fenced = False
+    offset = 0
+    for line in body.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if stripped.startswith((chr(96) * 3, "~~~")):
+            fenced = not fenced
+        elif not fenced:
+            out.append((offset, line.rstrip("\r\n")))
+        offset += len(line)
+    return out
+
+
+def parse_sections(body: str) -> tuple[dict[str, str], set[str]]:
+    headings: list[tuple[int, int, str]] = []
+    for offset, line in _document_lines(body):
+        match = re.match(r"^##\s+(.+?)\s*$", line)
+        if match:
+            headings.append((offset, offset + len(line), normalize_heading(match.group(1))))
+
     sections: dict[str, str] = {}
-    for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
-        sections[normalize_heading(match.group(1))] = body[match.end():end].strip()
-    return sections
+    duplicates: set[str] = set()
+    for index, (_, heading_end, key) in enumerate(headings):
+        end = headings[index + 1][0] if index + 1 < len(headings) else len(body)
+        value = body[heading_end:end].strip()
+        if key in sections:
+            duplicates.add(key)
+        else:
+            sections[key] = value
+    return sections, duplicates
 
 
 def meaningful_length(text: str) -> int:
@@ -41,23 +66,40 @@ def meaningful_length(text: str) -> int:
     return len(" ".join(text.split()))
 
 
+def _mapping(value: object, name: str) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object")
+    return value
+
+
 def load_config(path: Path | None) -> dict:
-    config = dict(DEFAULT)
-    config["minimum_section_characters"] = dict(DEFAULT["minimum_section_characters"])
+    config = {
+        **DEFAULT,
+        "required_sections": list(DEFAULT["required_sections"]),
+        "minimum_section_characters": dict(DEFAULT["minimum_section_characters"]),
+    }
     if path is None:
         return config
-    supplied = json.loads(path.read_text(encoding="utf-8"))
+    supplied = _mapping(json.loads(path.read_text(encoding="utf-8")), "PR contract config")
     if supplied.get("schema_version") != 1:
         raise ValueError("unsupported PR contract schema_version")
     unknown = set(supplied) - set(DEFAULT)
     if unknown:
         raise ValueError("unknown PR contract keys: " + ", ".join(sorted(unknown)))
-    config.update(supplied)
-    config["minimum_section_characters"] = {
-        **DEFAULT["minimum_section_characters"],
-        **supplied.get("minimum_section_characters", {}),
-    }
+    if "minimum_section_characters" in supplied:
+        minimums = _mapping(supplied["minimum_section_characters"], "minimum_section_characters")
+        config["minimum_section_characters"].update(minimums)
+    for key in ("required_sections", "maximum_body_characters", "title_pattern"):
+        if key in supplied:
+            config[key] = supplied[key]
     return config
+
+
+def _minimums(config: dict) -> dict[str, int]:
+    return {
+        normalize_heading(str(key)): int(value)
+        for key, value in config["minimum_section_characters"].items()
+    }
 
 
 def validate(title: str, body: str, config: dict) -> list[str]:
@@ -70,13 +112,16 @@ def validate(title: str, body: str, config: dict) -> list[str]:
     if pattern and not re.fullmatch(pattern, title.strip()):
         errors.append("PR title does not match the configured deterministic pattern")
 
-    sections = parse_sections(body)
+    sections, duplicates = parse_sections(body)
+    minimums = _minimums(config)
     for heading in config["required_sections"]:
         key = normalize_heading(heading)
+        if key in duplicates:
+            errors.append(f"duplicate required section: ## {heading}")
         if key not in sections:
             errors.append(f"missing required section: ## {heading}")
             continue
-        minimum = int(config["minimum_section_characters"].get(heading, 1))
+        minimum = minimums.get(key, 1)
         size = meaningful_length(sections[key])
         if size < minimum:
             errors.append(
@@ -96,7 +141,7 @@ def main() -> int:
     body = args.body_file.read_text(encoding="utf-8") if args.body_file else sys.stdin.read()
     try:
         config = load_config(args.config)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, TypeError) as exc:
         raise SystemExit(f"invalid PR contract config: {exc}") from None
     errors = validate(args.title, body, config)
     if args.json:

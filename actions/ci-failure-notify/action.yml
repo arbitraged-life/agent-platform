@@ -23,11 +23,11 @@ runs:
   using: composite
   steps:
     - name: Send concise failure notification
-      if: ${{ inputs.conclusion == 'failure' }}
       shell: bash
       env:
         CI_NOTIFY_REPOSITORY: ${{ inputs.repository }}
         CI_NOTIFY_WORKFLOW: ${{ inputs.workflow }}
+        CI_NOTIFY_CONCLUSION: ${{ inputs.conclusion }}
         CI_NOTIFY_RUN_URL: ${{ inputs.run-url }}
         CI_NOTIFY_SHA: ${{ inputs.sha }}
         CI_NOTIFY_WEBHOOK_URL: ${{ inputs.webhook-url }}
@@ -35,18 +35,34 @@ runs:
         python3 - <<'PY'
         import json
         import os
+        import urllib.error
         import urllib.parse
         import urllib.request
 
-        url = os.environ["CI_NOTIFY_WEBHOOK_URL"]
+        values = {
+            "repository": os.environ["CI_NOTIFY_REPOSITORY"].strip(),
+            "workflow": os.environ["CI_NOTIFY_WORKFLOW"].strip(),
+            "conclusion": os.environ["CI_NOTIFY_CONCLUSION"].strip(),
+            "run-url": os.environ["CI_NOTIFY_RUN_URL"].strip(),
+            "sha": os.environ["CI_NOTIFY_SHA"].strip(),
+            "webhook-url": os.environ["CI_NOTIFY_WEBHOOK_URL"].strip(),
+        }
+        missing = [name for name, value in values.items() if not value]
+        if missing:
+            raise SystemExit("required action inputs are empty: " + ", ".join(missing))
+        if values["conclusion"] != "failure":
+            print(f"CI conclusion is {values['conclusion']}; no failure notification sent")
+            raise SystemExit(0)
+
+        url = values["webhook-url"]
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme != "https" or not parsed.netloc:
             raise SystemExit("webhook-url must be an absolute HTTPS URL")
 
-        repository = os.environ["CI_NOTIFY_REPOSITORY"]
-        workflow = os.environ["CI_NOTIFY_WORKFLOW"]
-        run_url = os.environ["CI_NOTIFY_RUN_URL"]
-        sha = os.environ["CI_NOTIFY_SHA"]
+        repository = values["repository"]
+        workflow = values["workflow"]
+        run_url = values["run-url"]
+        sha = values["sha"]
         short_sha = sha[:12]
         message = f"CI failed: {repository} · {workflow} · {short_sha} · {run_url}"
         payload = json.dumps({
@@ -63,8 +79,18 @@ runs:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=10) as response:
-            if not 200 <= response.status < 300:
-                raise SystemExit(f"notification webhook returned HTTP {response.status}")
+
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        opener = urllib.request.build_opener(NoRedirect)
+        try:
+            with opener.open(request, timeout=10):
+                pass
+        except urllib.error.HTTPError as exc:
+            if 300 <= exc.code < 400:
+                raise SystemExit("notification webhook redirects are not allowed") from None
+            raise SystemExit(f"notification webhook returned HTTP {exc.code}") from None
         print(message)
         PY

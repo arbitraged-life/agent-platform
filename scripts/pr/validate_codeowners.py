@@ -8,30 +8,42 @@ from pathlib import Path
 import re
 
 PLACEHOLDER = re.compile(r"(^|[-_/])(org|team|owner|replace|placeholder)([-_/]|$)", re.I)
+OWNER = re.compile(r"@[^/\s@#,]+(?:/[^/\s@#,]+)?$")
+
+
+def _rule(raw: str) -> tuple[str, list[str]] | None:
+    line = raw.split("#", 1)[0].strip()
+    if not line:
+        return None
+    parts = line.split()
+    return parts[0], parts[1:]
+
+
+def _owner_errors(number: int, owners: list[str]) -> list[str]:
+    if not owners:
+        return [f"line {number}: pattern has no owner"]
+    errors: list[str] = []
+    for owner in owners:
+        if not OWNER.fullmatch(owner):
+            errors.append(f"line {number}: invalid owner {owner!r}")
+        elif PLACEHOLDER.search(owner[1:]):
+            errors.append(f"line {number}: placeholder owner {owner!r}")
+    return errors
 
 
 def validate(text: str) -> list[str]:
     errors: list[str] = []
     catch_all = False
     for number, raw in enumerate(text.splitlines(), start=1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
+        rule = _rule(raw)
+        if rule is None:
             continue
-        parts = line.split()
-        if len(parts) < 2:
-            errors.append(f"line {number}: pattern has no owner")
-            continue
-        pattern, owners = parts[0], parts[1:]
-        if pattern == "*":
+        pattern, owners = rule
+        if pattern in ("*", "**"):
             catch_all = True
-        for owner in owners:
-            if not owner.startswith("@") or len(owner) < 2:
-                errors.append(f"line {number}: invalid owner {owner!r}")
-                continue
-            if PLACEHOLDER.search(owner[1:]):
-                errors.append(f"line {number}: placeholder owner {owner!r}")
+        errors.extend(_owner_errors(number, owners))
     if not catch_all:
-        errors.append("missing catch-all '*' owner rule")
+        errors.append("missing catch-all '*' or '**' owner rule")
     return errors
 
 

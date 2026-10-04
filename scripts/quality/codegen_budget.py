@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 import re
+import shlex
 import sys
 
 DEFAULT = {
@@ -24,12 +25,19 @@ DEFAULT = {
 }
 
 CODE_EXTENSIONS = {
-    ".c", ".cc", ".cpp", ".cs", ".go", ".java", ".js", ".jsx", ".kt", ".mjs",
-    ".php", ".py", ".rb", ".rs", ".sh", ".swift", ".ts", ".tsx",
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".cs", ".go", ".java",
+    ".js", ".jsx", ".kt", ".mjs", ".php", ".py", ".rb", ".rs", ".sh", ".swift", ".ts", ".tsx",
+}
+HASH_COMMENT_EXTENSIONS = {".py", ".rb", ".sh"}
+SLASH_COMMENT_EXTENSIONS = {
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".cs", ".go", ".java",
+    ".js", ".jsx", ".kt", ".mjs", ".php", ".rs", ".swift", ".ts", ".tsx",
 }
 TEST_PATTERNS = (
     re.compile(r"(^|/)(test|tests|spec|specs)(/|$)", re.I),
     re.compile(r"\.(test|spec)\.[^.]+$", re.I),
+    re.compile(r"(^|/)test_[^/]+\.py$", re.I),
+    re.compile(r"(^|/)[^/]+_test\.(go|py)$", re.I),
 )
 
 HARD_METRICS = {
@@ -41,6 +49,22 @@ HARD_METRICS = {
 }
 
 
+def _mapping(value: object, name: str) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} must be an object")
+    return value
+
+
+def _merge_budget(config: dict, supplied: dict, section: str) -> None:
+    if section not in supplied:
+        return
+    incoming = _mapping(supplied[section], section)
+    unknown = set(incoming) - set(DEFAULT[section])
+    if unknown:
+        raise ValueError(f"unknown {section} budget keys: " + ", ".join(sorted(unknown)))
+    config[section].update(incoming)
+
+
 def load_config(path: Path | None) -> dict:
     config = {
         "schema_version": 1,
@@ -49,14 +73,14 @@ def load_config(path: Path | None) -> dict:
     }
     if path is None:
         return config
-    supplied = json.loads(path.read_text(encoding="utf-8"))
+    supplied = _mapping(json.loads(path.read_text(encoding="utf-8")), "codegen budget config")
     if supplied.get("schema_version") != 1:
         raise ValueError("unsupported codegen budget schema_version")
     unknown = set(supplied) - {"schema_version", "hard", "advisory"}
     if unknown:
         raise ValueError("unknown codegen budget keys: " + ", ".join(sorted(unknown)))
-    config["hard"].update(supplied.get("hard", {}))
-    config["advisory"].update(supplied.get("advisory", {}))
+    _merge_budget(config, supplied, "hard")
+    _merge_budget(config, supplied, "advisory")
     return config
 
 
@@ -64,40 +88,61 @@ def is_test_path(path: str) -> bool:
     return any(pattern.search(path) for pattern in TEST_PATTERNS)
 
 
-def is_comment_only(path: str, line: str) -> bool:
-    if Path(path).suffix.lower() not in CODE_EXTENSIONS:
-        return False
+def _comment_state(path: str, line: str, in_block: bool) -> tuple[bool, bool]:
+    ext = Path(path).suffix.lower()
+    if ext not in CODE_EXTENSIONS:
+        return False, False
     stripped = line.lstrip()
-    return stripped.startswith(("#", "//", "/*", "*", "*/"))
+
+    if ext in HASH_COMMENT_EXTENSIONS:
+        return stripped.startswith("#"), False
+    if ext not in SLASH_COMMENT_EXTENSIONS:
+        return False, False
+
+    if in_block:
+        return True, "*/" not in stripped
+    if stripped.startswith("//"):
+        return True, False
+    if stripped.startswith("/*"):
+        return True, "*/" not in stripped[2:]
+    return False, False
 
 
-def measure(diff: str) -> dict:
-    files: dict[str, dict[str, int]] = {}
-    current: str | None = None
-    for line in diff.splitlines():
-        if line.startswith("diff --git "):
-            match = re.match(r"diff --git a/(.+?) b/(.+)$", line)
-            current = match.group(2) if match else None
-            if current:
-                files.setdefault(current, {"additions": 0, "deletions": 0, "comments": 0})
-            continue
-        if not current:
-            continue
-        if line.startswith("+++ ") or line.startswith("--- "):
-            continue
-        if line.startswith("+"):
-            files[current]["additions"] += 1
-            if is_comment_only(current, line[1:]):
-                files[current]["comments"] += 1
-        elif line.startswith("-"):
-            files[current]["deletions"] += 1
+def _diff_path(line: str) -> str | None:
+    """Read the new-side path from a diff --git line, including quoted paths."""
+    try:
+        parts = shlex.split(line)
+    except ValueError:
+        return None
+    if len(parts) == 4 and parts[:2] == ["diff", "--git"] and parts[3].startswith("b/"):
+        return parts[3][2:]
+    marker = " b/"
+    if line.startswith("diff --git a/") and marker in line:
+        return line.rsplit(marker, 1)[1]
+    return None
 
+
+def _header_path(line: str) -> str | None:
+    value = line[4:].strip()
+    if value == "/dev/null":
+        return None
+    try:
+        parts = shlex.split(value)
+        value = parts[0] if parts else value
+    except ValueError:
+        pass
+    return value[2:] if value.startswith("b/") else value
+
+
+def _new_file_row() -> dict[str, int]:
+    return {"additions": 0, "deletions": 0, "comments": 0}
+
+
+def _summarize(files: dict[str, dict[str, int]]) -> dict:
     additions = sum(row["additions"] for row in files.values())
     deletions = sum(row["deletions"] for row in files.values())
     comment_additions = sum(row["comments"] for row in files.values())
-    test_additions = sum(
-        row["additions"] for path, row in files.items() if is_test_path(path)
-    )
+    test_additions = sum(row["additions"] for path, row in files.items() if is_test_path(path))
     source_additions = sum(
         row["additions"]
         for path, row in files.items()
@@ -108,29 +153,58 @@ def measure(diff: str) -> dict:
         "additions": additions,
         "deletions": deletions,
         "total_changes": additions + deletions,
-        "max_single_file_additions": max(
-            (row["additions"] for row in files.values()), default=0
-        ),
+        "max_single_file_additions": max((row["additions"] for row in files.values()), default=0),
         "comment_only_additions": comment_additions,
-        "comment_only_addition_ratio": (
-            comment_additions / additions if additions else 0.0
-        ),
+        "comment_only_addition_ratio": comment_additions / additions if additions else 0.0,
         "test_additions": test_additions,
         "source_additions": source_additions,
-        "test_to_source_addition_ratio": (
-            test_additions / source_additions if source_additions else None
-        ),
+        "test_to_source_addition_ratio": test_additions / source_additions if source_additions else None,
     }
+
+
+def measure(diff: str) -> dict:
+    files: dict[str, dict[str, int]] = {}
+    current: str | None = None
+    in_hunk = False
+    block_comment = False
+
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            current = _diff_path(line)
+            in_hunk = False
+            block_comment = False
+            if current:
+                files.setdefault(current, _new_file_row())
+            continue
+        if not in_hunk and line.startswith("+++ "):
+            path = _header_path(line)
+            if path:
+                current = path
+                files.setdefault(current, _new_file_row())
+            continue
+        if not in_hunk and line.startswith("--- "):
+            continue
+        if line.startswith("@@"):
+            in_hunk = True
+            continue
+        if not current or not in_hunk:
+            continue
+        if line.startswith("+"):
+            files[current]["additions"] += 1
+            is_comment, block_comment = _comment_state(current, line[1:], block_comment)
+            if is_comment:
+                files[current]["comments"] += 1
+        elif line.startswith("-"):
+            files[current]["deletions"] += 1
+
+    return _summarize(files)
 
 
 def evaluate(metrics: dict, config: dict) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
     for budget_key, maximum in config["hard"].items():
-        metric_key = HARD_METRICS.get(budget_key)
-        if metric_key is None:
-            errors.append(f"unknown hard budget: {budget_key}")
-            continue
+        metric_key = HARD_METRICS[budget_key]
         value = metrics[metric_key]
         if value > maximum:
             errors.append(f"{metric_key}={value} exceeds hard maximum {maximum}")
@@ -160,7 +234,7 @@ def main() -> int:
     diff = args.diff_file.read_text(encoding="utf-8") if args.diff_file else sys.stdin.read()
     try:
         config = load_config(args.config)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, TypeError) as exc:
         raise SystemExit(f"invalid codegen budget config: {exc}") from None
     metrics = measure(diff)
     errors, warnings = evaluate(metrics, config)
