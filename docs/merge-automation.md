@@ -42,6 +42,13 @@ policy groups only low-coupling infrastructure families:
 - CircleCI minor/patch/pin/digest updates
 
 Application/runtime package updates remain independently reviewable. Multiple
-major releases are separated into sequential major upgrades. Renovate never
-merges directly; it labels eligible stable updates and Mergify remains the sole
-automated merge authority.
+major releases are separated into sequential major upgrades.
+
+Renovate also owns pinned command-line dependencies embedded outside ordinary
+package manifests. Shared regex managers detect `npx --yes package@x.y.z` pins
+and `uv --with Package==x.y.z` pins in justfiles, shell scripts, and YAML. This
+keeps eval/tooling pins such as Promptfoo and ad-hoc Python helpers on the same
+managed update path instead of requiring custom bump scripts.
+
+Renovate never merges directly; it labels eligible stable updates and Mergify
+remains the sole automated merge authority.

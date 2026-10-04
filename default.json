@@ -105,6 +105,32 @@
       "groupName": "circleci"
     }
   ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track pinned npm CLI versions embedded in scripts, YAML, and justfiles",
+      "managerFilePatterns": [
+        "/(^|/)justfile$/",
+        "/\\.(sh|ya?ml)$/"
+      ],
+      "matchStrings": [
+        "npx(?:\\s+--yes|\\s+-y)?\\s+(?<depName>@?[A-Za-z0-9._/-]+)@(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasourceTemplate": "npm"
+    },
+    {
+      "customType": "regex",
+      "description": "Track pinned Python packages passed to uv --with",
+      "managerFilePatterns": [
+        "/(^|/)justfile$/",
+        "/\\.(sh|ya?ml)$/"
+      ],
+      "matchStrings": [
+        "--with\\s+(?<depName>[A-Za-z0-9_.-]+)==(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasourceTemplate": "pypi"
+    }
+  ],
   "vulnerabilityAlerts": {
     "enabled": true,
     "automerge": false,
