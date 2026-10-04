@@ -27,7 +27,7 @@ class SkillTests(unittest.TestCase):
 
     def test_discovery_and_installed_hashes(self):
         rows = MODULE['catalog'](self.root)
-        self.assertEqual(len(rows), 40)
+        self.assertEqual(len(rows), 41)
         lock = MODULE['verify_upstream'](self.root)
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
@@ -39,6 +39,7 @@ class SkillTests(unittest.TestCase):
             "autonomous-pr-integration",
             "evaluating-new-projects",
             "javascript-typescript-jest",
+            "repo-style-miner",
             "session-close-out",
         }
         self.assertTrue(expected.issubset(rows))
@@ -67,6 +68,11 @@ class SkillTests(unittest.TestCase):
         self.assertIn("git ls-files", knowledge)
         self.assertIn("Do not follow symlinks", knowledge)
         self.assertIn("Do not read entire large files", knowledge)
+
+        style = (self.root / "skills/repo-style-miner/SKILL.md").read_text()
+        self.assertIn("20–40 merged PRs", style)
+        self.assertIn("holdout", style)
+        self.assertIn("do not invent", style.casefold())
 
     def test_tax_prep_migration_is_privacy_bounded_and_self_contained(self):
         rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
