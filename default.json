@@ -1,7 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": [
-    "Shared Renovate policy for arbitraged-life platform repositories"
+    "Shared Renovate policy for arbitraged-life platform repositories",
+    "Accept Renovate best-practices' 3-day npm release-age safeguard to reduce supply-chain risk."
   ],
   "extends": [
     "config:best-practices"
