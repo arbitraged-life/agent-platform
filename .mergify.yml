@@ -33,10 +33,20 @@ merge_protections:
       - check-success = @gitguardian/GitGuardian Security Checks
       - "check-success = @socket-security/Socket Security: Pull Request Alerts"
 
+  - name: conventional pull request title
+    description: Keep squash-merge history in Conventional Commits format.
+    if:
+      - base = main
+    success_conditions:
+      - 'title ~= ^(fix|feat|docs|style|refactor|perf|test|build|ci|chore|revert)(?:\(.+\))?: .+'
+
 queue_rules:
   - name: default
     batch_size: 1
     merge_method: squash
+    commit_message_format:
+      title: pr-title
+      body: pr-body
     queue_conditions:
       - base = main
       - check-success = @github-actions/validate (ubuntu-24.04)
@@ -63,6 +73,38 @@ priority_rules:
     priority: low
 
 pull_request_rules:
+  - name: mark inactive pull requests stale
+    conditions:
+      - -closed
+      - -draft
+      - updated-at < 60 days ago
+      - -label = stale
+      - -label = pinned
+      - -label = security
+      - -label = keep
+    actions:
+      label:
+        add:
+          - stale
+      comment:
+        message: >-
+          This pull request has been marked stale after 60 days without activity.
+          Comment or update it to keep it open.
+
+  - name: close stale pull requests
+    conditions:
+      - -closed
+      - label = stale
+      - updated-at < 14 days ago
+      - -label = pinned
+      - -label = security
+      - -label = keep
+    actions:
+      close:
+        message: >-
+          Closing this pull request after the stale grace period. Reopen it if
+          the work becomes active again.
+
   - name: notify merge conflicts
     conditions:
       - base = main
