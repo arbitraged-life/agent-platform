@@ -2,10 +2,12 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": [
     "Shared Renovate policy for arbitraged-life platform repositories",
-    "Accept Renovate best-practices' 3-day npm release-age safeguard to reduce supply-chain risk."
+    "Accept Renovate best-practices' 3-day npm release-age safeguard to reduce supply-chain risk.",
+    "Group only low-coupling infrastructure update families; keep application/runtime dependency updates independently reviewable."
   ],
   "extends": [
-    "config:best-practices"
+    "config:best-practices",
+    ":separateMultipleMajorReleases"
   ],
   "dependencyDashboard": true,
   "timezone": "America/Cancun",
@@ -57,6 +59,50 @@
       "addLabels": [
         "renovate-major"
       ]
+    },
+    {
+      "description": "Group GitHub Actions updates into one managed infrastructure PR",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "pinDigest",
+        "digest"
+      ],
+      "groupName": "github-actions"
+    },
+    {
+      "description": "Group Terraform provider updates into one managed infrastructure PR",
+      "matchManagers": [
+        "terraform"
+      ],
+      "matchDepTypes": [
+        "required_provider",
+        "provider"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "digest"
+      ],
+      "groupName": "terraform-providers"
+    },
+    {
+      "description": "Group CircleCI image and orb updates into one managed infrastructure PR",
+      "matchManagers": [
+        "circleci"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "digest"
+      ],
+      "groupName": "circleci"
     }
   ],
   "vulnerabilityAlerts": {
