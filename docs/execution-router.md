@@ -22,7 +22,7 @@ Transport preference is consumer-owned deployment policy. The reusable
 that route is performed by the consuming controller using its trusted
 configuration rather than a universal private/direct or hosted preference.
 
-Treat the selected transport and target device as part of the execution identity:
+Treat the selected transport and target device as part of the execution context:
 different devices may intentionally expose different filesystems, permissions,
 or sandboxes. A fallback used for replay must resolve to the same target device.
 Changing target devices is a new explicitly authorized operation, not a retry.
