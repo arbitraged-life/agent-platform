@@ -146,6 +146,12 @@
       "license": "LICENSE"
     },
     {
+      "name": "repo-style-miner",
+      "description": "Mine accepted pull requests and reviewer feedback into a compact repository-specific style skill using observed evidence rather than generic humanization advice.",
+      "path": "skills/repo-style-miner/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
       "name": "repo-framework-analyst",
       "description": "Analyze GitHub repos and AI/LLM frameworks for maturity, integration complexity, and fit with typical TypeScript/Python/DevOps stacks.",
       "path": "skills/repo-framework-analyst/SKILL.md",

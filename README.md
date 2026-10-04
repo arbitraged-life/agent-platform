@@ -27,6 +27,9 @@ delegated to Renovate and Mergify rather than maintained as platform runtime cod
   execution, immutable approval records, and independently verified completion.
 - [Review remediation](runtime/review-remediation/README.md): trusted policies,
   bounded attempts, isolated execution, and exact-revision publication checks.
+- [PR quality controls](docs/pr-quality.md): concise CI failure notifications,
+  CODEOWNERS readiness, deterministic PR structure, measurable code-generation
+  budgets, and evidence-based repository style mining.
 - [Release contract](docs/release-contract.md): immutable, digest-checked installs.
 - [Skills](docs/skills.md): catalog, provenance, licensing and consumer overlays.
 - [Migration provenance](docs/MIGRATION_PROVENANCE.md): source revisions and transformations.

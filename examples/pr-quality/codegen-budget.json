@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "hard": {
+    "max_changed_files": 20,
+    "max_additions": 800,
+    "max_deletions": 500,
+    "max_total_changes": 1200,
+    "max_single_file_additions": 400
+  },
+  "advisory": {
+    "max_comment_only_addition_ratio": 0.35,
+    "max_test_to_source_addition_ratio": 2.5
+  }
+}
