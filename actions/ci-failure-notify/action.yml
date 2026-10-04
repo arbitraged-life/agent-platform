@@ -32,11 +32,13 @@ runs:
         CI_NOTIFY_SHA: ${{ inputs.sha }}
         CI_NOTIFY_WEBHOOK_URL: ${{ inputs.webhook-url }}
         CI_NOTIFY_PAYLOAD_FILE: ${{ runner.temp }}/ci-failure-notification.json
+        CI_NOTIFY_RESOLVE_FILE: ${{ runner.temp }}/ci-failure-notification.resolve
       run: |
         python3 - <<'PY'
         import ipaddress
         import json
         import os
+        import socket
         import urllib.parse
 
         values = {
@@ -66,12 +68,36 @@ runs:
             raise SystemExit("webhook-url must be an absolute HTTPS URL without userinfo or fragment")
         if parsed.hostname.casefold() == "localhost":
             raise SystemExit("webhook-url must not target localhost")
+        port = parsed.port or 443
         try:
-            address = ipaddress.ip_address(parsed.hostname)
+            literal = ipaddress.ip_address(parsed.hostname)
         except ValueError:
-            address = None
-        if address and not address.is_global:
-            raise SystemExit("webhook-url must not use a non-public IP literal")
+            literal = None
+
+        resolved: set[str] = set()
+        if literal is not None:
+            resolved.add(str(literal))
+        else:
+            try:
+                answers = socket.getaddrinfo(
+                    parsed.hostname,
+                    port,
+                    family=socket.AF_UNSPEC,
+                    type=socket.SOCK_STREAM,
+                )
+            except socket.gaierror as exc:
+                raise SystemExit(f"webhook hostname resolution failed: {exc}") from None
+            resolved.update(answer[4][0] for answer in answers)
+
+        if not resolved:
+            raise SystemExit("webhook hostname resolved to no addresses")
+        addresses = [ipaddress.ip_address(value) for value in sorted(resolved)]
+        if any(not address.is_global for address in addresses):
+            raise SystemExit("webhook hostname must resolve only to public addresses")
+        pinned = next((address for address in addresses if address.version == 4), addresses[0])
+        pinned_text = f"[{pinned}]" if pinned.version == 6 else str(pinned)
+        with open(os.environ["CI_NOTIFY_RESOLVE_FILE"], "w", encoding="utf-8") as handle:
+            handle.write(f"{parsed.hostname}:{port}:{pinned_text}")
 
         repository = values["repository"]
         workflow = values["workflow"]
@@ -96,8 +122,10 @@ runs:
           exit 0
         fi
 
+        resolve="$(cat "$CI_NOTIFY_RESOLVE_FILE")"
         curl \
-          --fail-with-body \
+          --fail \
+          --output /dev/null \
           --silent \
           --show-error \
           --proto '=https' \
@@ -105,6 +133,7 @@ runs:
           --connect-timeout 5 \
           --max-time 10 \
           --noproxy '*' \
+          --resolve "$resolve" \
           --header 'Content-Type: application/json' \
           --data-binary "@$CI_NOTIFY_PAYLOAD_FILE" \
           "$CI_NOTIFY_WEBHOOK_URL"

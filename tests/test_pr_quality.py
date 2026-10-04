@@ -292,6 +292,9 @@ class TestExamples(unittest.TestCase):
         self.assertIn("--proto '=https'", action)
         self.assertIn("--max-redirs 0", action)
         self.assertIn("--noproxy '*'", action)
+        self.assertIn("--resolve \"$resolve\"", action)
+        self.assertIn("--output /dev/null", action)
+        self.assertIn("must resolve only to public addresses", action)
         self.assertNotIn("urllib.request", action)
 
 
