@@ -7,7 +7,8 @@
   ],
   "extends": [
     "config:best-practices",
-    ":separateMultipleMajorReleases"
+    ":separateMultipleMajorReleases",
+    "security:minimumReleaseAgePypi"
   ],
   "dependencyDashboard": true,
   "timezone": "America/Cancun",
@@ -129,6 +130,19 @@
         "--with\\s+(?<depName>[A-Za-z0-9_.-]+)==(?<currentValue>\\d+\\.\\d+\\.\\d+)"
       ],
       "datasourceTemplate": "pypi"
+    },
+    {
+      "customType": "regex",
+      "description": "Track pinned Mergify CLI release versions",
+      "managerFilePatterns": [
+        "/\\.circleci\\/config\\.yml$/",
+        "/\\.github\\/workflows\\/.*\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "MERGIFY_VERSION=(?<currentValue>\\d{4}\\.\\d+\\.\\d+(?:\\.\\d+)?)"
+      ],
+      "datasourceTemplate": "github-releases",
+      "packageNameTemplate": "Mergifyio/mergify-cli"
     }
   ],
   "vulnerabilityAlerts": {
@@ -141,5 +155,9 @@
   },
   "labels": [
     "dependencies"
+  ],
+  "ignorePaths": [
+    "**/_archive/**",
+    "**/_state/**"
   ]
 }
