@@ -39,7 +39,6 @@ TEST_PATTERNS = (
     re.compile(r"(^|/)test_[^/]+\.py$", re.I),
     re.compile(r"(^|/)[^/]+_test\.(go|py)$", re.I),
 )
-
 HARD_METRICS = {
     "max_changed_files": "changed_files",
     "max_additions": "additions",
@@ -65,15 +64,15 @@ def _merge_budget(config: dict, supplied: dict, section: str) -> None:
     config[section].update(incoming)
 
 
-def load_config(path: Path | None) -> dict:
+def load_config_document(raw: str | None) -> dict:
     config = {
         "schema_version": 1,
         "hard": dict(DEFAULT["hard"]),
         "advisory": dict(DEFAULT["advisory"]),
     }
-    if path is None:
+    if raw is None:
         return config
-    supplied = _mapping(json.loads(path.read_text(encoding="utf-8")), "codegen budget config")
+    supplied = _mapping(json.loads(raw), "codegen budget config")
     if supplied.get("schema_version") != 1:
         raise ValueError("unsupported codegen budget schema_version")
     unknown = set(supplied) - {"schema_version", "hard", "advisory"}
@@ -90,15 +89,13 @@ def is_test_path(path: str) -> bool:
 
 def _comment_state(path: str, line: str, in_block: bool) -> tuple[bool, bool]:
     ext = Path(path).suffix.lower()
+    stripped = line.lstrip()
     if ext not in CODE_EXTENSIONS:
         return False, False
-    stripped = line.lstrip()
-
     if ext in HASH_COMMENT_EXTENSIONS:
         return stripped.startswith("#"), False
     if ext not in SLASH_COMMENT_EXTENSIONS:
         return False, False
-
     if in_block:
         return True, "*/" not in stripped
     if stripped.startswith("//"):
@@ -109,7 +106,6 @@ def _comment_state(path: str, line: str, in_block: bool) -> tuple[bool, bool]:
 
 
 def _diff_path(line: str) -> str | None:
-    """Read the new-side path from a diff --git line, including quoted paths."""
     try:
         parts = shlex.split(line)
     except ValueError:
@@ -117,9 +113,7 @@ def _diff_path(line: str) -> str | None:
     if len(parts) == 4 and parts[:2] == ["diff", "--git"] and parts[3].startswith("b/"):
         return parts[3][2:]
     marker = " b/"
-    if line.startswith("diff --git a/") and marker in line:
-        return line.rsplit(marker, 1)[1]
-    return None
+    return line.rsplit(marker, 1)[1] if line.startswith("diff --git a/") and marker in line else None
 
 
 def _header_path(line: str) -> str | None:
@@ -134,8 +128,46 @@ def _header_path(line: str) -> str | None:
     return value[2:] if value.startswith("b/") else value
 
 
-def _new_file_row() -> dict[str, int]:
+def _new_row() -> dict[str, int]:
     return {"additions": 0, "deletions": 0, "comments": 0}
+
+
+class DiffCounter:
+    def __init__(self) -> None:
+        self.files: dict[str, dict[str, int]] = {}
+        self.current: str | None = None
+        self.in_hunk = False
+        self.block_comment = False
+
+    def _set_file(self, path: str | None) -> None:
+        if path:
+            self.current = path
+            self.files.setdefault(path, _new_row())
+
+    def consume(self, line: str) -> None:
+        if line.startswith("diff --git "):
+            self.current = None
+            self.in_hunk = False
+            self.block_comment = False
+            self._set_file(_diff_path(line))
+            return
+        if not self.in_hunk:
+            if line.startswith("+++ "):
+                self._set_file(_header_path(line))
+            elif line.startswith("@@"):
+                self.in_hunk = True
+            return
+        if not self.current:
+            return
+        if line.startswith("+"):
+            self.files[self.current]["additions"] += 1
+            is_comment, self.block_comment = _comment_state(
+                self.current, line[1:], self.block_comment
+            )
+            if is_comment:
+                self.files[self.current]["comments"] += 1
+        elif line.startswith("-"):
+            self.files[self.current]["deletions"] += 1
 
 
 def _summarize(files: dict[str, dict[str, int]]) -> dict:
@@ -163,41 +195,10 @@ def _summarize(files: dict[str, dict[str, int]]) -> dict:
 
 
 def measure(diff: str) -> dict:
-    files: dict[str, dict[str, int]] = {}
-    current: str | None = None
-    in_hunk = False
-    block_comment = False
-
+    counter = DiffCounter()
     for line in diff.splitlines():
-        if line.startswith("diff --git "):
-            current = _diff_path(line)
-            in_hunk = False
-            block_comment = False
-            if current:
-                files.setdefault(current, _new_file_row())
-            continue
-        if not in_hunk and line.startswith("+++ "):
-            path = _header_path(line)
-            if path:
-                current = path
-                files.setdefault(current, _new_file_row())
-            continue
-        if not in_hunk and line.startswith("--- "):
-            continue
-        if line.startswith("@@"):
-            in_hunk = True
-            continue
-        if not current or not in_hunk:
-            continue
-        if line.startswith("+"):
-            files[current]["additions"] += 1
-            is_comment, block_comment = _comment_state(current, line[1:], block_comment)
-            if is_comment:
-                files[current]["comments"] += 1
-        elif line.startswith("-"):
-            files[current]["deletions"] += 1
-
-    return _summarize(files)
+        counter.consume(line)
+    return _summarize(counter.files)
 
 
 def evaluate(metrics: dict, config: dict) -> tuple[list[str], list[str]]:
@@ -215,7 +216,6 @@ def evaluate(metrics: dict, config: dict) -> tuple[list[str], list[str]]:
             "comment_only_addition_ratio="
             f"{metrics['comment_only_addition_ratio']:.3f} exceeds advisory {comment_max}"
         )
-
     test_max = config["advisory"].get("max_test_to_source_addition_ratio")
     ratio = metrics["test_to_source_addition_ratio"]
     if test_max is not None and ratio is not None and ratio > test_max:
@@ -227,14 +227,13 @@ def evaluate(metrics: dict, config: dict) -> tuple[list[str], list[str]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--diff-file", type=Path)
-    parser.add_argument("--config", type=Path)
+    parser.add_argument("--config-json")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    diff = args.diff_file.read_text(encoding="utf-8") if args.diff_file else sys.stdin.read()
+    diff = sys.stdin.read()
     try:
-        config = load_config(args.config)
-    except (OSError, ValueError, TypeError) as exc:
+        config = load_config_document(args.config_json)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
         raise SystemExit(f"invalid codegen budget config: {exc}") from None
     metrics = measure(diff)
     errors, warnings = evaluate(metrics, config)

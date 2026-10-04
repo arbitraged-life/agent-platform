@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import re
 import sys
 
@@ -18,7 +17,8 @@ DEFAULT = {
         "Risk / Rollback": 8,
     },
     "maximum_body_characters": 12000,
-    "title_pattern": r"^(feat|fix|chore|refactor|docs|test|perf|ci)(\([a-z0-9._-]+\))?: .{8,}$",
+    "title_types": ["feat", "fix", "chore", "refactor", "docs", "test", "perf", "ci"],
+    "minimum_title_subject_characters": 8,
 }
 
 
@@ -27,7 +27,6 @@ def normalize_heading(value: str) -> str:
 
 
 def _document_lines(body: str) -> list[tuple[int, str]]:
-    """Return lines outside fenced code blocks with their original offsets."""
     out: list[tuple[int, str]] = []
     fenced = False
     offset = 0
@@ -44,9 +43,11 @@ def _document_lines(body: str) -> list[tuple[int, str]]:
 def parse_sections(body: str) -> tuple[dict[str, str], set[str]]:
     headings: list[tuple[int, int, str]] = []
     for offset, line in _document_lines(body):
-        match = re.match(r"^##\s+(.+?)\s*$", line)
-        if match:
-            headings.append((offset, offset + len(line), normalize_heading(match.group(1))))
+        if not line.startswith("## "):
+            continue
+        heading = line[3:].strip()
+        if heading:
+            headings.append((offset, offset + len(line), normalize_heading(heading)))
 
     sections: dict[str, str] = {}
     duplicates: set[str] = set()
@@ -72,15 +73,16 @@ def _mapping(value: object, name: str) -> dict:
     return value
 
 
-def load_config(path: Path | None) -> dict:
+def load_config_document(raw: str | None) -> dict:
     config = {
         **DEFAULT,
         "required_sections": list(DEFAULT["required_sections"]),
         "minimum_section_characters": dict(DEFAULT["minimum_section_characters"]),
+        "title_types": list(DEFAULT["title_types"]),
     }
-    if path is None:
+    if raw is None:
         return config
-    supplied = _mapping(json.loads(path.read_text(encoding="utf-8")), "PR contract config")
+    supplied = _mapping(json.loads(raw), "PR contract config")
     if supplied.get("schema_version") != 1:
         raise ValueError("unsupported PR contract schema_version")
     unknown = set(supplied) - set(DEFAULT)
@@ -89,9 +91,23 @@ def load_config(path: Path | None) -> dict:
     if "minimum_section_characters" in supplied:
         minimums = _mapping(supplied["minimum_section_characters"], "minimum_section_characters")
         config["minimum_section_characters"].update(minimums)
-    for key in ("required_sections", "maximum_body_characters", "title_pattern"):
+    for key in (
+        "required_sections",
+        "maximum_body_characters",
+        "title_types",
+        "minimum_title_subject_characters",
+    ):
         if key in supplied:
             config[key] = supplied[key]
+    if not isinstance(config["required_sections"], list) or not all(
+        isinstance(item, str) and item.strip() for item in config["required_sections"]
+    ):
+        raise ValueError("required_sections must be a non-empty-string array")
+    if not isinstance(config["title_types"], list) or not all(
+        isinstance(item, str) and item and item.isascii() and item.replace("-", "").isalnum()
+        for item in config["title_types"]
+    ):
+        raise ValueError("title_types must contain simple ASCII identifiers")
     return config
 
 
@@ -102,15 +118,30 @@ def _minimums(config: dict) -> dict[str, int]:
     }
 
 
+def _valid_title(title: str, config: dict) -> bool:
+    prefix, separator, subject = title.strip().partition(": ")
+    if not separator or len(subject.strip()) < int(config["minimum_title_subject_characters"]):
+        return False
+    if "(" in prefix:
+        if not prefix.endswith(")") or prefix.count("(") != 1 or prefix.count(")") != 1:
+            return False
+        kind, scope = prefix[:-1].split("(", 1)
+        allowed = set("abcdefghijklmnopqrstuvwxyz0123456789._-")
+        if not scope or any(char not in allowed for char in scope):
+            return False
+    else:
+        kind = prefix
+    return kind in set(config["title_types"])
+
+
 def validate(title: str, body: str, config: dict) -> list[str]:
     errors: list[str] = []
     if len(body) > int(config["maximum_body_characters"]):
         errors.append(
             f"PR body is {len(body)} characters; maximum is {config['maximum_body_characters']}"
         )
-    pattern = config.get("title_pattern")
-    if pattern and not re.fullmatch(pattern, title.strip()):
-        errors.append("PR title does not match the configured deterministic pattern")
+    if not _valid_title(title, config):
+        errors.append("PR title does not match the configured deterministic structure")
 
     sections, duplicates = parse_sections(body)
     minimums = _minimums(config)
@@ -133,15 +164,14 @@ def validate(title: str, body: str, config: dict) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--title", required=True)
-    parser.add_argument("--body-file", type=Path)
-    parser.add_argument("--config", type=Path)
+    parser.add_argument("--config-json")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    body = args.body_file.read_text(encoding="utf-8") if args.body_file else sys.stdin.read()
+    body = sys.stdin.read()
     try:
-        config = load_config(args.config)
-    except (OSError, ValueError, TypeError) as exc:
+        config = load_config_document(args.config_json)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
         raise SystemExit(f"invalid PR contract config: {exc}") from None
     errors = validate(args.title, body, config)
     if args.json:

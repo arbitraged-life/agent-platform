@@ -2,7 +2,6 @@
 import importlib.util
 import json
 from pathlib import Path
-import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,7 +98,7 @@ Revert safely.
         self.assertTrue(any("duplicate required section: ## Why" in error for error in errors))
 
     def test_minimum_keys_are_normalized_like_required_headings(self):
-        config = self.m.load_config(None)
+        config = self.m.load_config_document(None)
         config["required_sections"] = [" why "]
         config["minimum_section_characters"] = {"Why": 20}
         errors = self.m.validate(
@@ -110,11 +109,8 @@ Revert safely.
         self.assertTrue(any("minimum is 20" in error for error in errors))
 
     def test_non_object_config_is_rejected(self):
-        with tempfile.NamedTemporaryFile("w", suffix=".json") as fh:
-            fh.write("[]")
-            fh.flush()
-            with self.assertRaises(ValueError):
-                self.m.load_config(Path(fh.name))
+        with self.assertRaises(ValueError):
+            self.m.load_config_document("[]")
 
 
 class TestCodegenBudget(unittest.TestCase):
@@ -191,11 +187,8 @@ diff --git a/tests/test_a.py b/tests/test_a.py
 
     def test_non_object_and_unknown_advisory_config_are_rejected(self):
         for payload in ([], {"schema_version": 1, "advisory": {"typo_ratio": 1}}):
-            with self.subTest(payload=payload), tempfile.NamedTemporaryFile("w", suffix=".json") as fh:
-                json.dump(payload, fh)
-                fh.flush()
-                with self.assertRaises(ValueError):
-                    self.m.load_config(Path(fh.name))
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                self.m.load_config_document(json.dumps(payload))
 
     def test_common_test_file_names_are_classified(self):
         for name in ("pkg/test_widget.py", "pkg/widget_test.py", "pkg/widget_test.go"):
@@ -284,8 +277,12 @@ class TestExamples(unittest.TestCase):
         cls.budget = load("example_codegen_budget", "scripts/quality/codegen_budget.py")
 
     def test_example_configs_load_through_validators(self):
-        pr_config = self.pr.load_config(ROOT / "examples/pr-quality/pr-contract.json")
-        budget_config = self.budget.load_config(ROOT / "examples/pr-quality/codegen-budget.json")
+        pr_config = self.pr.load_config_document(
+            (ROOT / "examples/pr-quality/pr-contract.json").read_text(encoding="utf-8")
+        )
+        budget_config = self.budget.load_config_document(
+            (ROOT / "examples/pr-quality/codegen-budget.json").read_text(encoding="utf-8")
+        )
         self.assertEqual(pr_config, self.pr.DEFAULT)
         self.assertEqual(budget_config["schema_version"], 1)
 
