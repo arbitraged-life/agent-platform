@@ -68,6 +68,16 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Resolve manual scan base
+        id: manual-scan
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if base=$(git rev-parse --verify "$GITHUB_SHA^" 2>/dev/null); then
+            printf 'base=%s\n' "$base" >> "$GITHUB_OUTPUT"
+          fi
       - uses: trufflesecurity/trufflehog@f15cb8b37b9b70056bc82a8eb7151f75fad27a71
         with:
+          # A root commit has no parent; scan its complete (one-commit) history.
+          base: ${{ steps.manual-scan.outputs.base || '' }}
+          head: ${{ github.event_name == 'workflow_dispatch' && github.sha || '' }}
           extra_args: --no-verification
