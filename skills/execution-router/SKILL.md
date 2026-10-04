@@ -22,22 +22,20 @@ harness, local context, independent/resumable lifecycle, or tooling is materiall
 better suited. Desktop Commander is a direct connected path from ChatGPT; a CLI
 agent is a separate peer executor.
 
-### Desktop Commander transport preference
+### Desktop Commander transport selection
 
-When more than one authorized Desktop Commander transport reaches the same host,
-prefer the private/direct local transport (for example Secure MCP Tunnel to the
-host's stdio Desktop Commander) when it is connected and healthy. Use a
-provider-hosted Remote Desktop Commander transport only as fallback when the
-private/direct path is unavailable, unhealthy, not installed on the current
-surface, or explicitly requested. This avoids unnecessary hosted-bridge quota
-and removes an extra service from the normal data path.
+When more than one authorized Desktop Commander transport can reach local
+execution, read the consuming deployment's trusted transport policy and follow
+its configured preferred/fallback order. The reusable router does not make a
+universal private/direct-versus-hosted choice for every consumer.
 
-The two transports are alternate paths to the same local state, not independent
-sources of truth. After a transport error during a mutating operation, inspect
-the target state before retrying through the fallback so the same write or
-command is not executed twice. Do not weaken permissions, filesystem allowlists,
-command blocks, or approval requirements merely to make the preferred transport
-work.
+Treat transport and target device as part of the execution identity. Different
+devices may expose different filesystems, permissions, or sandboxes. After an
+ambiguous mutating transport failure, do not replay until the first invocation
+is known to have terminated or an idempotency/operation-status mechanism proves
+replay safe. Then inspect authoritative target state before retrying. Transport
+selection never broadens permissions, filesystem allowlists, command blocks, or
+approval requirements.
 
 Handoff requires a concrete missing capability, independent/resumable execution
 lifecycle, local-harness/tooling advantage, or explicit user preference. Code, many
