@@ -30,7 +30,7 @@ its configured preferred/fallback order. This is a transport sub-selection made
 after the reusable router has chosen `chatgpt-local`; `routeTask` itself does
 not encode vendor- or machine-specific transport ordering.
 
-Treat transport and target device as part of the execution identity. Different
+Treat transport and target device as part of the execution context. Different
 devices may expose different filesystems, permissions, or sandboxes. A fallback
 used to replay an ambiguous mutation must resolve to the same target device; a
 target-device change is a new explicitly authorized operation, not a retry.
