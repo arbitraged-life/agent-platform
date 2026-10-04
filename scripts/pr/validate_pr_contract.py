@@ -96,7 +96,7 @@ def main() -> int:
     body = args.body_file.read_text(encoding="utf-8") if args.body_file else sys.stdin.read()
     try:
         config = load_config(args.config)
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         raise SystemExit(f"invalid PR contract config: {exc}") from None
     errors = validate(args.title, body, config)
     if args.json:
