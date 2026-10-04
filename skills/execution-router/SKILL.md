@@ -26,16 +26,18 @@ agent is a separate peer executor.
 
 When more than one authorized Desktop Commander transport can reach local
 execution, read the consuming deployment's trusted transport policy and follow
-its configured preferred/fallback order. The reusable router does not make a
-universal private/direct-versus-hosted choice for every consumer.
+its configured preferred/fallback order. This is a transport sub-selection made
+after the reusable router has chosen `chatgpt-local`; `routeTask` itself does
+not encode vendor- or machine-specific transport ordering.
 
 Treat transport and target device as part of the execution identity. Different
-devices may expose different filesystems, permissions, or sandboxes. After an
-ambiguous mutating transport failure, do not replay until the first invocation
-is known to have terminated or an idempotency/operation-status mechanism proves
-replay safe. Then inspect authoritative target state before retrying. Transport
-selection never broadens permissions, filesystem allowlists, command blocks, or
-approval requirements.
+devices may expose different filesystems, permissions, or sandboxes. A fallback
+used to replay an ambiguous mutation must resolve to the same target device; a
+target-device change is a new explicitly authorized operation, not a retry.
+Before same-device replay, establish that the first invocation has terminated or
+use an idempotency/operation-status mechanism that proves replay safe, then
+inspect authoritative target state. Transport selection never broadens
+permissions, filesystem allowlists, command blocks, or approval requirements.
 
 Handoff requires a concrete missing capability, independent/resumable execution
 lifecycle, local-harness/tooling advantage, or explicit user preference. Code, many
