@@ -7,6 +7,7 @@ Mergify is the merge authority for `agent-platform`.
 - Merge Protections gate merges into `main` on deterministic CI, GitGuardian,
   Socket PR scanning, and the absence of outstanding change-request reviews.
 - Safe Renovate updates receive `renovate-automerge`; security updates remain manual.
+- Renovate is the sole dependency-maintenance producer. The shared preset ignores archival/runtime-copy trees, applies Renovate's official three-day PyPI release-age safeguard, performs weekly lock-file maintenance, pins digests/actions, and tracks pinned Mergify CLI releases used by Test Insights.
 - Human-authored pull requests opt into automation with the `merge-ready` label.
 - Auto-Merge sends eligible pull requests to the Merge Queue.
 - The Merge Queue uses serial, single-PR squash merges with single-step in-place
