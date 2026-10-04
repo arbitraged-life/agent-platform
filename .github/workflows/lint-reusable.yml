@@ -116,7 +116,7 @@ jobs:
           persist-credentials: false
       - uses: biomejs/setup-biome@4c91541eaada48f67d7dbd7833600ce162b68f51 # v2.7.1
         with:
-          version: "2.2.2"
+          version: "2.5.15"
       - name: Biome check
         env:
           LINT_STRICT: ${{ inputs.strict }}
