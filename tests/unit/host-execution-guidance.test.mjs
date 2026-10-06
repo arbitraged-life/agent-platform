@@ -26,3 +26,13 @@ test('portable routing distinguishes cloud coordination from the selected execut
   assert.match(text, /For the configured local launcher/);
   assert.match(text, /do not invent an additional local-launcher/);
 });
+
+test('reference guidance keeps host tasks separate from local launcher packets', async () => {
+  const root = new URL('../../skills/execution-router/references/', import.meta.url);
+  const overlay = await readFile(new URL('project-overlay.md', root), 'utf8');
+  const contract = await readFile(new URL('handoff-contract.md', root), 'utf8');
+  assert.match(overlay, /only when the host permits/);
+  assert.match(overlay, /host-supported delegated task workflow/);
+  assert.match(contract, /applies to the configured local launcher/);
+  assert.match(contract, /do not fabricate a local/);
+});

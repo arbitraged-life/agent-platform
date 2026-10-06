@@ -83,7 +83,9 @@ Never enable broader plugin permissions, insecure flags, or API-key fallback.
 
 ## Bounded handoff
 
-Read `references/handoff-contract.md`. Include task ID, originating project,
+Use the host's task schema and authorization flow for host-supported delegated
+tasks. For the configured local launcher, read `references/handoff-contract.md`.
+Include task ID, originating project,
 objective, acceptance criteria, current workspace/revision, actions, remaining
 work, relevant evidence/decisions, executor/profile, and stop conditions. Do not
 copy the entire conversation, unrelated memory, secrets, or credentials.
