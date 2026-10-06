@@ -1,5 +1,9 @@
 # Handoff contract v1
 
+This contract applies to the configured local launcher. Host-supported delegated
+tasks use the host's task schema and authorization flow; do not fabricate a local
+launcher approval reference or translate a host task into this packet by default.
+
 Task packets are JSON. Unknown top-level fields are rejected.
 
 | Field | Meaning |

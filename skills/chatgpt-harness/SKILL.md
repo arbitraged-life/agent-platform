@@ -30,10 +30,28 @@ Use installed plugin skills when their trigger descriptions match the task. Pref
 Choose the lowest-overhead authorized path that can complete and verify the task.
 
 - Connected ChatGPT apps own supported cloud actions.
-- Use Desktop Commander for authorized local filesystem, shell, Git, process, build, test, lint, Docker, and runtime work.
+- Use an authorized local-execution connector for filesystem, shell, Git, process, build, test, lint, Docker, and runtime work only when the host permits that route.
 - Use GitHub for remote repository lifecycle state when local state is unnecessary.
-- Delegate to a separate CLI/local agent only when its harness, locality, resumable lifecycle, or tooling is materially advantageous and the required authorization exists.
+- Delegate when the host requires a separate task, or when a CLI/local agent's harness, locality, resumable lifecycle, or tooling is materially advantageous and the required authorization exists.
 - Do not route around a permission, consent, spending, safety, or account boundary.
+
+### Host execution boundary
+
+Apply the current host's execution requirements before choosing a connector.
+For a dot coordinating work in the cloud, use a host-supported delegated task
+for work on the user's computer, registered remote, or saved coding environment.
+Do not operate those environments directly from the coordinating conversation
+when the host requires its separate task workflow. Check the environment's current
+connection and authorization state, honor the user's selected environment, and
+return the task identifier with verified results. Keep the dot's own cloud
+computer distinct from the selected executor.
+
+In an ordinary ChatGPT session, direct authorized Desktop Commander use remains
+appropriate when the host permits that route. A required host task boundary is
+a valid reason to delegate even if a direct connector exposes the operation.
+This skill does not grant access or approval, replace host checks, or reproduce
+the executor's runtime enforcement.
+See the public [dot computer-access guide](https://help.openai.com/en/articles/20001530-getting-started-with-your-dot) for the separate-task model.
 
 ## Harness compatibility
 
