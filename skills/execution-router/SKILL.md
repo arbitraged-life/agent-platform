@@ -15,12 +15,29 @@ user manage that distinction or invent a tool to switch modes.
 ## Route by ownership, then execution needs
 
 Determine the system that owns the state. Read current relevant state before
-writing it. Then choose the best authorized execution surface. When already in
-ChatGPT, the owning connector or connected Desktop Commander is often the
-lowest-overhead path. A CLI/coding agent is equally valid when its repository
+writing it. Then choose the best authorized execution surface allowed by the
+current host. The owning connector or authorized local-execution connector can
+be the lowest-overhead path. A CLI/coding agent is equally valid when its repository
 harness, local context, independent/resumable lifecycle, or tooling is materially
-better suited. Desktop Commander is a direct connected path from ChatGPT; a CLI
-agent is a separate peer executor.
+better suited. A CLI agent is a separate peer executor.
+
+### Host execution boundary
+
+For a dot coordinating work in the cloud, use a host-supported delegated task
+for work on the user's computer, registered remote, or saved coding environment.
+Do not operate those environments directly from the coordinating conversation
+when the host requires its separate task workflow. Inspect the available environment
+catalog, connection and authorization state, and the selected task route's
+requirements before creating the task. Honor an explicitly selected environment;
+if it is blocked, report that blocker rather than silently substituting another.
+Keep the dot's own cloud computer distinct from a selected user or saved executor.
+Return the actual task identifier and verify the result in its owning system.
+
+In an ordinary ChatGPT session, direct authorized Desktop Commander use remains
+appropriate when the host permits that route. A required host task boundary is
+a valid reason to delegate even if a direct connector exposes the operation.
+This skill does not grant access or approval or override host restrictions.
+See the public [dot computer-access guide](https://help.openai.com/en/articles/20001530-getting-started-with-your-dot) for the separate-task model.
 
 ### Desktop Commander transport selection
 
@@ -39,7 +56,7 @@ use an idempotency/operation-status mechanism that proves replay safe, then
 inspect authoritative target state. Transport selection never broadens
 permissions, filesystem allowlists, command blocks, or approval requirements.
 
-Handoff requires a concrete missing capability, independent/resumable execution
+Handoff requires a host task boundary, concrete missing capability, independent/resumable execution
 lifecycle, local-harness/tooling advantage, or explicit user preference. Code, many
 steps, and perceived complexity alone are not sufficient. Discover actual tools
 before saying a capability is missing. A blocked permission, consent, account,
@@ -54,10 +71,13 @@ launches. An explicit request to implement or preserve research authorizes that
 bounded action, not unrelated work. AGENT and future agents retain their own
 scope. Tools and external agents do not gain authority merely by being available.
 
-Automatically choose the route and gather a minimal handoff when a handoff is actually useful. Do not force work to remain in ChatGPT merely because ChatGPT can technically reach the target, and do not create a handoff merely for ceremony. Launch only under
-an explicitly approved delegation profile or task-specific user authorization.
-Version 1's installed launcher requires per-task approval. Do not fabricate an
-approval reference or treat this skill as standing launch/spending consent.
+Automatically choose the route and gather a minimal handoff when a handoff is actually useful. Do not force work to remain in ChatGPT merely because ChatGPT can technically reach the target, and do not create a handoff merely for ceremony.
+For the configured local launcher, launch only under an explicitly approved
+delegation profile or task-specific user authorization. Version 1's installed
+local launcher requires per-task approval. Host-supported delegated tasks follow
+the host's own authorization flow; do not invent an additional local-launcher
+approval step for them. Do not fabricate an approval reference or treat this
+skill as standing launch/spending consent.
 Ask only about the unresolved permission, material cost, or consequential choice.
 Never enable broader plugin permissions, insecure flags, or API-key fallback.
 
