@@ -36,7 +36,7 @@ jobs:
       - run: ./scripts/validate
   review-identity:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - name: Harden Runner
@@ -56,7 +56,7 @@ jobs:
           REVIEW_IDENTITY_REPOSITORY: ${{ github.repository }}
         run: python3 -I tests/integration/review-identity.py
   secrets:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - name: Harden Runner

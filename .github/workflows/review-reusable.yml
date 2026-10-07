@@ -22,7 +22,7 @@ permissions:
   id-token: write
 jobs:
   review:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     concurrency:
       group: structured-review-${{ github.repository }}-${{ github.event.pull_request.number || github.event.issue.number }}
