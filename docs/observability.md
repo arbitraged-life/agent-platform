@@ -87,6 +87,39 @@ The PostHog exporter is a secondary projection. Private consumers decide whether
 PostHog delivery failure is blocking or fail-open; the public module itself always
 reports delivery failure rather than fabricating success.
 
+
+## Execution-efficiency analysis
+
+The instrumented operation evidence and completed-turn telemetry can be analyzed
+without sharing prompts, tool arguments, paths, or raw outputs:
+
+```sh
+node scripts/observability/efficiency.mjs /path/to/authorized-records.json
+```
+
+The input is an array of canonical `agent.turn.completed` and
+`agent.evidence` records, or an object with a `records` array. Every
+record must validate against its existing strict schema. The reducer
+deduplicates verified effects by `action_key` (falling back to the
+tool-call/event ID); an operation only counts when its
+`verification_status` is `verified`. This is a **verified action**
+rate, not an inferred count of changed files or a measure of user satisfaction.
+
+The output includes measured tool calls, verified actions, failure counts,
+duration, coverage gaps, and `tool_calls_per_verified_action`. The latter
+is `null` when any included successful turn has missing tool counts,
+no verified actions, or conflicting evidence. Production-only filtering
+excludes synthetic evidence; do not mix experimental data with production.
+The reducer neither creates events nor captures activity. Connectors need
+actual instrumented hooks and delivery receipts before their actions can
+be counted. Ordinary ChatGPT conversation execution and generic third-party
+connector calls are **not** automatically captured by this runtime.
+
+The Opik `chatgpt-execution-routing-regressions` dataset contains a
+manual, non-production encrypted-Vault-editing regression example from
+2026-10-13. It is not evidence of automatic capture, production
+improvement, or a measured baseline.
+
 ## Operation evidence and delivery receipts
 
 `schemas/telemetry-evidence.schema.json` is a separate versioned contract. It permits
