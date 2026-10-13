@@ -11,7 +11,7 @@ repos:
       - id: check-toml
       - id: check-merge-conflict
       - id: end-of-file-fixer
-        files: ^(?:runtime/|scripts/|tests/|docs/|evals/routing\.mjs$|[^/]+\.(?:json|ya?ml)$)
+        files: &first_party_files ^(?:runtime/|scripts/|tests/|docs/|schemas/|actions/|\.github/|skills/turnstile-spin/templates/worker/|evals/routing\.mjs$|[^/]+\.(?:md|json|ya?ml)$)
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
-        files: ^(?:runtime/|scripts/|tests/|docs/|evals/routing\.mjs$|[^/]+\.(?:json|ya?ml)$)
+        files: *first_party_files

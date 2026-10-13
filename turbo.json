@@ -1,14 +1,21 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
   "cacheDir": "_state/quality-cache/turbo",
-  "globalEnv": [
-    "QUALITY_CACHE_RUNTIME",
-    "NODE_OPTIONS"
-  ],
+  "globalEnv": ["QUALITY_CACHE_RUNTIME", "NODE_OPTIONS"],
   "tasks": {
     "lint:knip:report": {
       "inputs": [
-        "$TURBO_DEFAULT$"
+        "$TURBO_DEFAULT$",
+        "**/*.{js,mjs,cjs,ts,tsx,jsx,mts,cts}",
+        "**/package.json",
+        "**/tsconfig*.json",
+        "!**/node_modules/**",
+        "!**/dist/**",
+        "!_state/**",
+        "!_archive/**",
+        "!.git/**",
+        "!.agents/**",
+        "!.venv/**"
       ],
       "outputs": []
     }

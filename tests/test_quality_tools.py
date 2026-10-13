@@ -25,13 +25,18 @@ class QualityToolsTests(unittest.TestCase):
     def test_turbo_only_caches_the_source_report(self):
         config = json.loads((ROOT / "turbo.json").read_text())
         self.assertEqual(set(config["tasks"]), {"lint:knip:report"})
-        self.assertEqual(config["tasks"]["lint:knip:report"]["inputs"], ["$TURBO_DEFAULT$"])
+        inputs = config["tasks"]["lint:knip:report"]["inputs"]
+        for pattern in ["$TURBO_DEFAULT$", "**/*.{js,mjs,cjs,ts,tsx,jsx,mts,cts}", "**/package.json", "**/tsconfig*.json", "!**/node_modules/**", "!_state/**"]:
+            self.assertIn(pattern, inputs)
         self.assertIn("QUALITY_CACHE_RUNTIME", config["globalEnv"])
         knip_path = "_config/knip.json" if (ROOT / "_config").is_dir() else "knip.json"
         workspaces = json.loads((ROOT / knip_path).read_text())["workspaces"]
         self.assertEqual(set(config["globalDependencies"]), {str(Path(name) / "node_modules/.package-lock.json") for name in workspaces})
         runner = (ROOT / "scripts/quality-cache.mjs").read_text()
         self.assertIn("--cache=local:rw", runner)
+        self.assertIn("spawn(process.execPath, [executable", runner)
+        self.assertIn("node_modules/turbo/bin/turbo", runner)
+        self.assertNotIn("shell: true", runner)
         self.assertIn("process.version", runner)
         self.assertIn("process.arch", runner)
         self.assertIn("process.platform", runner)
