@@ -6,7 +6,7 @@ import path from "node:path";
 import { createUuidV7, turnEvent } from "../../runtime/observability/records.mjs";
 import { evidenceRecord, stableEvidenceId, validateEvidence } from "../../runtime/observability/evidence.mjs";
 import { createOpikExporter } from "../../runtime/observability/opik.mjs";
-import { createPosthogExporter } from "../../runtime/observability/posthog.mjs";
+import { createPosthogExporter, posthogOperationalRecord } from "../../runtime/observability/posthog.mjs";
 import { createDurableExporter } from "../../runtime/observability/outbox.mjs";
 const timing = { startedMs: 1700000000000, endedMs: 1700000001500 };
 const traceId = createUuidV7(timing.startedMs);
@@ -212,4 +212,21 @@ test("unknown tool measurements remain null; observed zero remains zero", () => 
     zero = turnEvent({ runtime: "fixture", runId: "run", ...timing, toolCalls: 0, toolFailures: 0 });
   assert.equal(unknown.tool_calls, null);
   assert.equal(zero.tool_calls, 0);
+});
+
+test("PostHog completion preserves production eligibility from its evidence envelope", () => {
+  const metrics = turnEvent({
+    runtime: "integration-smoke", runId: "acceptance", ...timing,
+    eventId: traceId, toolCalls: 1, toolFailures: 0,
+  });
+  const envelope = evidenceRecord({
+    ...base, eventName: "agent.turn.finished", endedMs: timing.endedMs,
+    outcome: "succeeded", productionEligible: false, metrics,
+  });
+  const projected = posthogOperationalRecord(envelope);
+  assert.equal(projected.event, "personal_os_agent_turn_completed");
+  assert.equal(projected.properties.production_eligible, false);
+  assert.equal(projected.properties.evidence_origin, "mechanically_captured");
+  assert.equal(projected.properties.evidence_event_id, envelope.event_id);
+  assert.equal(projected.properties.opik_trace_id, traceId);
 });
