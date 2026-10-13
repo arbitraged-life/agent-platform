@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, readdir, rename, rm, lstat, link } from "node:fs/promises";
+import { mkdir, open, readdir, rename, rm, lstat, link } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { validateObservabilityRecord } from "./evidence.mjs";
