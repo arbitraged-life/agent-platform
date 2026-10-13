@@ -1,80 +1,97 @@
 import { validateEvidence } from "./evidence.mjs";
 import { validateEvent } from "./records.mjs";
 
-/**
- * Analyze only instrumented operations. One verified action key represents
- * one independently confirmed effect; never infer it from successful calls.
- */
-export function executionEfficiency(records, { productionOnly = true } = {}) {
-  if (!Array.isArray(records)) throw new Error("Expected telemetry records array");
+function newTurn() {
+  return { operations: new Map(), terminal: null, production: false, conflict: false };
+}
+
+function turnFor(turns, id) {
+  if (!turns.has(id)) turns.set(id, newTurn());
+  return turns.get(id);
+}
+
+function setTerminal(turn, metrics) {
+  if (turn.terminal && JSON.stringify(turn.terminal) !== JSON.stringify(metrics))
+    turn.conflict = true;
+  turn.terminal = metrics;
+}
+
+function recordOperation(turn, record) {
+  const key = record.action_key ?? record.tool_call_id ?? record.event_id;
+  const prior = turn.operations.get(key);
+  const status = record.verification_status;
+  if (prior !== undefined && prior !== status) turn.conflict = true;
+  else turn.operations.set(key, status);
+}
+
+function collectTurns(records, productionOnly) {
   const turns = new Map();
   for (const raw of records) {
     const record = structuredClone(raw);
-    if (record?.record_type === "agent.evidence") {
-      validateEvidence(record);
-      if (productionOnly && !record.production_eligible) continue;
-      const id = record.trace_id;
-      if (!turns.has(id)) turns.set(id, { operations: new Map(), terminal: null, production: false, conflict: false });
-      const turn = turns.get(id);
-      if (record.event_name === "agent.turn.finished" && record.production_eligible) turn.production = true;
-      if (record.event_name === "agent.operation.observed") {
-        const key = record.action_key ?? record.tool_call_id ?? record.event_id;
-        const prior = turn.operations.get(key);
-        const state = record.verification_status;
-        if (prior !== undefined && prior !== state) turn.conflict = true;
-        else turn.operations.set(key, state);
-      }
-      if (record.event_name === "agent.turn.finished" && record.metrics) {
-        if (turn.terminal && JSON.stringify(turn.terminal) !== JSON.stringify(record.metrics))
-          turn.conflict = true;
-        turn.terminal = record.metrics;
-      }
-    } else {
+    if (record?.record_type !== "agent.evidence") {
       validateEvent(record);
-      if (!turns.has(record.event_id))
-        turns.set(record.event_id, { operations: new Map(), terminal: record, production: false, conflict: false });
-      else {
-        const turn = turns.get(record.event_id);
-        if (turn.terminal && JSON.stringify(turn.terminal) !== JSON.stringify(record))
-          turn.conflict = true;
-        turn.terminal = record;
-      }
+      setTerminal(turnFor(turns, record.event_id), record);
+      continue;
     }
+    validateEvidence(record);
+    if (productionOnly && !record.production_eligible) continue;
+    const turn = turnFor(turns, record.trace_id);
+    if (record.event_name === "agent.operation.observed")
+      recordOperation(turn, record);
+    if (record.event_name !== "agent.turn.finished") continue;
+    if (record.production_eligible) turn.production = true;
+    if (record.metrics !== null) setTerminal(turn, record.metrics);
   }
-  let eligibleTurns = 0, verifiedActions = 0, measuredCalls = 0, failures = 0, duration = 0;
-  let unknownCalls = 0, unknownDuration = 0, inconsistent = 0, unverifiedTurns = 0;
-  for (const turn of turns.values()) {
-    if (productionOnly && !turn.production) continue;
-    if (turn.conflict) { inconsistent++; continue; }
-    const m = turn.terminal;
-    if (!m || m.status !== "succeeded") continue;
-    eligibleTurns++;
-    const verified = [...turn.operations.values()].filter(v => v === "verified").length;
-    verifiedActions += verified;
-    if (!verified) unverifiedTurns++;
-    if (m.tool_calls === null) unknownCalls++;
-    else measuredCalls += m.tool_calls;
-    if (m.duration_ms === null) unknownDuration++;
-    else duration += m.duration_ms;
-    if (m.tool_failures !== null) failures += m.tool_failures;
-  }
-  const coverageComplete = unknownCalls === 0 && inconsistent === 0 &&
-    unverifiedTurns === 0 && eligibleTurns > 0;
+  return turns;
+}
+
+function summary() {
   return {
-    schema_version: 1,
-    source: "instrumented_telemetry",
-    production_only: productionOnly,
-    completed_turns: eligibleTurns,
-    verified_actions: verifiedActions,
-    measured_tool_calls: measuredCalls,
-    reported_tool_failures: failures,
-    measured_duration_ms: unknownDuration ? null : duration,
-    missing_tool_call_turns: unknownCalls,
-    missing_duration_turns: unknownDuration,
-    completed_turns_without_verified_actions: unverifiedTurns,
-    conflicting_traces: inconsistent,
-    coverage_complete: coverageComplete,
-    tool_calls_per_verified_action: coverageComplete && verifiedActions > 0 ?
-      measuredCalls / verifiedActions : null,
+    schema_version: 1, source: "instrumented_telemetry",
+    completed_turns: 0, verified_actions: 0, measured_tool_calls: 0,
+    reported_tool_failures: 0, measured_duration_ms: 0,
+    missing_tool_call_turns: 0, missing_duration_turns: 0,
+    completed_turns_without_verified_actions: 0, conflicting_traces: 0,
   };
+}
+
+function accumulate(result, turn) {
+  const metrics = turn.terminal;
+  if (!metrics || metrics.status !== "succeeded") return;
+  result.completed_turns++;
+  const verified = [...turn.operations.values()].filter(v => v === "verified").length;
+  result.verified_actions += verified;
+  if (verified === 0) result.completed_turns_without_verified_actions++;
+  if (metrics.tool_calls === null) result.missing_tool_call_turns++;
+  else result.measured_tool_calls += metrics.tool_calls;
+  if (metrics.duration_ms === null) result.missing_duration_turns++;
+  else result.measured_duration_ms += metrics.duration_ms;
+  if (metrics.tool_failures !== null)
+    result.reported_tool_failures += metrics.tool_failures;
+}
+
+/**
+ * Only measured, instrumented events are analyzed. A verified action denotes
+ * a verified observed operation, which may be a read, not necessarily a write.
+ */
+export function executionEfficiency(records, { productionOnly = true } = {}) {
+  if (!Array.isArray(records)) throw new Error("Expected telemetry records array");
+  if (typeof productionOnly !== "boolean") throw new Error("Invalid production filter");
+  const result = summary();
+  for (const turn of collectTurns(records, productionOnly).values()) {
+    if (productionOnly && !turn.production) continue;
+    if (turn.conflict) { result.conflicting_traces++; continue; }
+    accumulate(result, turn);
+  }
+  result.production_only = productionOnly;
+  result.coverage_complete = result.completed_turns > 0 &&
+    result.missing_tool_call_turns === 0 &&
+    result.missing_duration_turns === 0 &&
+    result.completed_turns_without_verified_actions === 0 &&
+    result.conflicting_traces === 0;
+  result.tool_calls_per_verified_action =
+    result.coverage_complete && result.verified_actions > 0 ?
+      result.measured_tool_calls / result.verified_actions : null;
+  if (result.missing_duration_turns > 0) result.measured_duration_ms = null;
+  return result;
 }
