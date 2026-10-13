@@ -20,7 +20,10 @@ inherit this repository's merge-executor change.
 | Pre-1.0 versions | Review-only; an exception needs package-specific build/smoke evidence. |
 | Security updates | Same version-specific policy; security labels are not approval. |
 
-There is no blanket major, development-dependency, or pre-1.0 approval. An
+Development dependencies follow the same update-type rules: stable minor/patch
+updates are eligible, but being a development dependency never exempts a major
+or pre-1.0 version upgrade from review. Pins/digests and lock maintenance retain
+their separately approved policy; they are not blanket version-upgrade approval. An
 approved exceptional update may be completed automatically after its own gates;
 this does not approve every future version. Existing release-age safeguards,
 schedules, limits, action/digest pinning, and infrastructure grouping remain.
