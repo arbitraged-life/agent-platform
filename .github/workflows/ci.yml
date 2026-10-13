@@ -33,6 +33,8 @@ jobs:
         with:
           python-version: '3.14.8'
       - run: ./scripts/setup
+      - name: Knip report (advisory findings; tool errors fail)
+        run: npm run lint:knip:report
       - run: ./scripts/validate
   review-identity:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'

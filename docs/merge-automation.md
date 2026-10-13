@@ -1,55 +1,55 @@
 # Merge automation
 
-Mergify is the merge authority for `agent-platform`.
+## Ownership
 
-## Policy
+Renovate owns dependency discovery, eligibility, PR updates, and housekeeping.
+For this public repository, it requests GitHub native squash auto-merge. GitHub
+Free supports native auto-merge on public repositories. Mergify continues merging
+other PRs selected with `merge-ready` and supplies generic merge protections.
 
-- Merge Protections gate merges into `main` on deterministic CI, GitGuardian,
-  Socket PR scanning, and the absence of outstanding change-request reviews.
-- Safe Renovate updates receive `renovate-automerge`; security updates remain manual.
-- Renovate is the sole dependency-maintenance producer. The shared preset ignores archival/runtime-copy trees, applies Renovate's official three-day PyPI release-age safeguard, performs weekly lock-file maintenance, pins digests/actions, and tracks pinned Mergify CLI releases used by Test Insights.
-- Human-authored pull requests opt into automation with the `merge-ready` label.
-- Auto-Merge sends eligible pull requests to the Merge Queue.
-- The Merge Queue uses serial, single-PR squash merges with single-step in-place
-  checks, preserving compatibility with GitHub's strict up-to-date required-status policy.
-- Workflow Automation is limited to non-merge housekeeping; currently it comments
-  when a pull request has a merge conflict.
-- Security fixes have high queue priority; routine Renovate updates have low priority.
+The repository-local `renovate.json` extends official Renovate presets directly.
+The reusable `default.json` remains unchanged, so consuming repositories do not
+inherit this repository's merge-executor change.
 
-The fallback operator command is `@Mergifyio queue` when a pull request should be
-queued manually.
+## Eligibility
 
-## Failure behavior
+| Update | Decision |
+| --- | --- |
+| Stable minor/patch, pins/digests, lock maintenance | Automatic after enforced checks. |
+| Major application/service updates | Review migration impact, test it, then select that PR. |
+| Pre-1.0 versions | Review-only; an exception needs package-specific build/smoke evidence. |
+| Security updates | Same version-specific policy; security labels are not approval. |
 
-A failed required check or merge conflict leaves the pull request unmerged. Workflow
-Automation may comment on conflicts, but only Merge Protections plus the Merge Queue
-authorize an automated merge.
+Development dependencies follow the same update-type rules: stable minor/patch
+updates are eligible, but being a development dependency never exempts a major
+or pre-1.0 version upgrade from review. Pins/digests and lock maintenance retain
+their separately approved policy; they are not blanket version-upgrade approval. An
+approved exceptional update may be completed automatically after its own gates;
+this does not approve every future version. Existing release-age safeguards,
+schedules, limits, action/digest pinning, and infrastructure grouping remain.
 
+## Enforcement
 
-## Renovate ownership
+`platformAutomerge: true` requires repository auto-merge enabled and real GitHub
+required checks. The existing default-branch ruleset requires Mergify Merge
+Protections from app 10562, requires up-to-date branches, prohibits force pushes,
+and has no bypass actors. These settings are not relaxed.
 
-Renovate is the only dependency pull-request producer for the active platform
-repositories. The shared `default.json` preset uses Renovate
-`config:best-practices`, which already supplies weekly lock-file maintenance,
-Docker digest pinning, GitHub Action SHA pinning, configuration migrations,
-development-dependency pinning, abandoned-package detection, and the npm
-minimum-release-age safeguard.
+The generic protection requires Linux and macOS validation, the GitHub secrets
+job, Qlty, GitGuardian, Socket, no changes-requested reviews, and a Conventional
+Commit title. Mergify excludes Renovate from automatic queue entry, queue
+conditions, conflict notifications, and stale-PR housekeeping.
 
-To reduce PR noise without coupling unrelated application upgrades, the shared
-policy groups only low-coupling infrastructure families:
+GitHub waits for required checks, not every optional installed integration.
+Additional blocking findings must be investigated before selecting an exceptional
+PR. Do not turn optional scan failures into synthetic passing statuses.
 
-- GitHub Actions minor/patch/pin/digest updates
-- Terraform provider minor/patch/pin/digest updates
-- CircleCI minor/patch/pin/digest updates
+## Verification
 
-Application/runtime package updates remain independently reviewable. Multiple
-major releases are separated into sequential major upgrades.
+Run `python3 -m unittest discover -s tests -p test_merge_policy.py` and
+`./scripts/validate`, then validate Renovate and Mergify configuration.
+Verify configuration on main, the live required-check ruleset, and a native
+auto-merge request separately from observing an actual autonomous merge.
 
-Renovate also owns pinned command-line dependencies embedded outside ordinary
-package manifests. Shared regex managers detect `npx --yes package@x.y.z` pins
-and `uv --with Package==x.y.z` pins in justfiles, shell scripts, and YAML. This
-keeps eval/tooling pins such as Promptfoo and ad-hoc Python helpers on the same
-managed update path instead of requiring custom bump scripts.
-
-Renovate never merges directly; it labels eligible stable updates and Mergify
-remains the sole automated merge authority.
+References: [GitHub auto-merge](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/automatically-merging-a-pull-request),
+[Renovate platform automerge](https://docs.renovatebot.com/configuration-options/#platformautomerge).

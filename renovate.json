@@ -1,4 +1,178 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>arbitraged-life/agent-platform"]
+  "description": [
+    "Public repository policy: Renovate selects dependency updates; GitHub native auto-merge executes eligible squash merges after enforced checks."
+  ],
+  "extends": [
+    "config:best-practices",
+    ":separateMultipleMajorReleases",
+    "security:minimumReleaseAgePypi"
+  ],
+  "dependencyDashboard": true,
+  "timezone": "America/Cancun",
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "automerge": false,
+  "rebaseWhen": "behind-base-branch",
+  "packageRules": [
+    {
+      "description": "Automatically merge stable minor and patch updates",
+      "matchCurrentVersion": "!/^0/",
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "addLabels": [
+        "renovate-automerge"
+      ],
+      "automerge": true
+    },
+    {
+      "description": "Automatically merge pins and digest refreshes",
+      "matchUpdateTypes": [
+        "pin",
+        "pinDigest",
+        "digest"
+      ],
+      "addLabels": [
+        "renovate-automerge"
+      ],
+      "automerge": true
+    },
+    {
+      "description": "Automatically merge lock-file maintenance",
+      "matchUpdateTypes": [
+        "lockFileMaintenance"
+      ],
+      "addLabels": [
+        "renovate-automerge"
+      ],
+      "automerge": true
+    },
+    {
+      "description": "Require explicit approval before creating major-update PRs",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "dependencyDashboardApproval": true,
+      "addLabels": [
+        "renovate-major"
+      ],
+      "automerge": false
+    },
+    {
+      "description": "Group GitHub Actions updates into one managed infrastructure PR",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "pinDigest",
+        "digest"
+      ],
+      "groupName": "github-actions"
+    },
+    {
+      "description": "Group Terraform provider updates into one managed infrastructure PR",
+      "matchManagers": [
+        "terraform"
+      ],
+      "matchDepTypes": [
+        "required_provider",
+        "provider"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "digest"
+      ],
+      "groupName": "terraform-providers"
+    },
+    {
+      "description": "Group CircleCI image and orb updates into one managed infrastructure PR",
+      "matchManagers": [
+        "circleci"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "digest"
+      ],
+      "groupName": "circleci"
+    },
+    {
+      "description": "Keep pre-1.0 upgrades review-only unless separately approved",
+      "matchCurrentVersion": "/^0/",
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "major"
+      ],
+      "automerge": false
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track pinned npm CLI versions embedded in scripts, YAML, and justfiles",
+      "managerFilePatterns": [
+        "/(^|/)justfile$/",
+        "/\\.(sh|ya?ml)$/"
+      ],
+      "matchStrings": [
+        "npx(?:\\s+--yes|\\s+-y)?\\s+(?<depName>@?[A-Za-z0-9._/-]+)@(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasourceTemplate": "npm"
+    },
+    {
+      "customType": "regex",
+      "description": "Track pinned Python packages passed to uv --with",
+      "managerFilePatterns": [
+        "/(^|/)justfile$/",
+        "/\\.(sh|ya?ml)$/"
+      ],
+      "matchStrings": [
+        "--with\\s+(?<depName>[A-Za-z0-9_.-]+)==(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasourceTemplate": "pypi"
+    },
+    {
+      "customType": "regex",
+      "description": "Track pinned Mergify CLI release versions",
+      "managerFilePatterns": [
+        "/\\.circleci\\/config\\.yml$/",
+        "/\\.github\\/workflows\\/.*\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "MERGIFY_VERSION=(?<currentValue>\\d{4}\\.\\d+\\.\\d+(?:\\.\\d+)?)"
+      ],
+      "datasourceTemplate": "github-releases",
+      "packageNameTemplate": "Mergifyio/mergify-cli"
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "prConcurrentLimit": 10,
+    "addLabels": [
+      "security"
+    ]
+  },
+  "labels": [
+    "dependencies"
+  ],
+  "ignorePaths": [
+    "**/_archive/**",
+    "**/_state/**"
+  ],
+  "automergeType": "pr",
+  "platformAutomerge": true,
+  "automergeStrategy": "squash",
+  "ignoreTests": false
 }

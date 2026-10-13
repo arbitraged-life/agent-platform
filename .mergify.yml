@@ -6,11 +6,8 @@ merge_protections_settings:
   reporting_method: check-runs
   post_comment: false
   auto_merge_conditions:
-    - or:
-        - and:
-            - label = renovate-automerge
-            - -label = security
-        - label = merge-ready
+    - -author = renovate[bot]
+    - label = merge-ready
 
 merge_protections:
   - name: main branch validation
@@ -43,6 +40,7 @@ queue_rules:
       trailers: []
     queue_conditions:
       - base = main
+      - -author = renovate[bot]
       - check-success = @github-actions/validate (ubuntu-24.04)
       - check-success = @github-actions/validate (macos-14)
       - check-success = @github-actions/secrets
@@ -54,15 +52,11 @@ priority_rules:
       - title ~= \[security\]
     priority: high
 
-  - name: routine Renovate updates
-    conditions:
-      - author = renovate[bot]
-    priority: low
-
 pull_request_rules:
   - name: notify merge conflicts
     conditions:
       - base = main
+      - -author = renovate[bot]
       - conflict
     actions:
       comment:
@@ -72,6 +66,7 @@ pull_request_rules:
     description: Mark non-exempt PRs stale after 60 days without activity.
     conditions:
       - base = main
+      - -author = renovate[bot]
       - -closed
       - -draft
       - -label = stale
@@ -90,6 +85,7 @@ pull_request_rules:
     description: Close stale non-exempt PRs after a 14-day grace period.
     conditions:
       - base = main
+      - -author = renovate[bot]
       - -closed
       - label = stale
       - -label = pinned
