@@ -18,6 +18,8 @@ class MergePolicyTests(unittest.TestCase):
 
     def test_only_stable_low_risk_update_classes_are_automatic(self):
         rules = self.policy["packageRules"]
+        automatic_types = {kind for rule in rules if rule.get("automerge") is True for kind in rule.get("matchUpdateTypes", [])}
+        self.assertEqual(automatic_types, {"minor", "patch", "pin", "pinDigest", "digest", "lockFileMaintenance"})
         for rule in (rule for rule in rules if rule.get("automerge") is True):
             self.assertTrue(rule.get("matchUpdateTypes"))
             self.assertNotIn("major", rule["matchUpdateTypes"])
