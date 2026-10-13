@@ -21,7 +21,7 @@ export function executionEfficiency(records, { productionOnly = true } = {}) {
         const key = record.action_key ?? record.tool_call_id ?? record.event_id;
         const prior = turn.operations.get(key);
         const state = record.verification_status;
-        if (prior && prior !== state) turn.conflict = true;
+        if (prior !== undefined && prior !== state) turn.conflict = true;
         else turn.operations.set(key, state);
       }
       if (record.event_name === "agent.turn.finished" && record.metrics) {
