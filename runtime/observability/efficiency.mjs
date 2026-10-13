@@ -14,8 +14,9 @@ export function executionEfficiency(records, { productionOnly = true } = {}) {
       validateEvidence(record);
       if (productionOnly && !record.production_eligible) continue;
       const id = record.trace_id;
-      if (!turns.has(id)) turns.set(id, { operations: new Map(), terminal: null, conflict: false });
+      if (!turns.has(id)) turns.set(id, { operations: new Map(), terminal: null, production: false, conflict: false });
       const turn = turns.get(id);
+      if (record.event_name === "agent.turn.finished" && record.production_eligible) turn.production = true;
       if (record.event_name === "agent.operation.observed") {
         const key = record.action_key ?? record.tool_call_id ?? record.event_id;
         const prior = turn.operations.get(key);
@@ -31,7 +32,7 @@ export function executionEfficiency(records, { productionOnly = true } = {}) {
     } else {
       validateEvent(record);
       if (!turns.has(record.event_id))
-        turns.set(record.event_id, { operations: new Map(), terminal: record, conflict: false });
+        turns.set(record.event_id, { operations: new Map(), terminal: record, production: false, conflict: false });
       else {
         const turn = turns.get(record.event_id);
         if (turn.terminal && JSON.stringify(turn.terminal) !== JSON.stringify(record))
@@ -43,6 +44,7 @@ export function executionEfficiency(records, { productionOnly = true } = {}) {
   let eligibleTurns = 0, verifiedActions = 0, measuredCalls = 0, failures = 0, duration = 0;
   let unknownCalls = 0, unknownDuration = 0, inconsistent = 0, unverifiedTurns = 0;
   for (const turn of turns.values()) {
+    if (productionOnly && !turn.production) continue;
     if (turn.conflict) { inconsistent++; continue; }
     const m = turn.terminal;
     if (!m || m.status !== "succeeded") continue;
