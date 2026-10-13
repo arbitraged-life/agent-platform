@@ -28,7 +28,9 @@ function collectTurns(records, productionOnly) {
   const turns = new Map();
   for (const raw of records) {
     const record = structuredClone(raw);
-    if (record?.record_type !== "agent.evidence") {
+    if (!record || typeof record !== "object" || Array.isArray(record))
+      throw new Error("Invalid telemetry record");
+    if (record.record_type !== "agent.evidence") {
       validateEvent(record);
       setTerminal(turnFor(turns, record.event_id), record);
       continue;
