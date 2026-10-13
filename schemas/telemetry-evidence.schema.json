@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent operation evidence v1",
+  "description": "Strict metadata-only lifecycle and operation evidence; runtime validation also enforces identifiers, time ordering and enums. No raw arguments, responses, paths or exception text.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "event_name",
+    "trace_id",
+    "runtime",
+    "run_id",
+    "observed_at",
+    "recorded_at",
+    "started_at",
+    "ended_at",
+    "tool_name",
+    "tool_call_id",
+    "action_key",
+    "attempt_id",
+    "outcome",
+    "failure_stage",
+    "handling_outcome",
+    "reason_availability",
+    "reason_provenance",
+    "reason_code",
+    "evidence_origin",
+    "verification_status",
+    "schema_version",
+    "record_type",
+    "production_eligible",
+    "metrics"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    },
+    "event_name": {
+      "enum": [
+        "agent.turn.started",
+        "agent.operation.observed",
+        "agent.turn.finished"
+      ]
+    },
+    "trace_id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    },
+    "runtime": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "run_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "observed_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "recorded_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "started_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ended_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tool_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tool_call_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "action_key": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "attempt_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "outcome": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "failure_stage": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "handling_outcome": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason_availability": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason_provenance": {
+      "enum": [
+        "raw_rejection",
+        "raw_provider_error",
+        "summary_only",
+        "unavailable"
+      ]
+    },
+    "reason_code": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "evidence_origin": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "verification_status": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "record_type": {
+      "const": "agent.evidence"
+    },
+    "production_eligible": {
+      "type": "boolean"
+    },
+    "metrics": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "telemetry-event.schema.json"
+        }
+      ]
+    }
+  }
+}

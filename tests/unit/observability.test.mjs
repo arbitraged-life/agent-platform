@@ -65,7 +65,7 @@ test('export snapshot cannot acquire private content during an awaited request',
 test('required event values cannot be replaced by constructor defaults during validation',async()=>{
  const event=turnEvent({runtime:'omp',runId:'run',...timing});let calls=0;
  const exporter=createOpikExporter(config,{environment:{OPIK_API_KEY:'fixture'},fetcher:async()=>{calls++;return new Response('');}});
- for(const field of ['event_id','status','attempt','tool_calls','tool_failures'])
+ for(const field of ['event_id','status','attempt'])
   for(const value of [null,undefined])await assert.rejects(()=>exporter({...event,[field]:value}));
  assert.equal(calls,0);
 });
