@@ -1,4 +1,4 @@
-# Execution Router v1.0.3
+# Execution Router v1.0.6
 
 A shared decision skill and small, dependency-free local handoff supervisor for a
 multi-brain execution mesh. ChatGPT, CLI coding agents, and other local agents can
@@ -90,11 +90,16 @@ plus untracked and ignored file bytes, executable bits, and empty-directory
 paths. Git paths that are not valid UTF-8 are rejected rather than ambiguously
 decoded; a leading U+FEFF remains part of the filename, not a removable text BOM.
 It never runs repository Git hooks, clean filters, or external diff drivers.
-Tracked, untracked, and ignored symlinks must resolve inside the workspace to
-files whose bytes are independently included in the approval fingerprint; the
-link text and resolved target identity of untracked/ignored symlinks are also
-fingerprinted. This excludes links into private router state, Git metadata,
-and other non-fingerprinted locations, including links through alias directories.
+Tracked, untracked, and ignored symlinks must resolve inside the workspace.
+File aliases must point to regular files with independently fingerprinted bytes.
+Directory aliases are allowed only when their resolved directory was traversed
+independently, every descendant is a regular, fingerprinted file or a traversed
+subdirectory, and none of the tree includes nested symlinks, special files,
+private router state, or Git metadata. The directory path, linked path, and
+contents are bound through the existing workspace fingerprint; a new or modified
+descendant invalidates launch approval. Link text and resolved target identity
+of untracked/ignored symlinks are fingerprinted as before. Unverified targets,
+including paths through excluded alias directories, remain rejected.
 Submodule worktrees are unsupported: preparation refuses them until their
 nested inputs can be accounted for. Private router state is excluded from the
 fingerprint only when it is ignored by Git and inside the workspace; unignored
