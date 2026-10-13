@@ -17,4 +17,6 @@ const child = spawn(executable, ["run", "lint:knip:report", "--cache=local:rw", 
   env: { ...process.env, TURBO_TELEMETRY_DISABLED: "1", QUALITY_CACHE_RUNTIME: `${process.version}-${process.platform}-${process.arch}` },
 });
 child.on("error", error => { console.error(error.message); process.exitCode = 2; });
-child.on("exit", (code, signal) => { process.exitCode = signal ? 1 : (code ?? 2); });
+child.on("exit", (code, signal) => {
+  if (process.exitCode === undefined) process.exitCode = signal ? 1 : (code ?? 2);
+});

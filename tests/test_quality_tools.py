@@ -1,7 +1,7 @@
 """Configuration contracts for the opt-in quality tooling."""
 import json
 from pathlib import Path
-import subprocess
+import os
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,8 +11,12 @@ class QualityToolsTests(unittest.TestCase):
         package = json.loads((ROOT / "package.json").read_text())
         config_path = "_config/knip.json" if (ROOT / "_config").is_dir() else "knip.json"
         config = json.loads((ROOT / config_path).read_text())
-        tracked = subprocess.check_output(["git", "ls-files", "*package.json"], cwd=ROOT, text=True).splitlines()
-        expected = {str(Path(path).parent) for path in tracked}
+        ignored = {".git", ".venv", "node_modules", "_state", ".agents", ".turbo", ".artifacts", "dist", "__pycache__"}
+        expected = set()
+        for directory, children, filenames in os.walk(ROOT):
+            children[:] = [name for name in children if name not in ignored]
+            if "package.json" in filenames:
+                expected.add(str(Path(directory).relative_to(ROOT)))
         self.assertEqual(set(config["workspaces"]), expected)
         self.assertIn("--no-exit-code", package["scripts"]["lint:knip:report"])
         self.assertNotIn("--no-exit-code", package["scripts"]["lint:knip"])
