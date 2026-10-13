@@ -1,6 +1,6 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
-  "cacheDir": "_state/quality-cache/turbo",
+  "cacheDir": "_state/quality-cache/turbo-v2",
   "globalEnv": ["QUALITY_CACHE_RUNTIME", "NODE_OPTIONS"],
   "tasks": {
     "lint:knip:report": {
