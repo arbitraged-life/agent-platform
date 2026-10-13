@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
-export const VERSION = '1.0.5';
+export const VERSION = '1.0.6';
 export const exec = promisify(execFile);
 const REASONS = new Set(['missing-capability','execution-lifecycle','local-harness','explicit-user-choice']);
 const ACTIONS = new Set(['read','edit','test']);
@@ -169,9 +169,10 @@ export async function workspaceFingerprint(workspace,stateDir) {
  const ignored=nulPaths(output[2]).filter(outsideState);
  const untracked=nulPaths(output[1]).filter(outsideState);
  check(untracked.length+ignored.length<=512,'Too many untracked or ignored files; use a smaller worktree');
- const emptyDirs=[],directories=[[workspace,'']];let visitedEntries=0;
+ const emptyDirs=[],directories=[[workspace,'']],scannedDirs=new Set();let visitedEntries=0;
  while(directories.length) {
   const [dir,relative]=directories.pop();let hasEntries=false;
+  scannedDirs.add(await realpath(dir));
   for await(const entry of await opendir(dir,{encoding:'buffer'})) {
    check(++visitedEntries<=100000,'Too many directory entries; use a smaller worktree');
    const name=decodeGitPath(entry.name);
@@ -224,7 +225,32 @@ export async function workspaceFingerprint(workspace,stateDir) {
    tracked[index]=[mode,name,info.mode&0o111,digest(await readFile(file))];
   }
  }
- for(const [name,resolved] of links)check((!protectedState || !contained(protectedState,resolved)) && !contained(gitMetadata,resolved) && fingerprintedFiles.has(resolved),`Symlink target is excluded or not independently fingerprinted: ${name}`);
+ // A directory alias is allowed only when its canonical tree was separately
+ // visited and every descendant is a regular file whose bytes were hashed.
+ // Nested links and special files remain unsupported; never follow a new alias
+ // into private state or Git metadata. Regular-file symlinks keep prior rules.
+ async function coveredDirectory(target) {
+  if(!scannedDirs.has(target) || (protectedState && contained(target,protectedState)) || contained(target,gitMetadata))return false;
+  const pending=[target];let inspected=0;
+  while(pending.length) {
+   const dir=pending.pop();
+   if(!scannedDirs.has(dir))return false;
+   for await(const entry of await opendir(dir,{encoding:'buffer'})) {
+    check(++inspected<=100000,'Too many directory symlink target entries');
+    const child=path.join(dir,decodeGitPath(entry.name));
+    if((protectedState && (contained(protectedState,child) || contained(child,protectedState))) || contained(gitMetadata,child))return false;
+    if(entry.isDirectory())pending.push(child);
+    else if(!entry.isFile() || !fingerprintedFiles.has(child))return false;
+   }
+  }
+  return true;
+ }
+ for(const [name,resolved] of links) {
+  const safeTarget=(!protectedState || !contained(protectedState,resolved)) && !contained(gitMetadata,resolved);
+  const type=await stat(resolved);
+  const covered=type.isFile()?fingerprintedFiles.has(resolved):type.isDirectory() && await coveredDirectory(resolved);
+  check(safeTarget && covered,`Symlink target is excluded or not independently fingerprinted: ${name}`);
+ }
  const head=output[0].toString('ascii').trim(),ref=output[3].toString('base64'),gitDir=output[4].toString('base64');
  return {head,digest:digest({head,ref,gitDir,tracked,untracked:hashes,emptyDirs})};
 }

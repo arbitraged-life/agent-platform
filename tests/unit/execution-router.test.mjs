@@ -72,6 +72,69 @@ test('untracked and ignored symlink text and resolved target identity invalidate
  }
 });
 test('symlink targets must have independently fingerprinted bytes, including excluded state and Git metadata',async()=>{for(const target of ['.router-state/input','.router-state/state-alias/input','.git/config']){const f=await fixture();f.data.state_dir=path.join(f.workspace,'.router-state');await writeFile(f.policyPath,JSON.stringify(f.data));await writeFile(path.join(f.workspace,'.gitignore'),'.router-state/\n');await mkdir(f.data.state_dir);await writeFile(path.join(f.data.state_dir,'input'),'private');if(target.includes('state-alias'))await symlink('.',path.join(f.data.state_dir,'state-alias'));await symlink(target,path.join(f.workspace,'linked.txt'));await exec('git',['-C',f.workspace,'add','linked.txt']);const policy=await loadPolicy(f.policyPath);await assert.rejects(()=>prepare(policy,packet(f.workspace)),/symlink target.*not independently fingerprinted/i);}});
+
+test('tracked in-worktree directory symlink permits a fully fingerprinted nested tree, and binds its bytes to approval',async()=>{
+ const f=await fixture(),dir=path.join(f.workspace,'hooks');
+ await mkdir(path.join(dir,'nested'),{recursive:true});
+ await writeFile(path.join(dir,'run'),'first');
+ await writeFile(path.join(dir,'nested','check'),'check');
+ await symlink('hooks',path.join(f.workspace,'hook-alias'),'dir');
+ await exec('git',['-C',f.workspace,'add','hooks','hook-alias']);
+ const p=await prepare(f.policy,packet(f.workspace));
+ assert.equal(p.status,'prepared');
+ await writeFile(path.join(dir,'nested','check'),'modified');
+ await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'fixture-only'}),/workspace changed/);
+});
+test('directory symlink approval detects newly created untracked and ignored descendant files',async()=>{
+ for(const ignored of [false,true]){
+  const f=await fixture(),dir=path.join(f.workspace,'hooks');await mkdir(dir);
+  if(ignored)await writeFile(path.join(f.workspace,'.gitignore'),'hooks/*.cache\n');
+  await writeFile(path.join(dir,'run'),'initial');
+  await symlink('hooks',path.join(f.workspace,'hook-alias'),'dir');
+  await exec('git',['-C',f.workspace,'add','hooks/run','hook-alias']);
+  const p=await prepare(f.policy,packet(f.workspace));
+  await writeFile(path.join(dir,ignored?'another.cache':'another'),'added');
+  await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'fixture-only'}),/workspace changed/);
+ }
+});
+test('directory symlinks reject nested private router state even when the link itself stays inside the workspace',async()=>{
+ const f=await fixture(),dir=path.join(f.workspace,'hooks');await mkdir(dir);
+ await writeFile(path.join(dir,'run'),'tracked');
+ await symlink('hooks',path.join(f.workspace,'hook-alias'),'dir');
+ await exec('git',['-C',f.workspace,'add','hooks/run','hook-alias']);
+ f.data.state_dir=path.join(dir,'.router-state');
+ await writeFile(path.join(f.workspace,'.gitignore'),'hooks/.router-state/\n');
+ await writeFile(f.policyPath,JSON.stringify(f.data));
+ await mkdir(f.data.state_dir);await writeFile(path.join(f.data.state_dir,'private'),'private');
+ const policy=await loadPolicy(f.policyPath);
+ await assert.rejects(()=>prepare(policy,packet(f.workspace)),/symlink target.*not independently fingerprinted/i);
+});
+test('directory symlinks reject unfingerprinted in-tree symlink descendants and Git metadata',async()=>{
+ const f=await fixture(),dir=path.join(f.workspace,'hooks');await mkdir(dir);
+ await writeFile(path.join(dir,'run'),'tracked');
+ await symlink('run',path.join(dir,'nested-alias'));
+ await symlink('hooks',path.join(f.workspace,'hook-alias'),'dir');
+ await exec('git',['-C',f.workspace,'add','hooks/run','hooks/nested-alias','hook-alias']);
+ await assert.rejects(()=>prepare(f.policy,packet(f.workspace)),/symlink target.*not independently fingerprinted/i);
+ const g=await fixture();await symlink('.git',path.join(g.workspace,'git-alias'),'dir');
+ await exec('git',['-C',g.workspace,'add','git-alias']);
+ await assert.rejects(()=>prepare(g.policy,packet(g.workspace)),/symlink target.*not independently fingerprinted/i);
+});
+test('in-worktree directory alias rejects workspace escapes',async()=>{
+ const f=await fixture(),outside=path.join(f.root,'outside');await mkdir(outside);
+ await writeFile(path.join(outside,'outside'),'not approved');
+ await symlink(outside,path.join(f.workspace,'hook-alias'),'dir');
+ await exec('git',['-C',f.workspace,'add','hook-alias']);
+ await assert.rejects(()=>prepare(f.policy,packet(f.workspace)),/symlink.*outside workspace/i);
+});
+test('directory alias to an independently traversed empty tree detects new content',async()=>{
+ const f=await fixture(),dir=path.join(f.workspace,'empty-hooks');await mkdir(dir);
+ await symlink('empty-hooks',path.join(f.workspace,'hook-alias'),'dir');
+ await exec('git',['-C',f.workspace,'add','hook-alias']);
+ const p=await prepare(f.policy,packet(f.workspace));assert.equal(p.status,'prepared');
+ await writeFile(path.join(dir,'new'),'new');
+ await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'fixture-only'}),/workspace changed/);
+});
 test('tracked links to independently fingerprinted ignored inputs remain valid',async()=>{const f=await fixture();await writeFile(path.join(f.workspace,'.gitignore'),'*.local\n');await writeFile(path.join(f.workspace,'input.local'),'approved');await symlink('input.local',path.join(f.workspace,'linked.txt'));await exec('git',['-C',f.workspace,'add','linked.txt']);const p=await prepare(f.policy,packet(f.workspace));assert.equal(p.status,'prepared');await writeFile(path.join(f.workspace,'input.local'),'modified');await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/workspace changed/);});
 test('state above workspace does not exclude symlinked inputs inside workspace',async()=>{const f=await fixture();f.data.state_dir=f.root;await writeFile(f.policyPath,JSON.stringify(f.data));await writeFile(path.join(f.workspace,'.gitignore'),'*.local\n');await writeFile(path.join(f.workspace,'input.local'),'approved');await symlink('input.local',path.join(f.workspace,'linked.txt'));await exec('git',['-C',f.workspace,'add','linked.txt']);const policy=await loadPolicy(f.policyPath);const p=await prepare(policy,packet(f.workspace));assert.equal(p.status,'prepared');await writeFile(path.join(f.workspace,'input.local'),'modified');await assert.rejects(()=>runPrepared(policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/workspace changed/);});
 test('policy does not accept dangerous sandbox',async()=>{const f=await fixture();f.data.profiles['codex-readonly'].sandbox='danger-full-access';await writeFile(f.policyPath,JSON.stringify(f.data));await assert.rejects(()=>loadPolicy(f.policyPath),/sandbox/);});

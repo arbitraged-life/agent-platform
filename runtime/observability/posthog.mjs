@@ -58,6 +58,8 @@ export function posthogOperationalRecord(event) {
     if (event.metrics !== null) {
       const record = posthogOperationalRecord(event.metrics);
       record.properties.evidence_event_id = event.event_id;
+      record.properties.production_eligible = event.production_eligible;
+      record.properties.evidence_origin = event.evidence_origin;
       return record;
     }
     return {
