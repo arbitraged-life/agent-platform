@@ -10,6 +10,14 @@
   "scripts": {
     "test": "node --test tests/unit/*.test.mjs",
     "eval": "node evals/routing.mjs",
-    "validate": "python3 scripts/validate"
-  }
+    "validate": "python3 scripts/validate",
+    "lint:knip": "knip --config knip.json",
+    "lint:knip:report": "knip --config knip.json --no-exit-code",
+    "quality:cached": "node scripts/quality-cache.mjs"
+  },
+  "devDependencies": {
+    "knip": "6.41.0",
+    "turbo": "2.11.8"
+  },
+  "packageManager": "npm@11.12.1"
 }

@@ -1,0 +1,17 @@
+ci:
+  autofix_prs: true
+  autofix_commit_msg: "style: apply pre-commit.ci fixes"
+  autoupdate_commit_msg: "chore(deps): update pre-commit hooks"
+  autoupdate_schedule: monthly
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
+    hooks:
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+        files: ^(?:runtime/|scripts/|tests/|docs/|evals/routing\.mjs$|[^/]+\.(?:json|ya?ml)$)
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+        files: ^(?:runtime/|scripts/|tests/|docs/|evals/routing\.mjs$|[^/]+\.(?:json|ya?ml)$)

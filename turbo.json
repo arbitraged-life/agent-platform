@@ -1,0 +1,20 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "cacheDir": "_state/quality-cache/turbo",
+  "globalEnv": [
+    "QUALITY_CACHE_RUNTIME",
+    "NODE_OPTIONS"
+  ],
+  "tasks": {
+    "lint:knip:report": {
+      "inputs": [
+        "$TURBO_DEFAULT$"
+      ],
+      "outputs": []
+    }
+  },
+  "globalDependencies": [
+    "node_modules/.package-lock.json",
+    "skills/turnstile-spin/templates/worker/node_modules/.package-lock.json"
+  ]
+}

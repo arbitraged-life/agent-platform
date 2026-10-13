@@ -1,0 +1,32 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/**/*.mjs",
+        "evals/{routing.mjs,benchmark/run.mjs}",
+        "evals/benchmark/tasks/*/oracle.cjs",
+        "evals/benchmark/tasks/*/fixed/lib.js",
+        "tests/unit/*.test.mjs",
+        "runtime/observability/opik.mjs",
+        "runtime/observability/records.mjs"
+      ],
+      "project": [
+        "runtime/**/*.mjs",
+        "scripts/**/*.mjs",
+        "evals/**/*.{mjs,js,cjs}",
+        "tests/**/*.mjs"
+      ]
+    },
+    "skills/turnstile-spin/templates/worker": {
+      "entry": [
+        "test/*.test.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "test/**/*.ts",
+        "vitest*.ts"
+      ]
+    }
+  }
+}
