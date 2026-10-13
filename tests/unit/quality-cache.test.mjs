@@ -16,9 +16,11 @@ if (args.includes('--dry=json')) {
 } else {
   const dir = args.find(arg=>arg.startsWith('--cache-dir='))?.slice(12) ?? '_state/quality-cache/turbo';
   await mkdir(dir,{recursive:true});
-  await writeFile(path.join(dir,source+'.artifact'),'saved report');
+  await writeFile(path.join(dir,source+'.tar.zst'),'saved report');
+  if (process.env.QUALITY_TEST_ORPHAN!=='yes') await writeFile(path.join(dir,source+'-meta.json'),'{}');
   if (process.env.QUALITY_TEST_MUTATE==='yes') await writeFile('input.txt','changed');
   console.log('REPORT_RESULT');
+  if (process.env.QUALITY_TEST_FAIL==='yes') { console.log('TOOL_ERROR_DETAIL'); process.exitCode=7; }
 }
 `;
 async function fixture(t) {
@@ -44,7 +46,7 @@ test('stable inputs publish the staged report to the new cache namespace',async 
   const result=await invoke(root);
   assert.equal(result.code,0,result.stderr);
   assert.match(result.stdout,/REPORT_RESULT/);
-  assert.equal(await readFile(path.join(root,'_state/quality-cache/turbo-v2/original.artifact'),'utf8'),'saved report');
+  assert.equal(await readFile(path.join(root,'_state/quality-cache/turbo-v2/original.tar.zst'),'utf8'),'saved report');
 });
 test('concurrent source changes discard both output and staged cache',async t=>{
   const root=await fixture(t);
@@ -60,10 +62,28 @@ test('dry run returns inspectable JSON without publishing a report',async t=>{
   const result=await invoke(root,['--dry=json']);
   assert.equal(result.code,0,result.stderr);
   assert.equal(JSON.parse(result.stdout).tasks[0].hash,'original');
+  assert.deepEqual(await readdir(path.join(root,'_state/quality-cache/turbo-v2')),[]);
 });
 test('remote cache overrides remain rejected',async t=>{
   const root=await fixture(t);
   const result=await invoke(root,['--cache=remote:rw']);
   assert.equal(result.code,2);
   assert.match(result.stderr,/Supported options/);
+});
+
+test('incomplete cache archives are not published',async t=>{
+  const root=await fixture(t);
+  const result=await invoke(root,[],{QUALITY_TEST_ORPHAN:'yes'});
+  assert.equal(result.code,2);
+  assert.match(result.stderr,/metadata/);
+  assert.deepEqual(await readdir(path.join(root,'_state/quality-cache/turbo-v2')),[]);
+});
+test('failed tool output is labeled as diagnostics, never a valid report',async t=>{
+  const root=await fixture(t);
+  const result=await invoke(root,[],{QUALITY_TEST_FAIL:'yes'});
+  assert.equal(result.code,7);
+  assert.match(result.stderr,/Unverified tool failure diagnostics/);
+  assert.match(result.stderr,/TOOL_ERROR_DETAIL/);
+  assert.doesNotMatch(result.stdout,/REPORT_RESULT/);
+  assert.deepEqual(await readdir(path.join(root,'_state/quality-cache/turbo-v2')),[]);
 });

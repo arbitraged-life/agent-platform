@@ -56,6 +56,15 @@ async function main() {
     if (entries.some(entry => !entry.isFile())) {
       throw new Error("Unexpected directory or link in the staged task cache.");
     }
+    const names = new Set(entries.map(entry => entry.name));
+    for (const entry of entries) {
+      if (entry.name.endsWith(".tar.zst") && !names.has(entry.name.slice(0, -8) + "-meta.json")) {
+        throw new Error("Cache archive has no metadata; staged cache discarded.");
+      }
+    }
+    // Turbo checks for the archive before reading its metadata: publish archives last.
+    entries.sort((a, b) => Number(a.name.endsWith(".tar.zst")) - Number(b.name.endsWith(".tar.zst"))
+      || a.name.localeCompare(b.name));
     for (const entry of entries) {
       await rename(path.join(staging, entry.name), path.join(cache, entry.name));
     }
@@ -66,6 +75,10 @@ async function main() {
   }
 }
 main().catch(error => {
+  if (error.stdout) {
+    console.error("Unverified tool failure diagnostics:");
+    process.stderr.write(error.stdout);
+  }
   console.error(error.message);
   process.exitCode = Number.isInteger(error.code) ? error.code : 2;
 });
