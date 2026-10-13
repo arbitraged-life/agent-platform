@@ -160,8 +160,6 @@ production trace: Opik/PostHog cover instrumented activity, not every
 ordinary ChatGPT conversation or connected-tool call. Never backfill
 invented latency, cost, or a synthetic production event.
 
-
-
 Keep one correlation task_id across the handoff, existing task/comment, local
 execution ledger, and observability record. Local launcher events are the
 mechanically captured record of its actions. With configured Opik, use the
