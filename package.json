@@ -4,20 +4,16 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "engines": {
-    "node": ">=24"
-  },
+  "engines": { "node": ">=24" },
   "scripts": {
     "test": "node --test tests/unit/*.test.mjs",
     "eval": "node evals/routing.mjs",
     "validate": "python3 scripts/validate",
     "lint:knip": "knip --config knip.json",
     "lint:knip:report": "knip --config knip.json --no-exit-code",
-    "quality:cached": "node scripts/quality-cache.mjs"
+    "quality:cached": "node scripts/quality-cache.mjs",
+    "skills:install": "npx --yes skills@1.7.2 add https://github.com/vercel/turborepo/tree/b19f6a59ccd89ef98cae5e4d8b30e89489fc00f1/skills/turborepo --skill turborepo --agent codex --copy --yes"
   },
-  "devDependencies": {
-    "knip": "6.41.0",
-    "turbo": "2.11.8"
-  },
+  "devDependencies": { "knip": "6.41.0", "turbo": "2.11.8" },
   "packageManager": "npm@11.12.1"
 }
