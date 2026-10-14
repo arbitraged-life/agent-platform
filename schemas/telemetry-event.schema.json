@@ -114,12 +114,18 @@
       "maximum": 9007199254740991
     },
     "tool_calls": {
-      "type": "integer",
+      "type": [
+        "integer",
+        "null"
+      ],
       "minimum": 0,
       "maximum": 9007199254740991
     },
     "tool_failures": {
-      "type": "integer",
+      "type": [
+        "integer",
+        "null"
+      ],
       "minimum": 0,
       "maximum": 9007199254740991
     },

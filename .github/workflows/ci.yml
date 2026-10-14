@@ -35,6 +35,10 @@ jobs:
       - run: ./scripts/setup
       - name: Knip report (advisory findings; tool errors fail)
         run: npm run lint:knip:report
+      - name: Exercise real local report cache without caching validation
+        run: |
+          npm run quality:cached -- --summarize
+          npm run quality:cached -- --summarize
       - run: ./scripts/validate
   review-identity:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'

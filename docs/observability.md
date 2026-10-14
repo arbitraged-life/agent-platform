@@ -31,12 +31,13 @@ versions fail. Validate without accessing a credential or network:
 node scripts/observability/config.mjs validate path/to/private-config.json
 ```
 
-The current exporter sends a trace and then its span. There is no durable delivery
-queue or automatic retry: a partial failure is surfaced to the caller and must not
-be reported as successful delivery. Event IDs permit caller correlation. This is
-an extracted normalization interface; active source harnesses remain unchanged
-until their lifecycle adapters, shutdown/drain behavior, and private destinations
-pass component acceptance and consumers move to an immutable release.
+The exporter returns per-resource acceptance receipts. A partial Opik failure retains
+accepted resource IDs so a retry can skip them. `runtime/observability/outbox.mjs`
+provides an opt-in durable, bounded queue; the private adapter owns its location.
+Only explicit HTTP 429 nonacceptance is eligible for bounded retry. Authentication,
+approval, safety and ambiguous transport failures are terminal. An interrupted
+in-flight entry remains uncertain and is never automatically replayed. Stable IDs
+support correlation and PostHog deduplication; they are not an exactly-once guarantee.
 
 The Opik mapping follows the [create-span API](https://www.comet.com/docs/opik/reference/rest-api/spans/create-span): UUID IDs and integer usage values. Reported USD cost remains explicit metadata rather than being silently presented as a provider estimate.
 
@@ -85,3 +86,91 @@ This split is intentional:
 The PostHog exporter is a secondary projection. Private consumers decide whether a
 PostHog delivery failure is blocking or fail-open; the public module itself always
 reports delivery failure rather than fabricating success.
+
+
+## Execution-efficiency analysis
+
+The instrumented operation evidence and completed-turn telemetry can be analyzed
+without sharing prompts, tool arguments, paths, or raw outputs:
+
+```sh
+node scripts/observability/efficiency.mjs /path/to/authorized-records.json
+```
+
+The input is an array of canonical `agent.turn.completed` and
+`agent.evidence` records, or an object with a `records` array. Every
+record must validate against its existing strict schema. The reducer
+deduplicates verified effects by `action_key` (falling back to the
+tool-call/event ID); an operation only counts when its
+`verification_status` is `verified`. This is a **verified action**
+rate, not an inferred count of changed files or a measure of user satisfaction.
+
+The output includes measured tool calls, verified actions, failure counts,
+duration, coverage gaps, and `tool_calls_per_verified_action`. The latter
+is `null` when any included successful turn has missing tool counts,
+no verified actions, or conflicting evidence. Production-only filtering
+excludes synthetic evidence; do not mix experimental data with production.
+The reducer neither creates events nor captures activity. Connectors need
+actual instrumented hooks and delivery receipts before their actions can
+be counted. Ordinary ChatGPT conversation execution and generic third-party
+connector calls are **not** automatically captured by this runtime.
+
+The Opik `chatgpt-execution-routing-regressions` dataset contains a
+manual, non-production encrypted-Vault-editing regression example from
+2026-10-13. It is not evidence of automatic capture, production
+improvement, or a measured baseline.
+
+## Operation evidence and delivery receipts
+
+`schemas/telemetry-evidence.schema.json` is a separate versioned contract. It permits
+lifecycle timestamps, tool names, opaque action/attempt references, explicit
+failure boundary, provenance and verification status. It rejects arbitrary fields.
+Arguments, raw errors, outputs, filesystem paths and credentials remain excluded.
+`evidence_origin=mechanically_captured` means the adapter observed the exposed hook
+payload; middleware may have modified that payload. It is not an independent host
+audit. A successful tool result has `verification_status=not_verified` until an
+application explicitly verifies its effect.
+
+A start creates one Opik trace. Operation observations create tool spans under that
+trace. A terminal record updates the same trace and optionally includes validated
+turn metrics, from which one model span is created. Final metrics use the same trace
+ID in PostHog. An interrupted turn records unknown, never successful completion.
+Tool failures without an observable boundary remain `failure_stage=unknown`.
+Native Opik error fields carry only a controlled outcome/stage summary.
+
+PostHog receives `agent_turn_started`, `agent_operation_observed`, and either
+`personal_os_agent_turn_completed` (measured terminal metrics) or
+`agent_turn_finished` (unknown shutdown without metrics). Join starts to terminals
+by `trace_id` / `opik_trace_id`, not session-level `run_id`. Each turn has its own
+trace ID. Missing tool counts and usage remain null; recorded zero remains zero.
+
+A private destination fan-out returns `agent.delivery` receipts independently for
+Opik and PostHog. `accepted` means the ingestion request returned success;
+`readback_status=not_checked` makes clear that visibility was not verified. HTTP
+codes are preserved as provider evidence; raw bodies are deliberately excluded.
+Exceptions without a safe exposed code retain unavailable provenance. A failed
+sink never erases another sink's success.
+
+The private integration may project a strict `personal_os_telemetry_delivery` event
+to PostHog after its original ingestion succeeds. It includes only destination
+status, readback state, controlled reason code, failure stage, and retry eligibility.
+That projection does not recursively log its own delivery. A projection failure
+stays in the local receipt; reporting has a visibility gap when PostHog itself is
+unavailable.
+
+The queue defaults to 512 records, three attempts, one-minute exponential retry,
+and seven-day delivered-evidence retention. Delivered records may be evicted to
+make capacity, and the returned receipt includes `evicted_delivered_count`.
+Unresolved failures are retained; a full queue rejects new intake visibly. Local
+files use owner-only permissions, no-follow reads, atomic replacement and exclusive
+claims. Persistence runs independently of slow network delivery. Consumers can
+flush persistence before a bounded shutdown wait, then drain eligible records at
+next startup. Abandoned claims require review; the queue never guesses whether a
+remote mutation succeeded.
+
+Native OMP payload references (inspected 2026-10-12):
+[shared events](https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/extensibility/shared-events.ts),
+[extension events](https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/extensibility/extensions/types.ts),
+[message stop reasons](https://github.com/can1357/oh-my-pi/blob/main/packages/ai/src/types.ts).
+The consuming deployment must verify its installed version before claiming native
+runtime acceptance. Synthetic hook fixtures demonstrate adapter behavior only.

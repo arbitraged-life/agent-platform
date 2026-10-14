@@ -21,6 +21,29 @@ be the lowest-overhead path. A CLI/coding agent is equally valid when its reposi
 harness, local context, independent/resumable lifecycle, or tooling is materially
 better suited. A CLI agent is a separate peer executor.
 
+### Efficient repository edits and protected content
+
+For small, scoped repository changes, prefer a single authorized execution surface
+that can perform the edit **and** verification. Batch compatible reads, writes,
+and checks when supported; avoid repeating tool discovery or dividing a short,
+safe change into unnecessary round trips. Never trade away approval, readback,
+or repository safety solely to reduce tool counts.
+
+A connected GitHub contents API is **not** a safe writer for every Git-tracked
+file. Inspect the target repository's `.gitattributes` and security instructions
+before treating a native content-write tool as available. In particular,
+`git-crypt` clean filters run on a configured local Git checkout, not a
+generic contents-API write. For an encrypted path, prefer an authorized local
+checkout (or independently verified filter-aware writer); otherwise surface
+the blocker. Do not route to an additional coding agent merely to edit two
+Markdown files.
+
+With local Git, inspect existing changes, stage **only** requested paths,
+verify protected staged blobs are encrypted, commit under repository policy,
+and verify the pushed revision. Preserve unrelated dirty files. Batch these
+safe checks into bounded invocations where possible, while treating an
+ambiguous mutation result as requiring readback before any retry.
+
 ### Host execution boundary
 
 For a dot coordinating work in the cloud, use a host-supported delegated task
@@ -126,6 +149,16 @@ existing approved scheduler or webhook only when available and authorized;
 never invent a watcher or spend tokens in an unbounded polling loop.
 
 ## Observability and maintenance
+
+When reviewing execution overhead, record a compact, structured
+retrospective or regression example: task class, selected vs better route,
+safety constraint, measured tool calls/elapsed time when actually observed,
+failure or redundancy category, source revision and verification receipt.
+Prefer an existing evaluation suite and owning repository policy over
+duplicative logging destinations. A manually observed lesson is **not** a
+production trace: Opik/PostHog cover instrumented activity, not every
+ordinary ChatGPT conversation or connected-tool call. Never backfill
+invented latency, cost, or a synthetic production event.
 
 Keep one correlation task_id across the handoff, existing task/comment, local
 execution ledger, and observability record. Local launcher events are the
