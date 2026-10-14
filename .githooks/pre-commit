@@ -1,4 +1,10 @@
 #!/bin/sh
 set -eu
 cd "$(git rev-parse --show-toplevel)"
+if ! git diff --quiet -- docs/generated/runtime-map.md docs/diagrams/runtime-map.excalidraw; then
+  echo 'Generated architecture files have unstaged edits; stage or restore them before committing.' >&2
+  exit 1
+fi
+python3 scripts/generate_architecture.py --write --staged
+git add -- docs/generated/runtime-map.md docs/diagrams/runtime-map.excalidraw
 exec python3 scripts/validate lint --staged
