@@ -23,6 +23,7 @@ portable skills, deterministic evaluations, and reusable validation, review and
 stale-item workflows. Commodity dependency updates and merge coordination are
 delegated to Renovate and Mergify rather than maintained as platform runtime code.
 
+- [Generated runtime map](docs/generated/runtime-map.md): tracked runtime modules and import edges.
 - [Architecture and ownership](docs/architecture.md): public components,
   validation, release artifact, and consumer configuration boundary.
 - [Execution router](docs/execution-router.md): explicit policy, bounded process

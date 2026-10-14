@@ -143,7 +143,14 @@ def lint_sources(files, root):
                 subprocess.run(['node', '--check', str(path)], check=True, cwd=root)
             except subprocess.CalledProcessError:
                 raise SystemExit(f'{path.relative_to(root)}: JavaScript syntax check failed') from None
-    print('Source syntax, JSON, release boundaries, and action pins passed.', flush=True)
+    diagram_files = ['scripts/generate_architecture.py', 'docs/generated/runtime-map.md',
+                     'docs/diagrams/runtime-map.excalidraw']
+    if any((root / name).exists() for name in diagram_files):
+        if not all((root / name).is_file() for name in diagram_files):
+            raise SystemExit('Generated architecture source or output is missing')
+        subprocess.run([sys.executable, str(root / diagram_files[0]), '--check',
+                        '--root', str(root)], check=True, cwd=root)
+    print('Source syntax, JSON, release boundaries, action pins, and architecture maps passed.', flush=True)
 
 
 def lint_index():
