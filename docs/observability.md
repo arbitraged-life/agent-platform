@@ -39,7 +39,14 @@ approval, safety and ambiguous transport failures are terminal. An interrupted
 in-flight entry remains uncertain and is never automatically replayed. Stable IDs
 support correlation and PostHog deduplication; they are not an exactly-once guarantee.
 
-The Opik mapping follows the [create-span API](https://www.comet.com/docs/opik/reference/rest-api/spans/create-span): UUID IDs and integer usage values. Reported USD cost remains explicit metadata rather than being silently presented as a provider estimate.
+The Opik mapping follows the
+[create-span API](https://www.comet.com/docs/opik/reference/rest-api/spans/create-span):
+UUID IDs and integer usage values. Validated producer-reported USD cost is retained
+in structured metadata and, when known, copied to the span's `total_estimated_cost`;
+a reported zero is preserved and unknown cost is omitted. Known cache and
+reasoning counts are exported without recomputing provider-reported token totals.
+See [Opik usage and known-cost projection](observability-cost-projection.md) for
+the exact mapping and consumer rollout boundary.
 
 Runtime modules live in `runtime/observability/`. Event timestamps use canonical
 UTC ISO strings with exactly three fractional digits. JSON Schema validates
