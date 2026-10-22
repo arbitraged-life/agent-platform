@@ -27,7 +27,12 @@ class SkillTests(unittest.TestCase):
 
     def test_discovery_and_installed_hashes(self):
         rows = MODULE['catalog'](self.root)
-        self.assertEqual(len(rows), 40)
+        self.assertEqual(len(rows), 41)
+        self.assertIn('website-change-monitoring', {row['name'] for row in rows})
+        website_monitoring = (self.root / 'skills/website-change-monitoring/SKILL.md').read_text()
+        self.assertIn('wait_for_monitor_check', website_monitoring)
+        self.assertIn('provider-hosted', website_monitoring)
+        self.assertNotIn('9425976', website_monitoring)
         lock = MODULE['verify_upstream'](self.root)
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
