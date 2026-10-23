@@ -42,17 +42,20 @@ class MergePolicyTests(unittest.TestCase):
         start = next(i for i, r in enumerate(rules) if r.get("minimumReleaseAge") == "14 days")
         self.assertGreater(start, max(i for i, r in enumerate(rules) if r.get("automerge") is True))
         restricted = rules[start:]
-        self.assertEqual(len(restricted), 5)
+        self.assertEqual(len(restricted), 6)
         for rule in restricted[1:]:
             self.assertIs(rule["automerge"], False)
             self.assertIs(rule["dependencyDashboardApproval"], True)
-        managers = set(restricted[1]["matchManagers"])
+        self.assertEqual(restricted[1]["matchDatasources"], ["npm"])
+        self.assertEqual(set(restricted[1]["matchUpdateTypes"]),
+                         {"pin", "pinDigest", "digest", "lockFileMaintenance"})
+        managers = set(restricted[2]["matchManagers"])
         self.assertTrue({"github-actions", "terraform", "circleci", "dockerfile",
                          "docker-compose", "custom.regex"}.issubset(managers))
-        paths = restricted[2]["matchFileNames"]
+        paths = restricted[3]["matchFileNames"]
         self.assertTrue({"infra/**", ".github/workflows/**", ".circleci/**"}.issubset(paths))
-        self.assertEqual(restricted[3]["matchDatasources"], ["node-version", "python-version"])
-        packages = restricted[4]["matchPackageNames"]
+        self.assertEqual(restricted[4]["matchDatasources"], ["node-version", "python-version"])
+        packages = restricted[5]["matchPackageNames"]
         self.assertTrue({"@modelcontextprotocol/**", "@cloudflare/**",
                          "jose", "cryptography", "google-auth", "mcp"}.issubset(packages))
         self.assertTrue(self.policy["platformAutomerge"])
