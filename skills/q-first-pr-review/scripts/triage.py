@@ -144,12 +144,8 @@ def _review_body_candidate(review):
     }
 
 
-def classify(pr, threads, repo):
-    """Candidates are not verified code defects, and replies are not commits."""
-    reviews = pr.get("reviews") or {}
-    truncated = bool((reviews.get("pageInfo") or {}).get("hasPreviousPage"))
-    q_reviews = [r for r in reviews.get("nodes", [])
-                 if is_q((r.get("author") or {}).get("login"))]
+def _classified_threads(threads):
+    """Return only actionable Q threads and a count of discarded Q threads."""
     results = []
     skipped = 0
     for thread in threads:
@@ -160,6 +156,16 @@ def classify(pr, threads, repo):
             skipped += 1
             continue
         results.append(_thread_finding(thread, comments))
+    return results, skipped
+
+
+def classify(pr, threads, repo):
+    """Candidates are not verified code defects, and replies are not commits."""
+    reviews = pr.get("reviews") or {}
+    truncated = bool((reviews.get("pageInfo") or {}).get("hasPreviousPage"))
+    q_reviews = [r for r in reviews.get("nodes", [])
+                 if is_q((r.get("author") or {}).get("login"))]
+    results, skipped = _classified_threads(threads)
     q_bodies = [_review_body_candidate(review) for review in q_reviews]
     q_bodies = [candidate for candidate in q_bodies if candidate is not None]
     recent = max(q_reviews, key=lambda r: r.get("submittedAt") or "", default=None)
