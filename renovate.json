@@ -127,6 +127,20 @@
       "internalChecksFilter": "strict"
     },
     {
+      "description": "Manually review npm pin, digest and lockfile updates that cannot prove release age",
+      "matchDatasources": [
+        "npm"
+      ],
+      "matchUpdateTypes": [
+        "pin",
+        "pinDigest",
+        "digest",
+        "lockFileMaintenance"
+      ],
+      "automerge": false,
+      "dependencyDashboardApproval": true
+    },
+    {
       "description": "Review CI actions, infrastructure, container images, and script-managed toolchain pins before merging",
       "matchManagers": [
         "github-actions",
