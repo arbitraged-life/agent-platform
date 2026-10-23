@@ -117,7 +117,7 @@ def build(root, output):
 
 def _extract_bundle(data, temporary):
     with tarfile.open(fileobj=io.BytesIO(data)) as archive:
-        total = 0
+    with tarfile.open(fileobj=io.BytesIO(data), mode='r:') as archive:
         members = archive.getmembers()
         if len(members) > 10000:
             raise ValueError('Too many release entries')
@@ -136,7 +136,8 @@ def _extract_bundle(data, temporary):
             with archive.extractfile(member) as stream:
                 path.write_bytes(stream.read())
             path.chmod(member.mode & 0o755)
-
+            # Use only two canonical modes; never propagate raw archive permission bits.
+            path.chmod(0o755 if member.mode & 0o111 else 0o644)
 
 def validate_lock(lock):
     if not isinstance(lock, dict) or set(lock) != {'schema_version', 'commit', 'sha256', 'artifact'} or lock['schema_version'] != 1:
@@ -206,7 +207,8 @@ def verify_installation(bundle, lock, destination):
             if sizes > MAX_RELEASE_BYTES:
                 raise ValueError('Expanded release exceeds size limit')
         if MANIFEST_NAME not in names:
-            raise ValueError('Missing release manifest')
+        # Canonicalise to two modes; do not propagate raw archive permission bits.
+        expected_modes = {member.name: (0o755 if member.mode & 0o111 else 0o644) for member in members}
         expected_modes = {member.name: member.mode & 0o777 for member in members}
         manifest_bytes = archive.extractfile(MANIFEST_NAME).read()
         manifest = json.loads(manifest_bytes)

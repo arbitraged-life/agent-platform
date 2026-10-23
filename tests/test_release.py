@@ -188,6 +188,31 @@ class ReleaseTests(unittest.TestCase):
                 release.verify_installation(bundle, lock, root / 'installed')
 
     def test_corruption_denied(self):
+    def test_archive_mode_bits_are_clamped_to_canonical_values_on_install(self):
+        """Non-standard archive modes must be clamped, not propagated to disk."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = b'content'
+            manifest = {'schema_version': 1, 'commit': 'a' * 40,
+                        'files': {'runtime/main.mjs': release.sha(data)}}
+            bundle = root / 'bundle.tar'
+            with tarfile.open(bundle, 'w') as archive:
+                # Set a non-canonical mode (0o700 - has execute bit, neither 0o644 nor 0o755).
+                for name, content in [('runtime/main.mjs', data),
+                                      ('release-manifest.json', json.dumps(manifest).encode())]:
+                    info = tarfile.TarInfo(name)
+                    info.size = len(content)
+                    info.mode = 0o700
+                    archive.addfile(info, io.BytesIO(content))
+            lock = {'schema_version': 1, 'commit': 'a' * 40,
+                    'sha256': release.sha(bundle.read_bytes()), 'artifact': bundle.name}
+            target = release.install(bundle, lock, root / 'installed')
+            installed_file = target / 'runtime/main.mjs'
+            actual_mode = installed_file.stat().st_mode & 0o777
+            # 0o700 has execute bit set, so canonical mode must be 0o755, not 0o700.
+            self.assertEqual(actual_mode, 0o755)
+            self.assertNotEqual(actual_mode, 0o700)
+
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             bundle, lock = self.bundle(root)
