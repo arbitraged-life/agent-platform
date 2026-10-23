@@ -4,7 +4,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 import json
-import subprocess
+from types import SimpleNamespace
 
 SCRIPT = Path(__file__).resolve().parents[1] / "skills/q-first-pr-review/scripts/triage.py"
 spec = importlib.util.spec_from_file_location("q_first_pr_review", SCRIPT)
@@ -14,8 +14,9 @@ q_first = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(q_first)
 
 
-def comment(login, body="", cid=1):
-    return {"databaseId": cid, "author": {"login": login}, "body": body, "createdAt": "2026-10-22T00:00:00Z"}
+def comment(login, body="", cid=1, association="OWNER"):
+    return {"databaseId": cid, "author": {"login": login}, "authorAssociation": association,
+            "body": body, "createdAt": "2026-10-22T00:00:00Z"}
 
 
 def thread(*comments, resolved=False, outdated=False):
@@ -28,7 +29,7 @@ def pr(sha="abc", review_sha="abc", reviewed=True):
     return {"number": 4, "state": "OPEN", "isDraft": False, "url": "https://github.com/o/r/pull/4",
             "headRefOid": sha,
             "reviews": {"nodes": ([{"author": {"login": "amazon-q-developer"},
-                                    "submittedAt": "2026-10-22T00:00:00Z", "commit": {"oid": review_sha}}]
+                                    "submittedAt": "2026-10-22T00:00:00Z", "commit": {"oid": review_sha}, "body": ""}]
                                   if reviewed else [])}}
 
 
@@ -77,10 +78,40 @@ class QFirstTests(unittest.TestCase):
         )], "o/r")
         self.assertEqual(result["needs_validation"], 1)
 
+    def test_review_body_is_exposed_without_claiming_an_verified_finding(self):
+        record = pr()
+        record["reviews"]["nodes"][0]["body"] = "Review summary: check race conditions."
+        result = q_first.classify(record, [], "o/r")
+        self.assertEqual(result["q_review_body_count"], 1)
+        self.assertIn("race conditions", result["q_review_bodies_unverified"][0]["body_excerpt"])
+        self.assertEqual(result["active_q_findings"], 0)
+
+    def test_truncated_history_with_no_visible_q_is_unknown(self):
+        record = pr(reviewed=False)
+        record["reviews"]["pageInfo"] = {"hasPreviousPage": True}
+        result = q_first.classify(record, [], "o/r")
+        self.assertIsNone(result["q_review_observed"])
+        self.assertTrue(result["review_history_truncated"])
+
+    def test_review_command_in_thread_does_not_count_as_pending(self):
+        result = q_first.classify(pr(), [thread(
+            comment("amazon-q-developer", "Potential issue"),
+            comment("arbitraged-life", "/q review"),
+        )], "o/r")
+        self.assertEqual(result["needs_validation"], 1)
+        self.assertEqual(result["awaiting_q_reply"], 0)
+
+    def test_unprivileged_command_does_not_count_as_pending(self):
+        result = q_first.classify(pr(), [thread(
+            comment("amazon-q-developer", "Potential issue"),
+            comment("external-user", "/q fix this", association="CONTRIBUTOR"),
+        )], "o/r")
+        self.assertEqual(result["needs_validation"], 1)
+
     def test_graphql_errors_fail_closed_without_logging_details(self):
         def fake_run(cmd, **kwargs):
             payload = {"errors": [{"message": "private API information"}]}
-            return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
         with patch.object(q_first.subprocess, "run", side_effect=fake_run):
             with self.assertRaisesRegex(ValueError, "GitHub GraphQL returned errors") as error:
                 q_first.review_snapshot("o/r", 4)
@@ -91,6 +122,8 @@ class QFirstTests(unittest.TestCase):
         def fake_run(cmd, **kwargs):
             calls.append(cmd)
             self.assertEqual(cmd[:3], ["gh", "api", "graphql"])
+            self.assertIs(kwargs.get("shell"), False)
+            self.assertTrue(all(isinstance(arg, str) for arg in cmd))
             cursor = any("after=NEXT" == c for c in cmd)
             response = {"data": {"repository": {"pullRequest": {
                 **pr(),
@@ -98,7 +131,7 @@ class QFirstTests(unittest.TestCase):
                                   "pageInfo": {"hasNextPage": not cursor,
                                                "endCursor": "NEXT" if not cursor else None}},
             }}}}
-            return subprocess.CompletedProcess(cmd, 0, json.dumps(response), "")
+            return SimpleNamespace(returncode=0, stdout=json.dumps(response), stderr="")
         with patch.object(q_first.subprocess, "run", side_effect=fake_run):
             snapshot, threads = q_first.review_snapshot("o/r", 4)
         self.assertEqual(len(calls), 2)
@@ -112,7 +145,7 @@ class QFirstTests(unittest.TestCase):
             data = {"data": {"repository": {"pullRequest": {
                 **pr(), "reviewThreads": {"nodes": [record], "pageInfo": {"hasNextPage": False, "endCursor": None}}
             }}}}
-            return subprocess.CompletedProcess(cmd, 0, json.dumps(data), "")
+            return SimpleNamespace(returncode=0, stdout=json.dumps(data), stderr="")
         with patch.object(q_first.subprocess, "run", side_effect=fake_run):
             with self.assertRaisesRegex(ValueError, "cannot safely deduplicate"):
                 q_first.review_snapshot("o/r", 4)
