@@ -69,6 +69,15 @@ class AdvisoryTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "unavailable"):
                 module.audit_dependencies(root, runner=timed_out)
 
+    def test_unexpected_stderr_fails_closed_even_with_valid_json_and_zero_exit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.fixture(root)
+            def runner(command, **kwargs):
+                return subprocess.CompletedProcess(command, 0, self.report(), "registry degraded")
+            with self.assertRaisesRegex(RuntimeError, "stderr unavailable"):
+                module.audit_dependencies(root, runner=runner)
+
     def test_missing_nested_lockfile_is_not_silently_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

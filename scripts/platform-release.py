@@ -159,6 +159,7 @@ def install(bundle, lock, destination):
     if target.exists():
         raise ValueError('Immutable install already exists; choose it explicitly or inspect drift')
     temporary = Path(tempfile.mkdtemp(prefix='.install-', dir=destination))
+    renamed = False
     try:
         _extract_bundle(data, temporary)
         manifest = json.loads((temporary / MANIFEST_NAME).read_text())
@@ -168,8 +169,11 @@ def install(bundle, lock, destination):
         if actual != manifest.get('files'):
             raise ValueError('Release content manifest mismatch')
         os.rename(temporary, target)
+        renamed = True
     finally:
-        if temporary.exists():
+        # Never remove a renamed installation, including if a temporary-path
+        # collision is observed after successful publication.
+        if not renamed and temporary.exists():
             shutil.rmtree(temporary)
     return target
 

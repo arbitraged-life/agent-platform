@@ -33,6 +33,10 @@ def audit_dependencies(root=ROOT, *, runner=subprocess.run):
             result = runner(command, cwd=lock.parent, capture_output=True, text=True, timeout=120)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(f"Dependency advisory lookup unavailable: {relative}") from exc
+        # Fail closed on unexpected diagnostic output even if npm exits 0.
+        # A transport error may leave plausible but incomplete JSON on stdout.
+        if result.stderr and result.stderr.strip():
+            raise RuntimeError(f"Dependency advisory stderr unavailable: {relative}")
         try:
             report = json.loads(result.stdout)
             counts = report["metadata"]["vulnerabilities"]
