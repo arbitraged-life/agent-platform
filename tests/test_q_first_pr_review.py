@@ -8,6 +8,8 @@ import subprocess
 
 SCRIPT = Path(__file__).resolve().parents[1] / "skills/q-first-pr-review/scripts/triage.py"
 spec = importlib.util.spec_from_file_location("q_first_pr_review", SCRIPT)
+if spec is None or spec.loader is None:
+    raise RuntimeError(f"Unable to load Q-first helper: {SCRIPT}")
 q_first = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(q_first)
 
@@ -115,9 +117,20 @@ class QFirstTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "cannot safely deduplicate"):
                 q_first.review_snapshot("o/r", 4)
 
+    def test_truncated_review_history_never_claims_current_head(self):
+        record = pr()
+        record["reviews"]["pageInfo"] = {"hasPreviousPage": True}
+        result = q_first.classify(record, [], "o/r")
+        self.assertTrue(result["review_history_truncated"])
+        self.assertTrue(result["q_review_observed"])
+        self.assertIsNone(result["q_review_sha"])
+        self.assertIsNone(result["q_review_covers_head"])
+
     def test_rejects_invalid_repository(self):
         with self.assertRaisesRegex(ValueError, "owner/name"):
             q_first.review_snapshot("owner/repo;evil", 3)
+        with self.assertRaisesRegex(ValueError, "owner/name"):
+            q_first.review_snapshot("owner.corp/repo", 3)
 
 
 if __name__ == "__main__":
