@@ -48,6 +48,9 @@ file paths listed in `renovate.json`. Node and Python runtime versions are
 review-only. Authentication, cryptography, cloud-control, and MCP SDK/package
 updates likewise require manual review.
 
+
+The unsuffixed `wrangler`, `miniflare`, and `workerd` npm packages are also cloud-control dependencies, even though they are not in the `@cloudflare/*` namespace; they are explicitly review-only.
+
 The restricted package rules follow the generic minor/patch automerge rules,
 so they override the generic `automerge: true`. The restricted rules require
 Dependency Dashboard approval before ordinary PR creation; vulnerability
@@ -57,7 +60,7 @@ verified risk-based approval to those PRs explicitly.
 
 A minimum age is not a malware guarantee: `pin`, lockfile maintenance, and
 some digest updates do not carry enforceable publication timestamps. These
-**npm-sourced pin, digest, and lockfile-maintenance updates are now review-only**,
+**npm-sourced pin and digest updates are now review-only, and all lockfile maintenance in every ecosystem is review-only**,
 rather than falsely claimed to satisfy the 14-day gate. Renovate uses npm's
 age-aware resolution when supported, but an existing lockfile may require a
 fallback; release-age gates do not replace diff review, immutable
