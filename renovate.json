@@ -116,6 +116,21 @@
         "major"
       ],
       "automerge": false
+    },
+    {
+      "description": "Security patch runtime versions are reviewed and CI-gated; do not wait for ordinary weekly updates",
+      "matchDatasources": [
+        "node-version",
+        "python-version"
+      ],
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "schedule": [],
+      "automerge": false,
+      "addLabels": [
+        "security-toolchain"
+      ]
     }
   ],
   "customManagers": [
@@ -162,7 +177,10 @@
     "prConcurrentLimit": 10,
     "addLabels": [
       "security"
-    ]
+    ],
+    "schedule": [],
+    "prCreation": "immediate",
+    "minimumReleaseAge": null
   },
   "labels": [
     "dependencies"

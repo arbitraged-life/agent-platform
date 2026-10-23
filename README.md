@@ -34,6 +34,7 @@ delegated to Renovate and Mergify rather than maintained as platform runtime cod
   CODEOWNERS readiness, deterministic PR structure, measurable code-generation
   budgets, and evidence-based repository style mining.
 - [Release contract](docs/release-contract.md): immutable, digest-checked installs.
+- [Security remediation lifecycle](docs/security-remediation.md): advisory checks, Renovate security PRs and gated consumer acceptance.
 - [Skills](docs/skills.md): catalog, provenance, licensing and consumer overlays.
 - [Migration provenance](docs/MIGRATION_PROVENANCE.md): source revisions and transformations.
 

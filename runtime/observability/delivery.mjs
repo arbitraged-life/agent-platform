@@ -152,7 +152,9 @@ export function validateDeliveryRecord(record) {
       new Date(Date.parse(record[name])).toISOString() !== record[name]
     )
       throw new Error("Invalid delivery time");
-  if (!record.destinations || Object.keys(record.destinations).sort().join(",") !== "opik,posthog")
+  if (!record.destinations || typeof record.destinations !== "object" ||
+      Array.isArray(record.destinations) || Object.keys(record.destinations).length !== 2 ||
+      !Object.hasOwn(record.destinations, "opik") || !Object.hasOwn(record.destinations, "posthog"))
     throw new Error("Invalid delivery destinations");
   for (const value of Object.values(record.destinations)) {
     if (

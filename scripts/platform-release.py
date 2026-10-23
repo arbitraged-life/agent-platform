@@ -138,11 +138,17 @@ def _extract_bundle(data, temporary):
             path.chmod(member.mode & 0o755)
 
 
-def install(bundle, lock, destination):
-    if set(lock) != {'schema_version', 'commit', 'sha256', 'artifact'} or lock['schema_version'] != 1:
+def validate_lock(lock):
+    if not isinstance(lock, dict) or set(lock) != {'schema_version', 'commit', 'sha256', 'artifact'} or lock['schema_version'] != 1:
         raise ValueError('Unsupported release lock')
-    if not re.fullmatch('[0-9a-f]{40}', lock['commit']) or not re.fullmatch('[0-9a-f]{64}', lock['sha256']):
+    if not isinstance(lock['commit'], str) or not re.fullmatch('[0-9a-f]{40}', lock['commit']) or not isinstance(lock['sha256'], str) or not re.fullmatch('[0-9a-f]{64}', lock['sha256']):
         raise ValueError('Invalid release identity')
+    if not isinstance(lock['artifact'], str) or lock['artifact'] != Path(lock['artifact']).name or not lock['artifact']:
+        raise ValueError('Invalid release artifact name')
+
+
+def install(bundle, lock, destination):
+    validate_lock(lock)
     if bundle.stat().st_size > MAX_RELEASE_BYTES:
         raise ValueError('Release bundle exceeds size limit')
     data = bundle.read_bytes()
@@ -168,6 +174,86 @@ def install(bundle, lock, destination):
     return target
 
 
+def verify_installation(bundle, lock, destination):
+    """Independently compare trusted release lock, artifact and installed bytes.
+
+    Read-only acceptance evidence. Passing does NOT prove that an installed
+    release is selected, deployed, executing, or permitted to act.
+    """
+    validate_lock(lock)
+    if bundle.name != lock['artifact'] or bundle.stat().st_size > MAX_RELEASE_BYTES:
+        raise ValueError('Release artifact name/size mismatch')
+    data = bundle.read_bytes()
+    if sha(data) != lock['sha256']:
+        raise ValueError('Release digest mismatch')
+    spellings = {}
+    with tarfile.open(fileobj=io.BytesIO(data), mode='r:') as archive:
+        members = archive.getmembers()
+        if len(members) > 10000:
+            raise ValueError('Too many release entries')
+        names = set()
+        sizes = 0
+        for member in members:
+            register_path(member.name, spellings)
+            if not member.isfile() or member.name in names:
+                raise ValueError('Unsupported release entry')
+            names.add(member.name)
+            sizes += member.size
+            if sizes > MAX_RELEASE_BYTES:
+                raise ValueError('Expanded release exceeds size limit')
+        if MANIFEST_NAME not in names:
+            raise ValueError('Missing release manifest')
+        expected_modes = {member.name: member.mode & 0o777 for member in members}
+        manifest_bytes = archive.extractfile(MANIFEST_NAME).read()
+        manifest = json.loads(manifest_bytes)
+        if manifest.get('schema_version') != 1 or manifest.get('commit') != lock['commit']:
+            raise ValueError('Release manifest identity mismatch')
+        declared = manifest.get('files')
+        if not isinstance(declared, dict) or set(declared) | {MANIFEST_NAME} != names:
+            raise ValueError('Release manifest file list mismatch')
+        for member in members:
+            if member.name != MANIFEST_NAME and sha(archive.extractfile(member).read()) != declared.get(member.name):
+                raise ValueError('Release manifest content mismatch')
+
+    target = destination / lock['commit']
+    if target.is_symlink() or not target.is_dir():
+        raise ValueError('Verified installation directory is unavailable')
+    installed = {}
+    expected_dirs = {str(parent) for name in names for parent in PurePosixPath(name).parents
+                     if str(parent) != '.'}
+    for file in target.rglob('*'):
+        if file.is_symlink():
+            raise ValueError('Installed release has a symbolic link')
+        name = str(file.relative_to(target))
+        if file.is_dir():
+            if name not in expected_dirs:
+                raise ValueError('Installed release file inventory mismatch')
+            continue
+        if not file.is_file():
+            raise ValueError('Installed release has a special file')
+        if name not in expected_modes:
+            raise ValueError('Installed release file inventory mismatch')
+        if (file.stat().st_mode & 0o777) != expected_modes[name]:
+            raise ValueError('Installed release permission mismatch')
+        installed[name] = sha(file.read_bytes())
+        if len(installed) > 10000:
+            raise ValueError('Too many installed release entries')
+    if set(installed) != names or (target / MANIFEST_NAME).read_bytes() != manifest_bytes:
+        raise ValueError('Installed release file inventory/manifest mismatch')
+    if any(installed[name] != expected for name, expected in declared.items()):
+        raise ValueError('Installed release content mismatch')
+    return {
+        'schema_version': 1,
+        'status': 'installed-bytes-verified',
+        'source_commit': lock['commit'],
+        'release_sha256': lock['sha256'],
+        'installed_path': str(target.resolve()),
+        'verified_files': len(declared),
+        'runtime_deployed': None,
+        'runtime_accepted': None,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
@@ -178,11 +264,17 @@ def main():
     installer.add_argument('--bundle', type=Path, required=True)
     installer.add_argument('--lock', type=Path, required=True)
     installer.add_argument('--destination', type=Path, required=True)
+    verifier = sub.add_parser('verify')
+    verifier.add_argument('--bundle', type=Path, required=True)
+    verifier.add_argument('--lock', type=Path, required=True)
+    verifier.add_argument('--destination', type=Path, required=True)
     args = parser.parse_args()
     if args.command == 'build':
         print(json.dumps(build(args.root, args.output), indent=2))
-    else:
+    elif args.command == 'install':
         print(install(args.bundle, json.loads(args.lock.read_text()), args.destination))
+    else:
+        print(json.dumps(verify_installation(args.bundle, json.loads(args.lock.read_text()), args.destination), indent=2))
 
 
 if __name__ == '__main__':

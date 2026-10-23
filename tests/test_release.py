@@ -148,6 +148,45 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'already exists'):
                 release.install(bundle, lock, root / 'installed')
 
+    def test_release_installation_receipt_requires_matching_bundle_and_installed_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            installed = root / 'installed'
+            target = release.install(bundle, lock, installed)
+            receipt = release.verify_installation(bundle, lock, installed)
+            self.assertEqual(receipt['status'], 'installed-bytes-verified')
+            self.assertEqual(receipt['source_commit'], lock['commit'])
+            self.assertEqual(receipt['release_sha256'], lock['sha256'])
+            self.assertEqual(receipt['verified_files'], 1)
+            self.assertIsNone(receipt['runtime_deployed'])
+            self.assertIsNone(receipt['runtime_accepted'])
+            (target / 'runtime/main.mjs').write_text('tampered')
+            with self.assertRaisesRegex(ValueError, 'content mismatch'):
+                release.verify_installation(bundle, lock, installed)
+
+    def test_release_readback_refuses_permission_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            target = release.install(bundle, lock, root / 'installed')
+            (target / 'runtime/main.mjs').chmod(0o755)
+            with self.assertRaisesRegex(ValueError, 'permission mismatch'):
+                release.verify_installation(bundle, lock, root / 'installed')
+
+    def test_release_readback_refuses_unexpected_files_and_corrupt_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            target = release.install(bundle, lock, root / 'installed')
+            (target / 'unexpected.txt').write_text('untracked')
+            with self.assertRaisesRegex(ValueError, 'inventory'):
+                release.verify_installation(bundle, lock, root / 'installed')
+            (target / 'unexpected.txt').unlink()
+            bundle.write_bytes(bundle.read_bytes() + b'tampered')
+            with self.assertRaisesRegex(ValueError, 'digest mismatch'):
+                release.verify_installation(bundle, lock, root / 'installed')
+
     def test_corruption_denied(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

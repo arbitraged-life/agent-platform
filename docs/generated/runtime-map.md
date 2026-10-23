@@ -77,6 +77,11 @@ flowchart LR
     nbda559628a9a --> n70562998125a
 ```
 
-The generated views show source structure only. See
-[architecture and ownership](../architecture.md) for the release and
-consumer boundary, and the domain guides for behavior.
+## Security boundaries
+
+Import edges are **not** permission, authentication, sandbox, or data-flow
+attestations. See the
+[reviewed security trust-boundary map](../architecture.md#security-trust-boundaries)
+for untrusted inputs, privileged consumers, release-installation,
+and telemetry boundaries.
+Actual installed and runtime-accepted state requires independent readback.

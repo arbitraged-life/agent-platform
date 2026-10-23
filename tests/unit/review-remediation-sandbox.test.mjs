@@ -123,11 +123,12 @@ test('combined subprocess output is capped in bytes',async()=>{
 test('command timeout terminates a forked descendant that would outlive its parent',async()=>{
  const root=await mkdtemp(join(tmpdir(),'review-process-group-')),marker=join(root,'escaped');
  try {
-  const descendant=`process.on('SIGTERM',()=>{});process.send('ready');setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(marker)},'escaped'),1500);`;
-  const parent=`const c=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore','ignore','ignore','ipc']});c.once('message',()=>{console.log('ready');setInterval(()=>{},1000);});`;
-  const result=await runCommand(process.execPath,['-e',parent],{timeoutMs:1000});
+  // The shell and delayed child share one POSIX process group. This avoids
+  // requiring two nested Node processes to initialize within a one-second budget.
+  const parent='(sleep 4; printf escaped > "$ESCAPE_MARKER") & echo ready; wait';
+  const result=await runCommand('/bin/sh',['-c',parent],{timeoutMs:2500,env:{ESCAPE_MARKER:marker}});
   assert.equal(result.code,124);assert.match(result.stdout,/ready/);
-  await new Promise(resolve=>setTimeout(resolve,1600));
+  await new Promise(resolve=>setTimeout(resolve,4200));
   await assert.rejects(()=>access(marker));
  } finally {await rm(root,{recursive:true,force:true});}
 });

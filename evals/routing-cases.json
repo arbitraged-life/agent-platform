@@ -68,5 +68,34 @@
       "delegate_detail": "User requested local review"
     },
     "expected": "local-agent"
+  },
+  {
+    "name": "native missing operation uses scoped local path",
+    "facts": {
+      "native_available": false,
+      "local_available": true
+    },
+    "expected": "chatgpt-local"
+  },
+  {
+    "name": "unreachable local agent cannot override owning connector",
+    "facts": {
+      "native_available": true,
+      "local_available": false,
+      "delegate_reason": "local-harness",
+      "delegate_detail": "Local harness advantage"
+    },
+    "expected": "chatgpt-native"
+  },
+  {
+    "name": "permission denial prevents available fallback transport",
+    "facts": {
+      "native_available": true,
+      "local_available": true,
+      "authority_blocked": true,
+      "delegate_reason": "local-harness",
+      "delegate_detail": "Other client could retry"
+    },
+    "expected": "needs-user"
   }
 ]

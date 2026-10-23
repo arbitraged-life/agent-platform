@@ -52,6 +52,30 @@ class BoundaryTests(unittest.TestCase):
                 file.write_text(content)
                 self.assertTrue(validation.boundaries([file], root))
 
+    def test_scheduled_advisory_gate_runs_without_optional_test_insights_credential(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = validation.yaml.safe_load((root / '.github/workflows/test-insights.yml').read_text())
+        steps = workflow['jobs']['node-tests']['steps']
+        audit = next(step for step in steps if step.get('name') == 'Check current dependency advisories (existing scheduled run)')
+        self.assertEqual(audit['if'], "github.event_name == 'schedule'")
+        self.assertEqual(audit['run'], 'python3 scripts/audit_dependencies.py')
+        for step in steps:
+            if step.get('uses', '').startswith(('actions/checkout@', 'actions/setup-node@')):
+                self.assertIn("github.event_name == 'schedule'", step['if'])
+
+    def test_renovate_remediates_security_prs_without_expanding_merge_permissions(self):
+        root = Path(__file__).resolve().parents[1]
+        import json
+        policy = json.loads((root / 'renovate.json').read_text())
+        self.assertTrue(policy['vulnerabilityAlerts']['enabled'])
+        self.assertEqual(policy['vulnerabilityAlerts']['schedule'], [])
+        self.assertEqual(policy['vulnerabilityAlerts']['prCreation'], 'immediate')
+        rules = [rule for rule in policy['packageRules'] if
+                 set(rule.get('matchDatasources', [])) == {'node-version','python-version'}]
+        self.assertEqual(len(rules), 1)
+        self.assertFalse(rules[0]['automerge'])
+        self.assertEqual(rules[0]['matchUpdateTypes'], ['patch'])
+
     def test_environment_variants_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
