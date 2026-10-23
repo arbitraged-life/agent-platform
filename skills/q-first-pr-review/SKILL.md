@@ -20,10 +20,11 @@ The path above is relative to **this skill's directory**, not the caller's repos
 The helper reads GitHub GraphQL through the already-authenticated `gh` CLI. It prints JSON describing the exact head, Q reviews, and current inline threads. It never posts comments, invokes Amazon Q, mutates code, starts a runner, or queries a model.
 
 - `needs_validation`: an unresolved, non-outdated Q finding without a prior leading `/q` command. Validate against the *current* diff and the neighboring code, tests, security boundaries, and contract.
-- `awaiting_q_reply`: a leading `/q` follow-up exists without a subsequent Q reply. Do not repost the command.
+- `awaiting_q_reply`: a plausible leading `/q` follow-up from an OWNER/MEMBER/COLLABORATOR exists without a subsequent Q reply. It excludes `/q review`, which only works in a **new top-level PR comment**. Association is not proof of effective Write permission or Q acceptance; investigate an unanswered command rather than posting duplicates.
 - `q_replied_verify_code`: Q answered, but there is no proof a patch landed. Inspect the branch, apply an appropriate suggested change if authorized, and verify the result.
-- `q_review_observed=false`: Q has not been observed; don't interpret silence as a clean review. Use the existing lifecycle's event/waiting state rather than creating a polling loop.
+- `q_review_observed=false`: no Q activity was found in the complete reviewed window. Do not interpret silence as a clean review. `null` means older history was truncated and review presence is unknown.
 - `review_history_truncated=true`: more than 100 review submissions exist. Coverage is unknown without deeper pagination; do not treat a partial Q history as proof of review completion.
+- `q_review_bodies_unverified` and `q_review_body_count`: Q's nonempty **top-level review bodies**, possibly containing findings without inline threads. Treat these as separate validation candidates and inspect the original review when excerpts are truncated. An empty inline findings list alone does not prove a clean review.
 - `q_review_covers_head=false` or `null`: the most recent observed Q review does not demonstrably cover the current head. Request one further Q review only if justified by the scope of new changes and the user/app quota.
 
 A GraphQL error, changed PR head while paginating, or truncated comment thread is **unknown**, never clean.
