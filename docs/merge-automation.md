@@ -4,8 +4,12 @@
 
 Renovate owns dependency discovery, eligibility, PR updates, and housekeeping.
 For this public repository, it requests GitHub native squash auto-merge. GitHub
-Free supports native auto-merge on public repositories. Mergify continues merging
-other PRs selected with `merge-ready` and supplies generic merge protections.
+Free supports native auto-merge on public repositories. Mergify owns other PRs:
+new owner-authored, same-repository PRs (number greater than **86**) are
+automatically queued when the existing Merge Protections and CI checks pass.
+Older PRs and external contributions require the existing `merge-ready` label.
+Renovate remains excluded from Mergify's queue and continues using GitHub
+native auto-merge under its narrower dependency eligibility rules.
 
 The repository-local `renovate.json` extends official Renovate presets directly.
 The reusable `default.json` remains unchanged, so consuming repositories do not
