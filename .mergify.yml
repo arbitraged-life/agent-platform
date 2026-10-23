@@ -15,7 +15,7 @@ merge_protections_settings:
         - and:
             - author = arbitraged-life
             - -from-fork
-            - number > 86
+            - number > 87
 
 merge_protections:
   - name: main branch validation
