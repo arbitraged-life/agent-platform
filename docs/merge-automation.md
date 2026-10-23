@@ -5,7 +5,7 @@
 Renovate owns dependency discovery, eligibility, PR updates, and housekeeping.
 For this public repository, it requests GitHub native squash auto-merge. GitHub
 Free supports native auto-merge on public repositories. Mergify owns other PRs:
-new owner-authored, same-repository PRs (number greater than **86**) are
+new owner-authored, same-repository PRs (number greater than **87**) are
 automatically queued when the existing Merge Protections and CI checks pass.
 Older PRs and external contributions require the existing `merge-ready` label.
 Renovate remains excluded from Mergify's queue and continues using GitHub
@@ -52,7 +52,7 @@ conflict notifications, and stale-PR housekeeping.
 the cutover (including existing PR #85) or manually reviewed exceptions.
 For new PRs, automatic queueing additionally requires the PR author to be
 `arbitraged-life`, the head to be in this repository rather than a fork,
-and PR number to be greater than 86. This prevents an unrelated contributor
+and PR number to be greater than 87. This prevents an unrelated contributor
 or previously open PR from merging without deliberate selection.
 No separate polling agent, duplicate merge executor, or paid CI lane is added.
 This policy activates only after the configuration is merged to `main`;
