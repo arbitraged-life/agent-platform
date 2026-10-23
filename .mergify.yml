@@ -5,9 +5,17 @@ merge_queue:
 merge_protections_settings:
   reporting_method: check-runs
   post_comment: false
+  # New owner-authored, same-repository PRs queue after required CI and
+  # Merge Protections pass. Existing PRs stay label-gated to avoid bulk
+  # merging the pre-cutover backlog; Renovate keeps its own merge owner.
   auto_merge_conditions:
     - -author = renovate[bot]
-    - label = merge-ready
+    - or:
+        - label = merge-ready
+        - and:
+            - author = arbitraged-life
+            - -from-fork
+            - number > 86
 
 merge_protections:
   - name: main branch validation
