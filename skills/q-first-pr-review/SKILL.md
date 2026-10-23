@@ -23,6 +23,7 @@ The helper reads GitHub GraphQL through the already-authenticated `gh` CLI. It p
 - `awaiting_q_reply`: a leading `/q` follow-up exists without a subsequent Q reply. Do not repost the command.
 - `q_replied_verify_code`: Q answered, but there is no proof a patch landed. Inspect the branch, apply an appropriate suggested change if authorized, and verify the result.
 - `q_review_observed=false`: Q has not been observed; don't interpret silence as a clean review. Use the existing lifecycle's event/waiting state rather than creating a polling loop.
+- `review_history_truncated=true`: more than 100 review submissions exist. Coverage is unknown without deeper pagination; do not treat a partial Q history as proof of review completion.
 - `q_review_covers_head=false` or `null`: the most recent observed Q review does not demonstrably cover the current head. Request one further Q review only if justified by the scope of new changes and the user/app quota.
 
 A GraphQL error, changed PR head while paginating, or truncated comment thread is **unknown**, never clean.
