@@ -42,7 +42,7 @@ class MergePolicyTests(unittest.TestCase):
         start = next(i for i, r in enumerate(rules) if r.get("minimumReleaseAge") == "14 days")
         self.assertGreater(start, max(i for i, r in enumerate(rules) if r.get("automerge") is True))
         restricted = rules[start:]
-        self.assertEqual(len(restricted), 6)
+        self.assertEqual(len(restricted), 7)
         for rule in restricted[1:]:
             self.assertIs(rule["automerge"], False)
             self.assertIs(rule["dependencyDashboardApproval"], True)
@@ -56,8 +56,10 @@ class MergePolicyTests(unittest.TestCase):
         self.assertTrue({"infra/**", ".github/workflows/**", ".circleci/**"}.issubset(paths))
         self.assertEqual(restricted[4]["matchDatasources"], ["node-version", "python-version"])
         packages = restricted[5]["matchPackageNames"]
-        self.assertTrue({"@modelcontextprotocol/**", "@cloudflare/**",
-                         "jose", "cryptography", "google-auth", "mcp"}.issubset(packages))
+        self.assertTrue({"@modelcontextprotocol/**", "@cloudflare/**", "wrangler",
+                         "miniflare", "jose", "cryptography", "google-auth", "mcp"}.issubset(packages))
+        self.assertEqual(restricted[6]["matchUpdateTypes"], ["lockFileMaintenance"])
+        self.assertIs(restricted[6]["automerge"], False)
         self.assertTrue(self.policy["platformAutomerge"])
         self.assertFalse(self.policy["ignoreTests"])
 
