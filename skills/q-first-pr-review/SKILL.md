@@ -17,7 +17,7 @@ python3 scripts/triage.py --repo OWNER/REPO --pr NUMBER
 
 The path above is relative to **this skill's directory**, not the caller's repository. Use the absolute installed skill path when invoked from elsewhere (such as `~/.agents/skills/q-first-pr-review/scripts/triage.py`).
 
-The helper reads GitHub GraphQL through the already-authenticated `gh` CLI. It prints JSON describing the exact head, Q reviews, and current inline threads. It never posts comments, invokes Amazon Q, mutates code, starts a runner, or queries a model.
+The helper reads GitHub GraphQL through the already-authenticated `gh` CLI. Its JSON summarizes the exact PR head, observed Amazon Q review coverage and nonempty review-body excerpts, and **active Amazon Q-led inline threads**; it does not export every review or unrelated inline conversation. It never posts comments, invokes Amazon Q, mutates code, starts a runner, or queries a model.
 
 - `needs_validation`: an unresolved, non-outdated Q finding without a prior leading `/q` command. Validate against the *current* diff and the neighboring code, tests, security boundaries, and contract.
 - `awaiting_q_reply`: a plausible leading `/q` follow-up from an OWNER/MEMBER/COLLABORATOR exists without a subsequent Q reply. It excludes `/q review`, which only works in a **new top-level PR comment**. Association is not proof of effective Write permission or Q acceptance; investigate an unanswered command rather than posting duplicates.
