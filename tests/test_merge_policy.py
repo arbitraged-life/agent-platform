@@ -29,6 +29,34 @@ class MergePolicyTests(unittest.TestCase):
         self.assertTrue(any(r.get("matchUpdateTypes") == ["major"] and r.get("automerge") is False for r in rules))
         self.assertNotIn("automerge", self.policy["vulnerabilityAlerts"])
 
+    def test_npm_release_age_is_timestamp_required_and_fail_closed(self):
+        rules = self.policy["packageRules"]
+        cooldown = next(r for r in rules if r.get("matchDatasources") == ["npm"])
+        self.assertEqual(cooldown["minimumReleaseAge"], "14 days")
+        self.assertEqual(cooldown["minimumReleaseAgeBehaviour"], "timestamp-required")
+        self.assertEqual(cooldown["internalChecksFilter"], "strict")
+        self.assertIn("security:minimumReleaseAgePypi", self.policy["extends"])
+
+    def test_high_risk_rules_take_precedence_over_general_automerge(self):
+        rules = self.policy["packageRules"]
+        generic = max(i for i, r in enumerate(rules) if r.get("automerge") is True)
+        restricted = rules[generic + 1:]
+        self.assertEqual(len(restricted), 5)
+        for rule in restricted[1:]:
+            self.assertIs(rule["automerge"], False)
+            self.assertIs(rule["dependencyDashboardApproval"], True)
+        managers = set(restricted[1]["matchManagers"])
+        self.assertTrue({"github-actions", "terraform", "circleci", "dockerfile",
+                         "docker-compose", "custom.regex"}.issubset(managers))
+        paths = restricted[2]["matchFileNames"]
+        self.assertTrue({"infra/**", ".github/workflows/**", ".circleci/**"}.issubset(paths))
+        self.assertEqual(restricted[3]["matchDatasources"], ["node-version", "python-version"])
+        packages = restricted[4]["matchPackageNames"]
+        self.assertTrue({"@modelcontextprotocol/**", "@cloudflare/**",
+                         "jose", "cryptography", "google-auth", "mcp"}.issubset(packages))
+        self.assertTrue(self.policy["platformAutomerge"])
+        self.assertFalse(self.policy["ignoreTests"])
+
     def test_mergify_does_not_queue_or_housekeep_renovate(self):
         self.assertEqual(self.mergify["merge_protections_settings"]["auto_merge_conditions"], [
             "-author = renovate[bot]",
