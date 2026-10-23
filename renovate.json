@@ -138,7 +138,8 @@
         "lockFileMaintenance"
       ],
       "automerge": false,
-      "dependencyDashboardApproval": true
+      "dependencyDashboardApproval": true,
+      "minimumReleaseAge": null
     },
     {
       "description": "Review CI actions, infrastructure, container images, and script-managed toolchain pins before merging",
@@ -217,7 +218,11 @@
         "urllib3",
         "wrangler",
         "miniflare",
-        "workerd"
+        "workerd",
+        "@google-cloud/**",
+        "google-cloud-*",
+        "google-api-python-client",
+        "@azure/**"
       ],
       "automerge": false,
       "dependencyDashboardApproval": true
@@ -227,6 +232,19 @@
       "matchUpdateTypes": [
         "lockFileMaintenance"
       ],
+      "automerge": false,
+      "dependencyDashboardApproval": true,
+      "minimumReleaseAge": null
+    },
+    {
+      "description": "Manually review update types without release-age timestamps instead of leaving them permanently pending",
+      "matchUpdateTypes": [
+        "lockfileUpdate",
+        "rollback",
+        "bump",
+        "replacement"
+      ],
+      "minimumReleaseAge": null,
       "automerge": false,
       "dependencyDashboardApproval": true
     }
