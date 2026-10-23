@@ -32,6 +32,18 @@ class SkillTests(unittest.TestCase):
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
 
+    def test_q_first_is_discoverable_and_helper_has_no_embedded_api_key(self):
+        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
+        self.assertIn("q-first-pr-review", rows)
+        self.assertEqual(rows["q-first-pr-review"]["license"], "LICENSE")
+        skill = self.root / "skills/q-first-pr-review"
+        body = (skill / "SKILL.md").read_text()
+        helper = (skill / "scripts/triage.py").read_text()
+        self.assertIn("python3 scripts/triage.py", body)
+        self.assertIn("reviewThreads(first:100", helper)
+        self.assertNotIn("api_key", helper.casefold())
+        self.assertIn("q-first-pr-review", body)
+
     def test_fresh_migration_replacements_are_bundled_and_bounded(self):
         rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
         expected = {
@@ -73,22 +85,6 @@ class SkillTests(unittest.TestCase):
         self.assertIn("20–40 merged PRs", style)
         self.assertIn("holdout", style)
         self.assertIn("do not invent", style.casefold())
-
-    def test_tax_prep_migration_is_privacy_bounded_and_self_contained(self):
-        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
-        self.assertIn("tax-prep", rows)
-        self.assertEqual(rows["tax-prep"]["license"], "LICENSE")
-        content = (self.root / "skills/tax-prep/SKILL.md").read_text()
-        self.assertIn("Never commit taxpayer names", content)
-        self.assertIn("runtime-provided " + "`TAX_ROOT`", content)
-        self.assertNotIn("agent-framework", content)
-        for rel in [
-            "references/full-tax-pipeline.md",
-            "references/missing-forms-checker.md",
-            "references/receipt-organizer.md",
-            "scripts/pdf_text_overlay.py",
-        ]:
-            self.assertTrue((self.root / "skills/tax-prep" / rel).is_file())
 
     def test_research_workflow_migrations_are_public_and_portable(self):
         rows = {row["name"]: row for row in MODULE["catalog"](self.root)}

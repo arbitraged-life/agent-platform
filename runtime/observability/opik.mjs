@@ -82,9 +82,15 @@ export function opikRecords(event, project) {
     ["prompt_tokens", "input_tokens"],
     ["completion_tokens", "output_tokens"],
     ["total_tokens", "total_tokens"],
+    ["reasoning_tokens", "reasoning_tokens"],
+    ["cache_read_tokens", "cache_read_tokens"],
+    ["cache_write_tokens", "cache_write_tokens"],
   ])
     if (event.usage[source] !== null) usage[target] = event.usage[source];
   if (Object.keys(usage).length) span.usage = usage;
+  // Opik accepts producer-reported costs here, including a genuine zero.
+  // Unknown costs remain absent; never recompute from incomplete token classes.
+  if (event.usage.cost_usd !== null) span.total_estimated_cost = event.usage.cost_usd;
   return { trace, span };
 }
 
