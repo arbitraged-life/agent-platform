@@ -30,7 +30,18 @@ class MergePolicyTests(unittest.TestCase):
         self.assertNotIn("automerge", self.policy["vulnerabilityAlerts"])
 
     def test_mergify_does_not_queue_or_housekeep_renovate(self):
-        self.assertEqual(self.mergify["merge_protections_settings"]["auto_merge_conditions"], ["-author = renovate[bot]", "label = merge-ready"])
+        self.assertEqual(self.mergify["merge_protections_settings"]["auto_merge_conditions"], [
+            "-author = renovate[bot]",
+            {"or": [
+                "label = merge-ready",
+                {"and": ["author = arbitraged-life", "-from-fork", "number > 86"]},
+            ]},
+        ])
+        # Historical PRs remain intentionally outside the new unconditional path.
+        # Green checks must not independently authorize external/forked contributions.
+        self.assertTrue(any("label = merge-ready" in branch if isinstance(branch, str)
+                            else False
+                            for branch in self.mergify["merge_protections_settings"]["auto_merge_conditions"][1]["or"]))
         for rule in self.mergify["queue_rules"]:
             self.assertIn("-author = renovate[bot]", rule["queue_conditions"])
         for rule in self.mergify["pull_request_rules"]:
