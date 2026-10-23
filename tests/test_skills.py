@@ -32,7 +32,7 @@ class SkillTests(unittest.TestCase):
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
 
-    def test_q_first_is_discoverable_and_bundles_no_model_credentials(self):
+    def test_q_first_is_discoverable_and_helper_has_no_embedded_api_key(self):
         rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
         self.assertIn("q-first-pr-review", rows)
         self.assertEqual(rows["q-first-pr-review"]["license"], "LICENSE")
