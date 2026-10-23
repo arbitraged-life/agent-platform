@@ -39,8 +39,9 @@ class MergePolicyTests(unittest.TestCase):
 
     def test_high_risk_rules_take_precedence_over_general_automerge(self):
         rules = self.policy["packageRules"]
-        generic = max(i for i, r in enumerate(rules) if r.get("automerge") is True)
-        restricted = rules[generic + 1:]
+        start = next(i for i, r in enumerate(rules) if r.get("minimumReleaseAge") == "14 days")
+        self.assertGreater(start, max(i for i, r in enumerate(rules) if r.get("automerge") is True))
+        restricted = rules[start:]
         self.assertEqual(len(restricted), 5)
         for rule in restricted[1:]:
             self.assertIs(rule["automerge"], False)
