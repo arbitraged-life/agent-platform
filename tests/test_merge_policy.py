@@ -42,13 +42,14 @@ class MergePolicyTests(unittest.TestCase):
         start = next(i for i, r in enumerate(rules) if r.get("minimumReleaseAge") == "14 days")
         self.assertGreater(start, max(i for i, r in enumerate(rules) if r.get("automerge") is True))
         restricted = rules[start:]
-        self.assertEqual(len(restricted), 7)
+        self.assertEqual(len(restricted), 8)
         for rule in restricted[1:]:
             self.assertIs(rule["automerge"], False)
             self.assertIs(rule["dependencyDashboardApproval"], True)
         self.assertEqual(restricted[1]["matchDatasources"], ["npm"])
         self.assertEqual(set(restricted[1]["matchUpdateTypes"]),
                          {"pin", "pinDigest", "digest", "lockFileMaintenance"})
+        self.assertIsNone(restricted[1]["minimumReleaseAge"])
         managers = set(restricted[2]["matchManagers"])
         self.assertTrue({"github-actions", "terraform", "circleci", "dockerfile",
                          "docker-compose", "custom.regex"}.issubset(managers))
@@ -57,9 +58,15 @@ class MergePolicyTests(unittest.TestCase):
         self.assertEqual(restricted[4]["matchDatasources"], ["node-version", "python-version"])
         packages = restricted[5]["matchPackageNames"]
         self.assertTrue({"@modelcontextprotocol/**", "@cloudflare/**", "wrangler",
-                         "miniflare", "jose", "cryptography", "google-auth", "mcp"}.issubset(packages))
+                         "miniflare", "@google-cloud/**", "@azure/**", "jose",
+                         "cryptography", "google-auth", "mcp"}.issubset(packages))
         self.assertEqual(restricted[6]["matchUpdateTypes"], ["lockFileMaintenance"])
         self.assertIs(restricted[6]["automerge"], False)
+        self.assertIsNone(restricted[6]["minimumReleaseAge"])
+        self.assertEqual(set(restricted[7]["matchUpdateTypes"]),
+                         {"lockfileUpdate", "rollback", "bump", "replacement"})
+        self.assertIs(restricted[7]["automerge"], False)
+        self.assertIsNone(restricted[7]["minimumReleaseAge"])
         self.assertTrue(self.policy["platformAutomerge"])
         self.assertFalse(self.policy["ignoreTests"])
 
