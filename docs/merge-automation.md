@@ -56,9 +56,11 @@ approved merely because an alert or the `security` label exists. Apply
 verified risk-based approval to those PRs explicitly.
 
 A minimum age is not a malware guarantee: `pin`, lockfile maintenance, and
-some digest updates do not carry enforceable publication timestamps. Renovate
-uses npm's age-aware resolution when supported, but an existing lockfile may
-require a fallback; release-age gates do not replace diff review, immutable
+some digest updates do not carry enforceable publication timestamps. These
+**npm-sourced pin, digest, and lockfile-maintenance updates are now review-only**,
+rather than falsely claimed to satisfy the 14-day gate. Renovate uses npm's
+age-aware resolution when supported, but an existing lockfile may require a
+fallback; release-age gates do not replace diff review, immutable
 action pinning, Qlty/security checks, or required CI. Do not change the
 `platformAutomerge: true` executor for this public repository.
 
