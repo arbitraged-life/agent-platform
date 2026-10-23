@@ -122,6 +122,8 @@ class QFirstTests(unittest.TestCase):
         def fake_run(cmd, **kwargs):
             calls.append(cmd)
             self.assertEqual(cmd[:3], ["gh", "api", "graphql"])
+            self.assertTrue(q_first.QUERY.lstrip().startswith("query("))
+            self.assertNotIn("mutation(", q_first.QUERY.casefold())
             self.assertIs(kwargs.get("shell"), False)
             self.assertTrue(all(isinstance(arg, str) for arg in cmd))
             cursor = any("after=NEXT" == c for c in cmd)
@@ -137,6 +139,24 @@ class QFirstTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(snapshot["number"], 4)
         self.assertEqual(len(threads), 1)
+
+    def test_pr_head_change_between_pages_fails_closed(self):
+        calls = []
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            second = "after=NEXT" in cmd
+            record = pr(sha="changed" if second else "original")
+            record["reviewThreads"] = {
+                "nodes": [],
+                "pageInfo": {"hasNextPage": not second,
+                             "endCursor": "NEXT" if not second else None},
+            }
+            response = {"data": {"repository": {"pullRequest": record}}}
+            return SimpleNamespace(returncode=0, stdout=json.dumps(response), stderr="")
+        with patch.object(q_first.subprocess, "run", side_effect=fake_run):
+            with self.assertRaisesRegex(ValueError, "PR head moved"):
+                q_first.review_snapshot("o/r", 4)
+        self.assertEqual(len(calls), 2)
 
     def test_unpaged_long_thread_fails_closed(self):
         def fake_run(cmd, **kwargs):
