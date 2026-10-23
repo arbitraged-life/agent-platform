@@ -27,10 +27,22 @@ class SkillTests(unittest.TestCase):
 
     def test_discovery_and_installed_hashes(self):
         rows = MODULE['catalog'](self.root)
-        self.assertEqual(len(rows), 40)
+        self.assertEqual(len(rows), 41)
         lock = MODULE['verify_upstream'](self.root)
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
+
+    def test_q_first_is_discoverable_and_helper_has_no_embedded_api_key(self):
+        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
+        self.assertIn("q-first-pr-review", rows)
+        self.assertEqual(rows["q-first-pr-review"]["license"], "LICENSE")
+        skill = self.root / "skills/q-first-pr-review"
+        body = (skill / "SKILL.md").read_text()
+        helper = (skill / "scripts/triage.py").read_text()
+        self.assertIn("python3 scripts/triage.py", body)
+        self.assertIn("reviewThreads(first:100", helper)
+        self.assertNotIn("api_key", helper.casefold())
+        self.assertIn("q-first-pr-review", body)
 
     def test_fresh_migration_replacements_are_bundled_and_bounded(self):
         rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
