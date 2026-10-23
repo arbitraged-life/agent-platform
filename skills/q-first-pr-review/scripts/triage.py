@@ -12,14 +12,14 @@ import subprocess
 import sys
 
 Q_AUTHORS = frozenset({"amazon-q-developer", "amazon-q-developer[bot]"})
-REPO_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+REPO_PATTERN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9_.-]{1,100}\Z")
 PAGE_LIMIT = 20
 
 QUERY = """query($owner:String!,$name:String!,$number:Int!,$after:String) {
   repository(owner:$owner,name:$name) {
     pullRequest(number:$number) {
       number state isDraft url headRefOid baseRefName
-      reviews(last:100) { nodes { author { login } submittedAt commit { oid } } }
+      reviews(last:100) { pageInfo { hasPreviousPage } nodes { author { login } submittedAt commit { oid } } }
       reviewThreads(first:100,after:$after) {
         pageInfo { hasNextPage endCursor }
         nodes {
@@ -82,7 +82,9 @@ def review_snapshot(repo, number):
 
 def classify(pr, threads, repo):
     """Do not infer finding validity or implemented code solely from comments."""
-    q_reviews = [r for r in (pr.get("reviews") or {}).get("nodes", [])
+    reviews = pr.get("reviews") or {}
+    review_history_truncated = bool((reviews.get("pageInfo") or {}).get("hasPreviousPage"))
+    q_reviews = [r for r in reviews.get("nodes", [])
                  if is_q((r.get("author") or {}).get("login"))]
     results = []
     skipped = 0
@@ -117,7 +119,7 @@ def classify(pr, threads, repo):
             "review_excerpt": body[:320],
         })
     most_recent_review = max(q_reviews, key=lambda r: r.get("submittedAt") or "", default=None)
-    reviewed_sha = ((most_recent_review or {}).get("commit") or {}).get("oid")
+    reviewed_sha = ((most_recent_review or {}).get("commit") or {}).get("oid") if not review_history_truncated else None
     head = pr["headRefOid"]
     return {
         "repository": repo,
@@ -127,6 +129,7 @@ def classify(pr, threads, repo):
         "state": pr["state"],
         "draft": pr["isDraft"],
         "q_review_observed": bool(q_reviews or results or skipped),
+        "review_history_truncated": review_history_truncated,
         "q_review_sha": reviewed_sha,
         "q_review_covers_head": (reviewed_sha == head if reviewed_sha else None),
         "active_q_findings": len(results),
