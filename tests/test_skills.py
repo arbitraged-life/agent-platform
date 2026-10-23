@@ -27,15 +27,33 @@ class SkillTests(unittest.TestCase):
 
     def test_discovery_and_installed_hashes(self):
         rows = MODULE['catalog'](self.root)
-        self.assertEqual(len(rows), 41)
-        self.assertIn('website-change-monitoring', {row['name'] for row in rows})
-        website_monitoring = (self.root / 'skills/website-change-monitoring/SKILL.md').read_text()
-        self.assertIn('wait_for_monitor_check', website_monitoring)
-        self.assertIn('provider-hosted', website_monitoring)
-        self.assertNotIn('9425976', website_monitoring)
+        self.assertEqual(len(rows), 42)
         lock = MODULE['verify_upstream'](self.root)
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
+
+    def test_website_monitoring_is_discoverable_and_bounded(self):
+        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
+        self.assertIn("website-change-monitoring", rows)
+        skill = (self.root / "skills/website-change-monitoring/SKILL.md").read_text()
+        for expected in ("provider-hosted", "wait_for_monitor_check",
+                         "first workspace", "all pages", "default email recipient",
+                         "unconfirmed material", "mcpproxy upstream add",
+                         "idempotency key", "Re-list"):
+            self.assertIn(expected, skill)
+        self.assertNotIn("9425976", skill)
+
+    def test_q_first_is_discoverable_and_helper_has_no_embedded_api_key(self):
+        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
+        self.assertIn("q-first-pr-review", rows)
+        self.assertEqual(rows["q-first-pr-review"]["license"], "LICENSE")
+        skill = self.root / "skills/q-first-pr-review"
+        body = (skill / "SKILL.md").read_text()
+        helper = (skill / "scripts/triage.py").read_text()
+        self.assertIn("python3 scripts/triage.py", body)
+        self.assertIn("reviewThreads(first:100", helper)
+        self.assertNotIn("api_key", helper.casefold())
+        self.assertIn("q-first-pr-review", body)
 
     def test_fresh_migration_replacements_are_bundled_and_bounded(self):
         rows = {row["name"]: row for row in MODULE["catalog"](self.root)}

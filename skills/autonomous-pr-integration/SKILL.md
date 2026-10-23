@@ -48,6 +48,7 @@ request points to that exact revision.
 While the pull request is open:
 
 - distinguish required checks from optional/advisory checks;
+- when Amazon Q review is installed and its `q-first-pr-review` skill is discoverable, use its read-only triage pass before spending inference on duplicate remediation; this is optional and must not block repositories without that provider;
 - address actionable review findings without silently expanding scope;
 - re-run affected validation after changes;
 - update from the base branch when required by repository policy;

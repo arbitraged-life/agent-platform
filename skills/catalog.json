@@ -51,7 +51,7 @@
     },
     {
       "name": "cloudflare-email-service",
-      "description": "Send and receive transactional emails with Cloudflare Email Service (Email Sending + Email Routing). Use when building email sending (Workers binding or REST API), email routing, Agents SDK email handling, or integrating email into any app \u2014 Workers, Node.js, Python, Go, etc. Also use for email deliverability, SPF/DKIM/DMARC, wrangler email setup, MCP email tools, or when a coding agent needs to send emails. Even for simple requests like \"add email to my Worker\" \u2014 this skill has critical config details.",
+      "description": "Send and receive transactional emails with Cloudflare Email Service (Email Sending + Email Routing). Use when building email sending (Workers binding or REST API), email routing, Agents SDK email handling, or integrating email into any app — Workers, Node.js, Python, Go, etc. Also use for email deliverability, SPF/DKIM/DMARC, wrangler email setup, MCP email tools, or when a coding agent needs to send emails. Even for simple requests like \"add email to my Worker\" — this skill has critical config details.",
       "path": "skills/cloudflare-email-service/SKILL.md",
       "license": "licenses/cloudflare-skills-LICENSE"
     },
@@ -87,7 +87,7 @@
     },
     {
       "name": "evaluator-comparer",
-      "description": "Normalize multiple AI tools and repos into comparable dimensions and present them as Markdown tables with clear 'choose this if\u2026' guidance.",
+      "description": "Normalize multiple AI tools and repos into comparable dimensions and present them as Markdown tables with clear 'choose this if…' guidance.",
       "path": "skills/evaluator-comparer/SKILL.md",
       "license": "LICENSE"
     },
@@ -146,15 +146,21 @@
       "license": "LICENSE"
     },
     {
-      "name": "repo-style-miner",
-      "description": "Mine accepted pull requests and reviewer feedback into a compact repository-specific style skill using observed evidence rather than generic humanization advice.",
-      "path": "skills/repo-style-miner/SKILL.md",
+      "name": "q-first-pr-review",
+      "description": "Triage Amazon Q Developer GitHub review findings before spending coding-agent inference. Use after opening a PR, when Q comments appear, or before a PR remediation/finalization pass.",
+      "path": "skills/q-first-pr-review/SKILL.md",
       "license": "LICENSE"
     },
     {
       "name": "repo-framework-analyst",
       "description": "Analyze GitHub repos and AI/LLM frameworks for maturity, integration complexity, and fit with typical TypeScript/Python/DevOps stacks.",
       "path": "skills/repo-framework-analyst/SKILL.md",
+      "license": "LICENSE"
+    },
+    {
+      "name": "repo-style-miner",
+      "description": "Mine accepted pull requests and reviewer feedback into a compact repository-specific style skill using observed evidence rather than generic humanization advice.",
+      "path": "skills/repo-style-miner/SKILL.md",
       "license": "LICENSE"
     },
     {
