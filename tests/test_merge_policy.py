@@ -34,7 +34,7 @@ class MergePolicyTests(unittest.TestCase):
             "-author = renovate[bot]",
             {"or": [
                 "label = merge-ready",
-                {"and": ["author = arbitraged-life", "-from-fork", "number > 86"]},
+                {"and": ["author = arbitraged-life", "-from-fork", "number > 87"]},
             ]},
         ])
         # Historical PRs remain intentionally outside the new unconditional path.
