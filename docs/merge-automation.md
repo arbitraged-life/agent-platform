@@ -19,7 +19,7 @@ inherit this repository's merge-executor change.
 
 | Update | Decision |
 | --- | --- |
-| Stable minor/patch, pins/digests, lock maintenance | Automatic after enforced checks. |
+| Low-risk stable minor/patch, pins/digests, lock maintenance | Automatic after required checks; npm updates also need mature release timestamps where supported. |
 | Major application/service updates | Review migration impact, test it, then select that PR. |
 | Pre-1.0 versions | Review-only; an exception needs package-specific build/smoke evidence. |
 | Security updates | Same version-specific policy; security labels are not approval. |
@@ -31,6 +31,36 @@ their separately approved policy; they are not blanket version-upgrade approval.
 approved exceptional update may be completed automatically after its own gates;
 this does not approve every future version. Existing release-age safeguards,
 schedules, limits, action/digest pinning, and infrastructure grouping remain.
+
+## Dependency supply-chain rules
+
+Low-risk dependency updates keep GitHub-native automerge once the enforced
+GitHub/CI protections are met. An additional **14-day minimum release age**
+applies to the npm datasource, with a required registry timestamp and strict
+internal check filtering. This intentionally delays newly published npm
+versions and prevents an unverified timestamp from being treated as mature.
+The existing three-day PyPI release-age preset remains in effect.
+
+Even a patch, pin, or digest update is **review-only** when its dependency is
+part of GitHub Actions, CircleCI, Terraform, Docker/Compose, Helm, Kubernetes,
+devcontainers, custom regex-managed CLI pins, or the infrastructure/CI
+file paths listed in `renovate.json`. Node and Python runtime versions are
+review-only. Authentication, cryptography, cloud-control, and MCP SDK/package
+updates likewise require manual review.
+
+The restricted package rules follow the generic minor/patch automerge rules,
+so they override the generic `automerge: true`. The restricted rules require
+Dependency Dashboard approval before ordinary PR creation; vulnerability
+alerts retain their existing immediate-PR exception and are never considered
+approved merely because an alert or the `security` label exists. Apply
+verified risk-based approval to those PRs explicitly.
+
+A minimum age is not a malware guarantee: `pin`, lockfile maintenance, and
+some digest updates do not carry enforceable publication timestamps. Renovate
+uses npm's age-aware resolution when supported, but an existing lockfile may
+require a fallback; release-age gates do not replace diff review, immutable
+action pinning, Qlty/security checks, or required CI. Do not change the
+`platformAutomerge: true` executor for this public repository.
 
 ## Enforcement
 
