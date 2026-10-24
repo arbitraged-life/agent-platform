@@ -53,9 +53,13 @@ malformed registry responses and absent evidence fail closed.
 
 Security-titled PRs are excluded from both the Mergify automatic owner
 fast lane and its queue rule even when CI and security checks pass. The
-matching condition is case-insensitive. Review and disposition of security
-findings must precede an explicit manual merge. A draft transition or green
-check alone does not authorize merging security-sensitive changes.
+matching condition is case-insensitive. **In addition**, all owner-authored
+PRs entering the Mergify queue require at least one independent approved review,
+so renaming a security PR cannot bypass review through the generic fast lane.
+This deliberately narrows unattended owner merges; Renovate's separate native
+automerge policy is unchanged. Review and disposition of security findings
+must precede an explicit manual merge. A draft transition or green check alone
+does not authorize merging security-sensitive changes.
 
 ## Limits and escalation
 

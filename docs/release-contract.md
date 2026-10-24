@@ -24,10 +24,26 @@ python3 scripts/platform-release.py install --bundle /tmp/agent-platform.tar --l
 ```
 
 Installation checks the bundle digest, paths, entry types, sizes, source commit,
-and every file hash before atomically installing a versioned directory. Existing
-versions are immutable; installation never changes an active service or symlink.
-Consumers choose a verified version explicitly and retain the previous version
-for rollback.
+and every file hash before atomically installing a versioned directory. On Linux
+and macOS, publication uses an OS-provided atomic **no-replace** rename and fails
+closed if the primitive is unavailable. Existing versions are immutable;
+installation never changes an active service or symlink. Consumers choose a
+verified version explicitly and retain the previous version for rollback.
+
+Install and verify use pinned directory descriptors and rewalk every destination
+ancestor without following symlinks before acceptance. CLI callers retain the
+descriptor captured during destination validation, rather than reopening a
+potentially replaced path. Installation roots must not be group/world writable;
+newly created install directories receive mode 0755 even with a restrictive
+umask, while temporary staging remains private (0700). The release path depth
+is limited to 32 components to bound descriptors during readback. Archives and
+installed files are read with explicit size bounds; directory enumeration
+is incremental. Cleanup failures are reported, including the staging name.
+
+These checks detect many concurrent renames and changes; they do not provide
+an immutable filesystem snapshot or protect against an attacker who can rename
+trusted ancestors using the same privileges as the installer. Consumers must
+control their install roots and filesystem writers independently.
 
 Installation and independent permission readback require POSIX filesystem
 mode semantics (Linux/macOS). Windows installation and verification explicitly

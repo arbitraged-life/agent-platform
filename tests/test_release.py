@@ -229,6 +229,144 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'path traversal'):
                 invoke('install', trusted / '..' / 'outside')
 
+    def test_atomic_publication_refuses_concurrent_target_creation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            destination = root / 'installed'
+            publish = release._rename_no_replace
+            raced = []
+
+            def create_target_before_publish(stage, commit, directory_fd):
+                target = destination / commit
+                target.mkdir()
+                (target / 'sentinel').write_text('must survive')
+                raced.append(True)
+                return publish(stage, commit, directory_fd)
+
+            with patch.object(release, '_rename_no_replace',
+                              side_effect=create_target_before_publish):
+                with self.assertRaises(FileExistsError):
+                    release.install(bundle, lock, destination)
+            self.assertTrue(raced)
+            self.assertEqual((destination / lock['commit'] / 'sentinel').read_text(),
+                             'must survive')
+            self.assertFalse(list(destination.glob('.install-*')))
+
+    def test_cli_rejects_replaced_destination_inode_after_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trusted = root / 'trusted'
+            trusted.mkdir()
+            ancestor = trusted / 'mutable'
+            ancestor.mkdir()
+            (ancestor / 'installed').mkdir()
+            bundle, lock = self.bundle(trusted)
+            lock_path = trusted / 'release.lock.json'
+            lock_path.write_text(json.dumps(lock))
+            argv = ['platform-release.py', 'install', '--bundle', str(bundle),
+                    '--lock', str(lock_path),
+                    '--expected-lock-sha256', release.sha(lock_path.read_bytes()),
+                    '--destination', str(ancestor / 'installed')]
+            original_install = release.install
+            mutated = []
+
+            def replace_after_validation(*args, **kwargs):
+                self.assertIsNotNone(kwargs.get('destination_fd'),
+                                     'CLI must pin the validated destination fd')
+                ancestor.rename(root / 'moved-ancestor')
+                ancestor.mkdir()
+                (ancestor / 'installed').mkdir()
+                mutated.append(True)
+                return original_install(*args, **kwargs)
+
+            with patch.object(sys, 'argv', argv), patch.object(
+                    release, 'install', side_effect=replace_after_validation):
+                with self.assertRaisesRegex(ValueError, 'destination changed'):
+                    release.main()
+            self.assertTrue(mutated)
+            self.assertFalse((ancestor / 'installed' / lock['commit']).exists())
+            self.assertFalse((root / 'moved-ancestor' / 'installed' /
+                              lock['commit']).exists())
+
+    def test_install_detects_ancestor_relocation_before_returning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ancestor = root / 'ancestor'
+            ancestor.mkdir()
+            destination = ancestor / 'installed'
+            bundle, lock = self.bundle(root)
+            publish = release._rename_no_replace
+
+            def relocate_at_publish(stage, commit, directory_fd):
+                ancestor.rename(root / 'relocated-ancestor')
+                ancestor.symlink_to(root / 'relocated-ancestor',
+                                    target_is_directory=True)
+                return publish(stage, commit, directory_fd)
+
+            with patch.object(release, '_rename_no_replace',
+                              side_effect=relocate_at_publish):
+                with self.assertRaises((ValueError, OSError)):
+                    release.install(bundle, lock, destination)
+            self.assertTrue(ancestor.is_symlink())
+            self.assertTrue((root / 'relocated-ancestor' / 'installed').exists())
+
+    @unittest.skipUnless(sys.platform == 'darwin' or hasattr(os, 'O_PATH') or hasattr(os, 'O_SEARCH'),
+                         'Search-only POSIX descriptor support required')
+    def test_search_only_ancestor_allows_valid_install(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ancestor = root / 'search-only'
+            ancestor.mkdir()
+            destination = ancestor / 'installed'
+            destination.mkdir()
+            bundle, lock = self.bundle(root)
+            ancestor.chmod(0o111)
+            try:
+                target = release.install(bundle, lock, destination)
+                self.assertTrue((target / 'runtime/main.mjs').is_file())
+            finally:
+                ancestor.chmod(0o700)
+
+    def test_public_directory_permissions_and_private_staging(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            directory = root / 'installed'
+            original_extract = release._extract_bundle
+            seen_modes = []
+
+            def check_staging(data, fd):
+                seen_modes.append(os.fstat(fd).st_mode & 0o777)
+                return original_extract(data, fd)
+
+            with patch.object(release, '_extract_bundle', side_effect=check_staging):
+                release.install(bundle, lock, directory)
+            self.assertTrue(directory.stat().st_mode & 0o011,
+                            'other accounts must be able to traverse release roots')
+            self.assertEqual(seen_modes, [0o700])
+            directory.chmod(0o777)
+            with self.assertRaisesRegex(ValueError, 'Unsafe writable release'):
+                release.install(bundle, lock, directory)
+
+    def test_staging_cleanup_failure_is_reported_without_masking_cause(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            def fail_extract(*args):
+                raise ValueError('original validation failure')
+
+            with patch.object(release, '_extract_bundle', side_effect=fail_extract):
+                with patch.object(release.shutil, 'rmtree', side_effect=OSError(
+                        'simulated cleanup failure')):
+                    with self.assertRaisesRegex(ValueError, 'original validation failure') as caught:
+                        release.install(bundle, lock, root / 'installed')
+            self.assertTrue(any('cleanup failed' in note for note in caught.exception.__notes__))
+
+    def test_depth_limit_applies_to_bundle_paths(self):
+        with self.assertRaisesRegex(ValueError, 'Unsafe release entry'):
+            release.release_path('/'.join(['nested'] * 33))
+
     def test_python_install_rejects_bundle_alias_that_verify_would_reject(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

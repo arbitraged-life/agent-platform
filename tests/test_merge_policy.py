@@ -93,6 +93,8 @@ class MergePolicyTests(unittest.TestCase):
         self.assertIn("check-success = @mergify/Mergify Merge Protections", queued[0]["conditions"])
         self.assertIn("-author = renovate[bot]", queued[0]["conditions"])
         self.assertIn("-title ~= (?i)security", queued[0]["conditions"])
+        self.assertIn("#approved-reviews-by >= 1", queued[0]["conditions"])
+        # Renaming a security PR does not remove the independent review gate.
         choices = next(c["or"] for c in queued[0]["conditions"] if isinstance(c, dict))
         self.assertEqual(choices, [
             "label = merge-ready",
@@ -102,6 +104,7 @@ class MergePolicyTests(unittest.TestCase):
         for rule in self.mergify["queue_rules"]:
             self.assertIn("-author = renovate[bot]", rule["queue_conditions"])
             self.assertIn("-title ~= (?i)security", rule["queue_conditions"])
+            self.assertIn("#approved-reviews-by >= 1", rule["queue_conditions"])
         for rule in self.mergify["pull_request_rules"]:
             self.assertIn("-author = renovate[bot]", rule["conditions"])
 

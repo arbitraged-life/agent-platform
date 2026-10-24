@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Build reproducible release bundles and install digest-pinned local bundles."""
 import argparse
+import ctypes
+import errno
 import hashlib
 import io
 import json
@@ -10,6 +12,7 @@ import re
 import secrets
 import shutil
 import stat
+import sys
 # qlty-ignore(bandit:B404): Required CLI execution uses argv arrays without a shell.
 import subprocess
 import tarfile
@@ -22,6 +25,7 @@ GIT_EXECUTABLE = shutil.which('git')
 
 MANIFEST_NAME = 'release-manifest.json'
 MAX_RELEASE_BYTES = 64 * 1024 * 1024
+MAX_RELEASE_DEPTH = 32  # Limit retained directory descriptors during verification.
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
@@ -29,7 +33,8 @@ def sha(data):
 
 def release_path(value):
     name = PurePosixPath(value)
-    if not name.parts or name.is_absolute() or PureWindowsPath(value).drive or '..' in name.parts or '\\' in value or ':' in value:
+    if (not name.parts or len(name.parts) > MAX_RELEASE_DEPTH or name.is_absolute() or
+            PureWindowsPath(value).drive or '..' in name.parts or '\\' in value or ':' in value):
         raise ValueError('Unsafe release entry')
     reserved = {'CON', 'PRN', 'AUX', 'NUL', 'CONIN$', 'CONOUT$'}
     reserved.update(prefix + digit for prefix in ('COM', 'LPT') for digit in '123456789¹²³')
@@ -159,7 +164,7 @@ def _extract_bundle(data, temporary_fd):
             _write_release_member(temporary_fd, archive, member)
 
 
-def _open_install_destination(destination):
+def _open_install_destination(destination, *, create=True):
     """Open every path component without following links, creating missing dirs.
 
     The CLI passes a separately validated canonical absolute destination;
@@ -170,22 +175,84 @@ def _open_install_destination(destination):
     path = Path(destination).absolute()
     if '..' in path.parts:
         raise ValueError('Unsafe release installation directory')
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    # Linux O_PATH allows safe traversal through search-only ancestors.
+    # Other POSIX systems use O_SEARCH where exposed, otherwise O_RDONLY.
+    access_flag = getattr(os, 'O_PATH', None)
+    if access_flag is None:
+        # CPython 3.11 does not expose Darwin O_SEARCH, although macOS
+        # defines it as O_EXEC | O_DIRECTORY in <sys/fcntl.h>.
+        access_flag = (getattr(os, 'O_SEARCH', 0x40000000 | os.O_DIRECTORY)
+                       if sys.platform == 'darwin' else getattr(os, 'O_SEARCH', os.O_RDONLY))
+    flags = access_flag | os.O_DIRECTORY | os.O_NOFOLLOW
     directory_fd = os.open(os.path.sep, flags)
     try:
         for component in path.parts[1:]:
-            try:
-                os.mkdir(component, 0o700, dir_fd=directory_fd)
-            except FileExistsError:
-                pass
+            if create:
+                created = False
+                try:
+                    os.mkdir(component, 0o755, dir_fd=directory_fd)
+                    created = True
+                except FileExistsError:
+                    pass
+                if created:
+                    # mkdir honors the process umask (often 077). Ensure
+                    # newly created install roots are traversable by consumers
+                    # without changing permissions of preexisting ancestors.
+                    chmod_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY |
+                                       os.O_NOFOLLOW, dir_fd=directory_fd)
+                    try:
+                        os.fchmod(chmod_fd, 0o755)
+                    finally:
+                        os.close(chmod_fd)
             next_fd = os.open(component, flags, dir_fd=directory_fd)
             os.close(directory_fd)
             directory_fd = next_fd
+        # Release roots must not admit unrelated local writers. POSIX sticky
+        # ancestors (e.g. /tmp) are allowed; the selected root itself is not.
+        mode = os.fstat(directory_fd).st_mode
+        if mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise ValueError('Unsafe writable release installation directory')
         return directory_fd
     except BaseException:
         os.close(directory_fd)
         raise
 
+
+def _assert_destination_unchanged(destination, expected_fd, *, phase='installation'):
+    """Rewalk every ancestor without following links; compare the actual inode."""
+    current_fd = _open_install_destination(destination, create=False)
+    try:
+        expected, current = os.fstat(expected_fd), os.fstat(current_fd)
+        if (expected.st_dev, expected.st_ino) != (current.st_dev, current.st_ino):
+            raise ValueError(f'Release destination changed during {phase}')
+    except OSError as exc:
+        raise ValueError(f'Release destination changed during {phase}') from exc
+    finally:
+        os.close(current_fd)
+
+
+def _rename_no_replace(stage, target, directory_fd):
+    """Atomic exclusive publication on supported macOS and Linux filesystems.
+
+    Never fall back to os.rename: it can overwrite an existing release.
+    """
+    if sys.platform == 'darwin':
+        symbol, flags = 'renameatx_np', 0x4  # <sys/stdio.h> RENAME_EXCL
+    elif sys.platform.startswith('linux'):
+        symbol, flags = 'renameat2', 0x1  # linux/fs.h RENAME_NOREPLACE
+    else:
+        raise RuntimeError('Atomic no-replace release publication is unsupported')
+    libc = ctypes.CDLL(None, use_errno=True)
+    rename = getattr(libc, symbol, None)
+    if rename is None:
+        raise RuntimeError('Atomic no-replace release publication is unavailable')
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(directory_fd, os.fsencode(stage), directory_fd, os.fsencode(target), flags) != 0:
+        code = ctypes.get_errno()
+        if code in (errno.ENOTSUP, errno.ENOSYS, errno.EOPNOTSUPP):
+            raise RuntimeError('Filesystem does not support atomic no-replace publication')
+        raise OSError(code, os.strerror(code), target)
 
 
 def validate_lock(lock):
@@ -231,7 +298,7 @@ def cli_bundle_and_lock(bundle_arg, lock_arg, expected_lock_sha256):
     return expected, lock
 
 
-def cli_release_destination(destination_arg, pinned_bundle):
+def cli_release_destination(destination_arg, pinned_bundle, *, pin_for_install=False):
     """Constrain agent-supplied destination paths to a pinned release directory.
 
     The artifact and lock have already passed independent digest validation.
@@ -244,7 +311,20 @@ def cli_release_destination(destination_arg, pinned_bundle):
     candidate = os.path.realpath(destination_arg)
     if base == os.path.sep or not candidate.startswith(base + os.sep):
         raise ValueError('Release destination must be inside trusted artifact directory')
-    return Path(candidate)
+    destination = Path(candidate)
+    if not pin_for_install:
+        return destination
+    # Capture the validated inode *before* handing control to install().
+    # Never re-open by pathname after an asynchronous agent or hook runs.
+    fd = _open_install_destination(destination)
+    try:
+        if os.path.realpath(destination_arg) != candidate:
+            raise ValueError('Release destination changed during validation')
+        _assert_destination_unchanged(destination, fd)
+        return destination, fd
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def require_posix_installation():
@@ -252,31 +332,82 @@ def require_posix_installation():
         raise RuntimeError('Release installation and permission verification require POSIX filesystems')
 
 
-def install(bundle, lock, destination, *, destination_is_canonical=False):
-    """Install atomically through pinned directory fds, never mutable pathnames.
-
-    For CLI use, the trusted destination was already canonicalized and bounded
-    relative to the independently pinned lock. A Python API caller may pass
-    a filesystem alias but remains responsible for its destination trust.
-    """
-    require_posix_installation()
+def _read_pinned_bundle(bundle, lock):
     validate_lock(lock)
     if bundle.name != lock['artifact']:
         raise ValueError('Release artifact filename mismatch')
-    if bundle.stat().st_size > MAX_RELEASE_BYTES:
+    # A separate stat followed by read_bytes is vulnerable to concurrent
+    # growth; a bounded read cannot allocate beyond the release size cap.
+    with bundle.open('rb') as stream:
+        data = stream.read(MAX_RELEASE_BYTES + 1)
+    if len(data) > MAX_RELEASE_BYTES:
         raise ValueError('Release bundle exceeds size limit')
-    data = bundle.read_bytes()
     if sha(data) != lock['sha256']:
         raise ValueError('Release digest mismatch')
-    # Python calls can resolve common system aliases such as macOS /tmp.
-    # CLI paths have already been validated; do not re-resolve them here.
-    destination = Path(destination) if destination_is_canonical else Path(os.path.realpath(destination))
-    directory_fd = _open_install_destination(destination)
-    opened_destination = os.fstat(directory_fd)
-    temporary_name = '.install-' + secrets.token_hex(12)
-    temporary_fd, renamed = None, False
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    return data
+
+
+def _check_staged_release(data, lock, temporary_fd):
+    names, modes, sizes, manifest_bytes, declared = _expected_release_inventory(data, lock)
+    expected_dirs = {str(parent) for name in names for parent in PurePosixPath(name).parents
+                     if str(parent) != '.'}
+    installed = _scan_installed_release(temporary_fd, expected_dirs, modes, sizes)
+    if set(installed) != names or installed[MANIFEST_NAME] != sha(manifest_bytes):
+        raise ValueError('Release manifest mismatch')
+    if any(installed[name] != digest for name, digest in declared.items()):
+        raise ValueError('Release manifest mismatch')
+
+
+def _publish_staged_release(destination, directory_fd, temporary_fd, temporary_name, commit):
+    staged = os.fstat(temporary_fd)
+    named_stage = os.stat(temporary_name, dir_fd=directory_fd, follow_symlinks=False)
+    if (not stat.S_ISDIR(named_stage.st_mode) or
+            (staged.st_dev, staged.st_ino) !=
+            (named_stage.st_dev, named_stage.st_ino)):
+        raise ValueError('Release staging directory changed during installation')
+    _assert_destination_unchanged(destination, directory_fd)
+    _rename_no_replace(temporary_name, commit, directory_fd)
+    named_target = os.stat(commit, dir_fd=directory_fd, follow_symlinks=False)
+    if (not stat.S_ISDIR(named_target.st_mode) or
+            (staged.st_dev, staged.st_ino) !=
+            (named_target.st_dev, named_target.st_ino)):
+        raise ValueError('Release staging directory changed during installation')
+    _assert_destination_unchanged(destination, directory_fd)
+
+
+def _cleanup_owned_stage(temporary_fd, temporary_name, directory_fd):
+    """Attempt deletion only when the stage name still refers to our inode."""
+    if temporary_fd is None:
+        return None
     try:
+        staged = os.fstat(temporary_fd)
+        named = os.stat(temporary_name, dir_fd=directory_fd, follow_symlinks=False)
+        if (stat.S_ISDIR(named.st_mode) and
+                (staged.st_dev, staged.st_ino) == (named.st_dev, named.st_ino)):
+            shutil.rmtree(temporary_name, dir_fd=directory_fd)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        return exc
+    return None
+
+
+def install(bundle, lock, destination, *, destination_is_canonical=False, destination_fd=None):
+    """Install through trusted directory fds with atomic no-replace publication.
+
+    CLI callers supply a prevalidated and pinned destination descriptor.
+    Python API callers enforce their own trusted destination/lock provenance.
+    """
+    require_posix_installation()
+    data = _read_pinned_bundle(bundle, lock)
+    # Python callers may use macOS system aliases, e.g. /tmp -> /private/tmp.
+    destination = Path(destination) if destination_is_canonical else Path(os.path.realpath(destination))
+    directory_fd = (os.dup(destination_fd) if destination_fd is not None
+                    else _open_install_destination(destination))
+    temporary_name = '.install-' + secrets.token_hex(12)
+    temporary_fd = None
+    try:
+        _assert_destination_unchanged(destination, directory_fd)
         try:
             os.stat(lock['commit'], dir_fd=directory_fd, follow_symlinks=False)
         except FileNotFoundError:
@@ -284,62 +415,40 @@ def install(bundle, lock, destination, *, destination_is_canonical=False):
         else:
             raise ValueError('Immutable install already exists; choose it explicitly or inspect drift')
         os.mkdir(temporary_name, 0o700, dir_fd=directory_fd)
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         temporary_fd = os.open(temporary_name, flags, dir_fd=directory_fd)
         _extract_bundle(data, temporary_fd)
-        names, modes, sizes, manifest_bytes, declared = _expected_release_inventory(data, lock)
-        expected_dirs = {str(parent) for name in names for parent in PurePosixPath(name).parents
-                         if str(parent) != '.'}
-        installed = _scan_installed_release(temporary_fd, expected_dirs, modes, sizes)
-        if set(installed) != names or installed[MANIFEST_NAME] != sha(manifest_bytes):
-            raise ValueError('Release manifest mismatch')
-        if any(installed[name] != digest for name, digest in declared.items()):
-            raise ValueError('Release manifest mismatch')
-        staged = os.fstat(temporary_fd)
-        named_stage = os.stat(temporary_name, dir_fd=directory_fd, follow_symlinks=False)
-        if (not stat.S_ISDIR(named_stage.st_mode) or
-                (staged.st_dev, staged.st_ino) != (named_stage.st_dev, named_stage.st_ino)):
-            raise ValueError('Release staging directory changed during installation')
-        os.rename(temporary_name, lock['commit'], src_dir_fd=directory_fd,
-                  dst_dir_fd=directory_fd)
-        renamed = True
-        named_target = os.stat(lock['commit'], dir_fd=directory_fd, follow_symlinks=False)
-        if (not stat.S_ISDIR(named_target.st_mode) or
-                (staged.st_dev, staged.st_ino) !=
-                (named_target.st_dev, named_target.st_ino)):
-            raise ValueError('Release staging directory changed during installation')
-        current_path = os.stat(destination, follow_symlinks=False)
-        current_fd = os.fstat(directory_fd)
-        if any((getattr(opened_destination, field) != getattr(current, field))
-               for current in (current_path, current_fd) for field in ('st_dev', 'st_ino')):
-            raise ValueError('Release destination changed during installation')
+        _check_staged_release(data, lock, temporary_fd)
+        _publish_staged_release(destination, directory_fd, temporary_fd,
+                                temporary_name, lock['commit'])
     finally:
-        if temporary_fd is not None:
-            if not renamed:
-                # Only clean up our own staging inode. Never traverse or
-                # remove an attacker-swapped entry on an exceptional path.
-                try:
-                    staged = os.fstat(temporary_fd)
-                    named = os.stat(temporary_name, dir_fd=directory_fd,
-                                    follow_symlinks=False)
-                    if (stat.S_ISDIR(named.st_mode) and
-                            (staged.st_dev, staged.st_ino) ==
-                            (named.st_dev, named.st_ino)):
-                        shutil.rmtree(temporary_name, dir_fd=directory_fd)
-                except OSError:
-                    pass
-            os.close(temporary_fd)
-        os.close(directory_fd)
+        original_error = sys.exception()
+        try:
+            cleanup_failure = _cleanup_owned_stage(
+                temporary_fd, temporary_name, directory_fd)
+        finally:
+            if temporary_fd is not None:
+                os.close(temporary_fd)
+            os.close(directory_fd)
+        if cleanup_failure is not None:
+            message = (f'Release staging cleanup failed for {temporary_name}; '
+                       'manual inspection required')
+            if original_error is not None:
+                original_error.add_note(message)
+            else:
+                raise RuntimeError(message) from cleanup_failure
     return destination / lock['commit']
 
 
 
-def _inventory_installed_release(destination, commit, expected_dirs, expected_modes, expected_sizes):
+def _inventory_installed_release(destination, commit, expected_dirs, expected_modes, expected_sizes, *, destination_fd=None):
     """Inventory through pinned directory inodes and reject path replacement."""
     if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
         raise RuntimeError('Release verification requires no-follow POSIX directory APIs')
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
-        destination_fd = os.open(destination, flags)
+        destination_fd = (os.dup(destination_fd) if destination_fd is not None
+                          else _open_install_destination(destination, create=False))
     except OSError as exc:
         raise ValueError('Verified installation directory is unavailable or unsafe') from exc
     try:
@@ -349,17 +458,13 @@ def _inventory_installed_release(destination, commit, expected_dirs, expected_mo
             raise ValueError('Verified installation directory is unavailable or unsafe') from exc
         try:
             release_identity = os.fstat(release_fd)
-            destination_identity = os.fstat(destination_fd)
             installed = _scan_installed_release(release_fd, expected_dirs, expected_modes, expected_sizes)
             current_release = os.stat(commit, dir_fd=destination_fd, follow_symlinks=False)
-            current_destination = os.stat(destination, follow_symlinks=False)
             if (not stat.S_ISDIR(current_release.st_mode) or
                     (current_release.st_dev, current_release.st_ino) !=
-                    (release_identity.st_dev, release_identity.st_ino) or
-                    not stat.S_ISDIR(current_destination.st_mode) or
-                    (current_destination.st_dev, current_destination.st_ino) !=
-                    (destination_identity.st_dev, destination_identity.st_ino)):
+                    (release_identity.st_dev, release_identity.st_ino)):
                 raise ValueError('Installed release directory changed during readback')
+            _assert_destination_unchanged(destination, destination_fd, phase='readback')
             return installed
         except OSError as exc:
             raise ValueError('Installed release has an unsafe or changed path') from exc
@@ -422,6 +527,18 @@ def _read_installed_entry(directory_fd, component, relative, expected_dirs, mode
                                       modes[relative], sizes[relative])
 
 
+def _finish_installed_directory(frame):
+    _, directory_fd, parent_fd, name, initial, entries = frame
+    if not _unchanged_inode(initial, os.fstat(directory_fd)):
+        raise ValueError('Installed release directory changed during readback')
+    if parent_fd is not None:
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if not _unchanged_inode(initial, current):
+            raise ValueError('Installed release directory changed during readback')
+    entries.close()
+    os.close(directory_fd)
+
+
 def _scan_installed_release(root_fd, expected_dirs, expected_modes, expected_sizes):
     """Hold parent dirfds until descendants and their directory entries are rechecked.
 
@@ -431,25 +548,24 @@ def _scan_installed_release(root_fd, expected_dirs, expected_modes, expected_siz
     installed, seen, stack = {}, 0, []
     root_copy = os.dup(root_fd)
     try:
-        stack.append(('', root_copy, None, None,
-                      os.fstat(root_copy), iter(os.listdir(root_copy))))
+        root_entries = os.scandir(root_copy)
+    except BaseException:
+        os.close(root_copy)
+        raise
+    stack.append(('', root_copy, None, None, os.fstat(root_copy), root_entries))
+    try:
         while stack:
             prefix, directory_fd, parent_fd, name, initial, entries = stack[-1]
             try:
-                component = next(entries)
+                component = next(entries).name
             except StopIteration:
-                if not _unchanged_inode(initial, os.fstat(directory_fd)):
-                    raise ValueError('Installed release directory changed during readback')
-                if parent_fd is not None:
-                    current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-                    if not _unchanged_inode(initial, current):
-                        raise ValueError('Installed release directory changed during readback')
-                os.close(directory_fd)
+                _finish_installed_directory(stack[-1])
                 stack.pop()
                 continue
             seen += 1
-            if seen > 10000:
-                raise ValueError('Too many installed release entries')
+            # Archive count excludes the implicit parent directories.
+            if seen > len(expected_modes) + len(expected_dirs):
+                raise ValueError('Too many installed release entries (inventory mismatch)')
             relative = prefix + component
             child_fd, digest_value = _read_installed_entry(
                 directory_fd, component, relative,
@@ -457,7 +573,7 @@ def _scan_installed_release(root_fd, expected_dirs, expected_modes, expected_siz
             if child_fd is not None:
                 try:
                     stack.append((relative + '/', child_fd, directory_fd,
-                                  component, os.fstat(child_fd), iter(os.listdir(child_fd))))
+                                  component, os.fstat(child_fd), os.scandir(child_fd)))
                 except BaseException:
                     os.close(child_fd)
                     raise
@@ -466,7 +582,8 @@ def _scan_installed_release(root_fd, expected_dirs, expected_modes, expected_siz
     except OSError as exc:
         raise ValueError('Installed release has an unsafe or changed path') from exc
     finally:
-        for _, unused_fd, _, _, _, _ in stack:
+        for _, unused_fd, _, _, _, entries in stack:
+            entries.close()
             os.close(unused_fd)
     return installed
 
@@ -513,7 +630,7 @@ def _expected_release_inventory(data, lock):
     return names, modes, file_sizes, manifest_bytes, declared
 
 
-def verify_installation(bundle, lock, destination):
+def verify_installation(bundle, lock, destination, *, destination_fd=None):
     """Check installed bytes against the caller-supplied lock and artifact.
 
     This cannot authenticate a Python caller's choice of lock: the caller must
@@ -521,19 +638,17 @@ def verify_installation(bundle, lock, destination):
     or runtime acceptance or that contents remain immutable after readback.
     """
     require_posix_installation()
-    validate_lock(lock)
-    if bundle.name != lock['artifact'] or bundle.stat().st_size > MAX_RELEASE_BYTES:
-        raise ValueError('Release artifact name/size mismatch')
-    data = bundle.read_bytes()
-    if sha(data) != lock['sha256']:
-        raise ValueError('Release digest mismatch')
+    data = _read_pinned_bundle(bundle, lock)
+    destination = (Path(destination) if destination_fd is not None
+                   else Path(os.path.realpath(destination)))
     names, expected_modes, expected_sizes, manifest_bytes, declared = _expected_release_inventory(data, lock)
 
     target = destination / lock['commit']
     expected_dirs = {str(parent) for name in names for parent in PurePosixPath(name).parents
                      if str(parent) != '.'}
     installed = _inventory_installed_release(
-        destination, lock['commit'], expected_dirs, expected_modes, expected_sizes)
+        destination, lock['commit'], expected_dirs, expected_modes, expected_sizes,
+        destination_fd=destination_fd)
     if set(installed) != names or installed[MANIFEST_NAME] != sha(manifest_bytes):
         raise ValueError('Installed release file inventory/manifest mismatch')
     if any(installed[name] != expected for name, expected in declared.items()):
@@ -572,11 +687,17 @@ def main():
         print(json.dumps(build(args.root, args.output), indent=2))
     elif args.command in {'install', 'verify'}:
         pinned_bundle, pinned_lock = cli_bundle_and_lock(args.bundle, args.lock, args.expected_lock_sha256)
-        destination = cli_release_destination(args.destination, pinned_bundle)
-        if args.command == 'install':
-            print(install(pinned_bundle, pinned_lock, destination, destination_is_canonical=True))
-        else:
-            print(json.dumps(verify_installation(pinned_bundle, pinned_lock, destination), indent=2))
+        destination, fd = cli_release_destination(
+            args.destination, pinned_bundle, pin_for_install=True)
+        try:
+            if args.command == 'install':
+                print(install(pinned_bundle, pinned_lock, destination,
+                              destination_is_canonical=True, destination_fd=fd))
+            else:
+                print(json.dumps(verify_installation(
+                    pinned_bundle, pinned_lock, destination, destination_fd=fd), indent=2))
+        finally:
+            os.close(fd)
 
 
 if __name__ == '__main__':
