@@ -101,6 +101,8 @@ class AdvisoryTests(unittest.TestCase):
             report = json.loads(self.report())
             variants = [
                 {key: value for key, value in report.items() if key != 'vulnerabilities'},
+                *({**report, 'metadata': {'vulnerabilities': bad_counts}}
+                  for bad_counts in (None, [], 'zero', 0, True)),
                 {**report, 'vulnerabilities': {'undici': None}},
                 {**report, 'vulnerabilities': {'undici': {}}},
                 {**report, 'vulnerabilities': {'undici': {'severity': 'mystery'}}},

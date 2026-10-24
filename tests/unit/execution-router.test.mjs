@@ -46,7 +46,7 @@ test('mocked surface capability and authorization outcomes do not bypass denied 
   const cases=[
     {label:'native available; local not reachable',facts:{native_available:true,local_available:false},route:'chatgpt-native'},
     {label:'native lacks operation; local available',facts:{native_available:false,local_available:true},route:'chatgpt-local'},
-    {label:'agent lifecycle reason but no local executor',facts:{native_available:true,local_available:false,delegate_reason:'local-harness',delegate_detail:'local build'},route:'chatgpt-native'},
+    {label:'local-harness reason but no local executor',facts:{native_available:true,local_available:false,delegate_reason:'local-harness',delegate_detail:'local build'},route:'chatgpt-native'},
     {label:'remote action denied while local fallback is healthy',facts:{native_available:true,local_available:true,authority_blocked:true,delegate_reason:'local-harness',delegate_detail:'different client'},route:'needs-user'},
     {label:'capabilities unavailable and action denied',facts:{native_available:false,local_available:false,authority_blocked:true},route:'needs-user'},
     {label:'unsupported delegation reason does not grant agent access',facts:{native_available:true,local_available:true,delegate_reason:'more-power',delegate_detail:'override'},route:'chatgpt-native'},

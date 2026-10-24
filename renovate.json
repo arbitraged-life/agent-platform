@@ -249,7 +249,7 @@
       "dependencyDashboardApproval": true
     },
     {
-      "description": "Security patch runtime versions are reviewed and CI-gated; do not wait for ordinary weekly updates",
+      "description": "Node/Python patch runtime updates use a CI-gated fast lane and stay review-only",
       "matchDatasources": [
         "node-version",
         "python-version"

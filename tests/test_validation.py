@@ -69,7 +69,8 @@ class BoundaryTests(unittest.TestCase):
                         names.index('Upload test results to Mergify Test Insights'))
         for step in steps:
             if step.get('uses', '').startswith(('actions/checkout@', 'actions/setup-node@')):
-                self.assertIn("github.event_name == 'schedule'", step['if'])
+                self.assertEqual(step['if'],
+                                 "github.event_name == 'schedule' || steps.uploader.outputs.available == 'true'")
 
     def test_validator_dispatches_advisory_gate_only_for_ci_and_security(self):
         for command in ['ci', 'security', 'lint', 'test']:
