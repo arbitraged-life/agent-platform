@@ -198,6 +198,66 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Invalid release artifact name'):
                 release.validate_lock({**lock, 'artifact': '..\\unsafe.tar'})
 
+    def test_release_readback_rejects_installed_symlinked_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            target = release.install(bundle, lock, root / 'installed')
+            outside = root / 'untrusted'
+            outside.mkdir()
+            (outside / 'main.mjs').write_text('untrusted')
+            (target / 'runtime').rename(root / 'original-runtime')
+            (target / 'runtime').symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'symbolic link'):
+                release.verify_installation(bundle, lock, root / 'installed')
+
+    def test_release_readback_rejects_parent_symlink_swapped_during_open(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            target = release.install(bundle, lock, root / 'installed')
+            outside = root / 'untrusted'
+            outside.mkdir()
+            (outside / 'main.mjs').write_text('untrusted')
+            original_open = release.os.open
+            swapped = False
+
+            def swapping_open(path, flags, *args, **kwargs):
+                nonlocal swapped
+                if not swapped and path == 'runtime' and kwargs.get('dir_fd') is not None:
+                    swapped = True
+                    (target / 'runtime').rename(root / 'original-runtime')
+                    (target / 'runtime').symlink_to(outside, target_is_directory=True)
+                return original_open(path, flags, *args, **kwargs)
+
+            with patch.object(release.os, 'open', side_effect=swapping_open):
+                with self.assertRaisesRegex(ValueError, 'unsafe or changed path'):
+                    release.verify_installation(bundle, lock, root / 'installed')
+            self.assertTrue(swapped, 'the test must hit the nested-directory fd open')
+
+    def test_release_readback_rejects_target_symlink_swapped_during_open(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            target = release.install(bundle, lock, root / 'installed')
+            outside = root / 'untrusted'
+            outside.mkdir()
+            original_open = release.os.open
+            swapped = False
+
+            def swapping_open(path, flags, *args, **kwargs):
+                nonlocal swapped
+                if not swapped and path == lock['commit'] and kwargs.get('dir_fd') is not None:
+                    swapped = True
+                    target.rename(root / 'original-installation')
+                    target.symlink_to(outside, target_is_directory=True)
+                return original_open(path, flags, *args, **kwargs)
+
+            with patch.object(release.os, 'open', side_effect=swapping_open):
+                with self.assertRaisesRegex(ValueError, 'directory is unavailable or unsafe'):
+                    release.verify_installation(bundle, lock, root / 'installed')
+            self.assertTrue(swapped, 'the test must hit the anchored target-dir open')
+
     def test_release_readback_refuses_permission_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
