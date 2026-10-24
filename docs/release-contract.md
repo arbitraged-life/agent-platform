@@ -20,7 +20,7 @@ system `/tmp` symlinks) are accepted only after the lock content pin matches.
 ```sh
 # EXPECTED_LOCK_SHA256 must be copied from independently reviewed and pinned
 # consumer configuration; do not calculate it from an untrusted lock at runtime.
-python3 scripts/platform-release.py install --bundle /tmp/agent-platform.tar --lock /tmp/agent-platform.lock.json --expected-lock-sha256 "$EXPECTED_LOCK_SHA256" --destination /tmp/platform-installations
+python3 scripts/platform-release.py install --bundle /tmp/agent-platform.tar --lock /tmp/agent-platform.lock.json --expected-lock-sha256 "$EXPECTED_LOCK_SHA256" --destination /tmp/platform-installations --directory-mode 0755
 ```
 
 Installation checks the bundle digest, paths, entry types, sizes, source commit,
@@ -34,8 +34,10 @@ Install and verify use pinned directory descriptors and rewalk every destination
 ancestor without following symlinks before acceptance. CLI callers retain the
 descriptor captured during destination validation, rather than reopening a
 potentially replaced path. Installation roots must not be group/world writable;
-newly created install directories receive mode 0755 even with a restrictive
-umask, while temporary staging remains private (0700). The release path depth
+new install roots use a caller-selected mode: 0700 by default, or 0750 or
+0755 for cross-account consumers, under a restrictive umask; temporary staging
+remains private (0700) through validation, then adopts the selected consumer
+mode immediately before atomic publication. The release path depth
 is limited to 32 components to bound descriptors during readback. Archives and
 installed files are read with explicit size bounds; directory enumeration
 is incremental. Cleanup failures are reported, including the staging name.

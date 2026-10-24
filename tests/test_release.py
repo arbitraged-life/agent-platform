@@ -341,13 +341,58 @@ class ReleaseTests(unittest.TestCase):
                 return original_extract(data, fd)
 
             with patch.object(release, '_extract_bundle', side_effect=check_staging):
-                release.install(bundle, lock, directory)
+                release.install(bundle, lock, directory, directory_mode=0o755)
             self.assertTrue(directory.stat().st_mode & 0o011,
                             'other accounts must be able to traverse release roots')
             self.assertEqual(seen_modes, [0o700])
+            published = directory / lock['commit']
+            self.assertEqual(published.stat().st_mode & 0o777, 0o755)
             directory.chmod(0o777)
             with self.assertRaisesRegex(ValueError, 'Unsafe writable release'):
                 release.install(bundle, lock, directory)
+
+    def test_directory_mode_defaults_private_and_rejects_unsafe_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            published = release.install(bundle, lock, root / 'private-install')
+            self.assertEqual((root / 'private-install').stat().st_mode & 0o777, 0o700)
+            self.assertEqual(published.stat().st_mode & 0o777, 0o700)
+            for unsafe in (0o777, 0o766, 0, True, None):
+                with self.subTest(mode=unsafe), self.assertRaisesRegex(
+                        ValueError, 'Unsupported release directory mode'):
+                    release.install(bundle, lock, root / 'unsafe-install',
+                                    directory_mode=unsafe)
+
+    def test_restrictive_umask_does_not_block_new_directory_creation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            old_umask = os.umask(0o777)
+            try:
+                published = release.install(bundle, lock,
+                                            root / 'subdir/installed',
+                                            directory_mode=0o755)
+            finally:
+                os.umask(old_umask)
+            self.assertEqual(published.stat().st_mode & 0o777, 0o755)
+            self.assertEqual((root / 'subdir').stat().st_mode & 0o777, 0o755)
+
+    def test_missing_cli_verification_destination_is_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            pin_file = root / 'release.lock.json'
+            pin_file.write_text(json.dumps(lock))
+            missing = root / 'missing-destination'
+            argv = ['platform-release.py', 'verify', '--bundle', str(bundle),
+                    '--lock', str(pin_file),
+                    '--expected-lock-sha256', release.sha(pin_file.read_bytes()),
+                    '--destination', str(missing)]
+            with patch.object(sys, 'argv', argv), patch.object(sys, 'stdout', io.StringIO()):
+                with self.assertRaises(OSError):
+                    release.main()
+            self.assertFalse(missing.exists())
 
     def test_staging_cleanup_failure_is_reported_without_masking_cause(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -364,8 +409,9 @@ class ReleaseTests(unittest.TestCase):
             self.assertTrue(any('cleanup failed' in note for note in caught.exception.__notes__))
 
     def test_depth_limit_applies_to_bundle_paths(self):
+        too_deep = '/'.join(['nested'] * 33)
         with self.assertRaisesRegex(ValueError, 'Unsafe release entry'):
-            release.release_path('/'.join(['nested'] * 33))
+            release.release_path(too_deep)
 
     def test_python_install_rejects_bundle_alias_that_verify_would_reject(self):
         with tempfile.TemporaryDirectory() as tmp:

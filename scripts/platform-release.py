@@ -26,6 +26,8 @@ GIT_EXECUTABLE = shutil.which('git')
 MANIFEST_NAME = 'release-manifest.json'
 MAX_RELEASE_BYTES = 64 * 1024 * 1024
 MAX_RELEASE_DEPTH = 32  # Limit retained directory descriptors during verification.
+INSTALL_DIRECTORY_MODES = {0o700, 0o750, 0o755}  # No group/world-write modes.
+READBACK_DIRECTORY_CHANGED = 'Installed release directory changed during readback'
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
@@ -129,10 +131,9 @@ def _write_release_member(root_fd, archive, member):
     parent_fd = os.dup(root_fd)
     try:
         for component in components[:-1]:
-            try:
-                os.mkdir(component, 0o755, dir_fd=parent_fd)
-            except FileExistsError:
-                pass
+            # The staging root remains private. Nested release directories
+            # use canonical permissions regardless of the caller's umask.
+            _create_install_component(parent_fd, component, 0o755)
             child_fd = os.open(component, flags, dir_fd=parent_fd)
             os.close(parent_fd)
             parent_fd = child_fd
@@ -164,7 +165,26 @@ def _extract_bundle(data, temporary_fd):
             _write_release_member(temporary_fd, archive, member)
 
 
-def _open_install_destination(destination, *, create=True):
+def _create_install_component(parent_fd, component, directory_mode):
+    try:
+        os.mkdir(component, directory_mode, dir_fd=parent_fd)
+    except FileExistsError:
+        return
+    # Restore the selected mode even when an inherited umask is 0777.
+    # chmod with dir_fd and nofollow needs no read access on the new inode.
+    # The trusted parent must be protected from independently privileged writers.
+    created = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
+    if not stat.S_ISDIR(created.st_mode):
+        raise ValueError('New release installation entry is not a directory')
+    os.chmod(component, directory_mode, dir_fd=parent_fd,
+             follow_symlinks=False)
+    current = os.stat(component, dir_fd=parent_fd, follow_symlinks=False)
+    if ((created.st_dev, created.st_ino) != (current.st_dev, current.st_ino) or
+            stat.S_IMODE(current.st_mode) != directory_mode):
+        raise ValueError('New release installation directory changed during mode normalization')
+
+
+def _open_install_destination(destination, *, create=True, directory_mode=0o700):
     """Open every path component without following links, creating missing dirs.
 
     The CLI passes a separately validated canonical absolute destination;
@@ -172,6 +192,8 @@ def _open_install_destination(destination, *, create=True):
     """
     if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
         raise RuntimeError('Safe installation requires no-follow POSIX directory APIs')
+    if type(directory_mode) is not int or directory_mode not in INSTALL_DIRECTORY_MODES:
+        raise ValueError('Unsupported release directory mode')
     path = Path(destination).absolute()
     if '..' in path.parts:
         raise ValueError('Unsafe release installation directory')
@@ -188,22 +210,7 @@ def _open_install_destination(destination, *, create=True):
     try:
         for component in path.parts[1:]:
             if create:
-                created = False
-                try:
-                    os.mkdir(component, 0o755, dir_fd=directory_fd)
-                    created = True
-                except FileExistsError:
-                    pass
-                if created:
-                    # mkdir honors the process umask (often 077). Ensure
-                    # newly created install roots are traversable by consumers
-                    # without changing permissions of preexisting ancestors.
-                    chmod_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY |
-                                       os.O_NOFOLLOW, dir_fd=directory_fd)
-                    try:
-                        os.fchmod(chmod_fd, 0o755)
-                    finally:
-                        os.close(chmod_fd)
+                _create_install_component(directory_fd, component, directory_mode)
             next_fd = os.open(component, flags, dir_fd=directory_fd)
             os.close(directory_fd)
             directory_fd = next_fd
@@ -298,7 +305,7 @@ def cli_bundle_and_lock(bundle_arg, lock_arg, expected_lock_sha256):
     return expected, lock
 
 
-def cli_release_destination(destination_arg, pinned_bundle, *, pin_for_install=False):
+def cli_release_destination(destination_arg, pinned_bundle, *, pin_for_install=False, directory_mode=0o700, create=True):
     """Constrain agent-supplied destination paths to a pinned release directory.
 
     The artifact and lock have already passed independent digest validation.
@@ -316,7 +323,7 @@ def cli_release_destination(destination_arg, pinned_bundle, *, pin_for_install=F
         return destination
     # Capture the validated inode *before* handing control to install().
     # Never re-open by pathname after an asynchronous agent or hook runs.
-    fd = _open_install_destination(destination)
+    fd = _open_install_destination(destination, create=create, directory_mode=directory_mode)
     try:
         if os.path.realpath(destination_arg) != candidate:
             raise ValueError('Release destination changed during validation')
@@ -358,7 +365,7 @@ def _check_staged_release(data, lock, temporary_fd):
         raise ValueError('Release manifest mismatch')
 
 
-def _publish_staged_release(destination, directory_fd, temporary_fd, temporary_name, commit):
+def _publish_staged_release(destination, directory_fd, temporary_fd, temporary_name, commit, directory_mode):
     staged = os.fstat(temporary_fd)
     named_stage = os.stat(temporary_name, dir_fd=directory_fd, follow_symlinks=False)
     if (not stat.S_ISDIR(named_stage.st_mode) or
@@ -366,6 +373,9 @@ def _publish_staged_release(destination, directory_fd, temporary_fd, temporary_n
             (named_stage.st_dev, named_stage.st_ino)):
         raise ValueError('Release staging directory changed during installation')
     _assert_destination_unchanged(destination, directory_fd)
+    # Keep staging private through archive validation; apply the explicit
+    # consumer directory mode only immediately before atomic publication.
+    os.fchmod(temporary_fd, directory_mode)
     _rename_no_replace(temporary_name, commit, directory_fd)
     named_target = os.stat(commit, dir_fd=directory_fd, follow_symlinks=False)
     if (not stat.S_ISDIR(named_target.st_mode) or
@@ -392,7 +402,7 @@ def _cleanup_owned_stage(temporary_fd, temporary_name, directory_fd):
     return None
 
 
-def install(bundle, lock, destination, *, destination_is_canonical=False, destination_fd=None):
+def install(bundle, lock, destination, *, destination_is_canonical=False, destination_fd=None, directory_mode=0o700):
     """Install through trusted directory fds with atomic no-replace publication.
 
     CLI callers supply a prevalidated and pinned destination descriptor.
@@ -403,7 +413,7 @@ def install(bundle, lock, destination, *, destination_is_canonical=False, destin
     # Python callers may use macOS system aliases, e.g. /tmp -> /private/tmp.
     destination = Path(destination) if destination_is_canonical else Path(os.path.realpath(destination))
     directory_fd = (os.dup(destination_fd) if destination_fd is not None
-                    else _open_install_destination(destination))
+                    else _open_install_destination(destination, directory_mode=directory_mode))
     temporary_name = '.install-' + secrets.token_hex(12)
     temporary_fd = None
     try:
@@ -415,12 +425,16 @@ def install(bundle, lock, destination, *, destination_is_canonical=False, destin
         else:
             raise ValueError('Immutable install already exists; choose it explicitly or inspect drift')
         os.mkdir(temporary_name, 0o700, dir_fd=directory_fd)
+        # A caller can inherit an umask of 0777; recover private access by
+        # dirfd-relative no-follow chmod without exposing staged data.
+        os.chmod(temporary_name, 0o700, dir_fd=directory_fd,
+                 follow_symlinks=False)
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
         temporary_fd = os.open(temporary_name, flags, dir_fd=directory_fd)
         _extract_bundle(data, temporary_fd)
         _check_staged_release(data, lock, temporary_fd)
         _publish_staged_release(destination, directory_fd, temporary_fd,
-                                temporary_name, lock['commit'])
+                                temporary_name, lock['commit'], directory_mode)
     finally:
         original_error = sys.exception()
         try:
@@ -463,7 +477,7 @@ def _inventory_installed_release(destination, commit, expected_dirs, expected_mo
             if (not stat.S_ISDIR(current_release.st_mode) or
                     (current_release.st_dev, current_release.st_ino) !=
                     (release_identity.st_dev, release_identity.st_ino)):
-                raise ValueError('Installed release directory changed during readback')
+                raise ValueError(READBACK_DIRECTORY_CHANGED)
             _assert_destination_unchanged(destination, destination_fd, phase='readback')
             return installed
         except OSError as exc:
@@ -530,11 +544,11 @@ def _read_installed_entry(directory_fd, component, relative, expected_dirs, mode
 def _finish_installed_directory(frame):
     _, directory_fd, parent_fd, name, initial, entries = frame
     if not _unchanged_inode(initial, os.fstat(directory_fd)):
-        raise ValueError('Installed release directory changed during readback')
+        raise ValueError(READBACK_DIRECTORY_CHANGED)
     if parent_fd is not None:
         current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
         if not _unchanged_inode(initial, current):
-            raise ValueError('Installed release directory changed during readback')
+            raise ValueError(READBACK_DIRECTORY_CHANGED)
     entries.close()
     os.close(directory_fd)
 
@@ -555,7 +569,7 @@ def _scan_installed_release(root_fd, expected_dirs, expected_modes, expected_siz
     stack.append(('', root_copy, None, None, os.fstat(root_copy), root_entries))
     try:
         while stack:
-            prefix, directory_fd, parent_fd, name, initial, entries = stack[-1]
+            prefix, directory_fd, _, _, _, entries = stack[-1]
             try:
                 component = next(entries).name
             except StopIteration:
@@ -677,6 +691,8 @@ def main():
     installer.add_argument('--lock', type=Path, required=True)
     installer.add_argument('--expected-lock-sha256', required=True)
     installer.add_argument('--destination', type=Path, required=True)
+    installer.add_argument('--directory-mode', type=lambda raw: int(raw, 8),
+                           default=0o700, help='Mode for NEW install directories: 0700, 0750, 0755')
     verifier = sub.add_parser('verify')
     verifier.add_argument('--bundle', type=Path, required=True)
     verifier.add_argument('--lock', type=Path, required=True)
@@ -687,12 +703,15 @@ def main():
         print(json.dumps(build(args.root, args.output), indent=2))
     elif args.command in {'install', 'verify'}:
         pinned_bundle, pinned_lock = cli_bundle_and_lock(args.bundle, args.lock, args.expected_lock_sha256)
+        directory_mode = args.directory_mode if args.command == 'install' else 0o700
         destination, fd = cli_release_destination(
-            args.destination, pinned_bundle, pin_for_install=True)
+            args.destination, pinned_bundle, pin_for_install=True,
+            directory_mode=directory_mode, create=args.command == 'install')
         try:
             if args.command == 'install':
                 print(install(pinned_bundle, pinned_lock, destination,
-                              destination_is_canonical=True, destination_fd=fd))
+                              destination_is_canonical=True, destination_fd=fd,
+                              directory_mode=directory_mode))
             else:
                 print(json.dumps(verify_installation(
                     pinned_bundle, pinned_lock, destination, destination_fd=fd), indent=2))
