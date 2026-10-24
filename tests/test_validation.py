@@ -72,9 +72,15 @@ class BoundaryTests(unittest.TestCase):
         self.assertEqual(policy['vulnerabilityAlerts']['prCreation'], 'immediate')
         rules = [rule for rule in policy['packageRules'] if
                  set(rule.get('matchDatasources', [])) == {'node-version','python-version'}]
-        self.assertEqual(len(rules), 1)
-        self.assertFalse(rules[0]['automerge'])
-        self.assertEqual(rules[0]['matchUpdateTypes'], ['patch'])
+        # Preserve the main branch's general review-only runtime rule while
+        # allowing one stricter immediate security patch rule later in order.
+        self.assertEqual(len(rules), 2)
+        self.assertTrue(all(rule['automerge'] is False for rule in rules))
+        self.assertTrue(all(rule['dependencyDashboardApproval'] is True for rule in rules))
+        patches = [rule for rule in rules if rule.get('matchUpdateTypes') == ['patch']]
+        self.assertEqual(len(patches), 1)
+        self.assertEqual(patches[0]['schedule'], [])
+        self.assertIn('security-toolchain', patches[0]['addLabels'])
 
     def test_environment_variants_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
