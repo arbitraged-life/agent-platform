@@ -1,5 +1,6 @@
 """Public dependency merge ownership and eligibility contract."""
 import json
+import re
 from pathlib import Path
 import unittest
 import yaml
@@ -29,23 +30,73 @@ class MergePolicyTests(unittest.TestCase):
         self.assertTrue(any(r.get("matchUpdateTypes") == ["major"] and r.get("automerge") is False for r in rules))
         self.assertNotIn("automerge", self.policy["vulnerabilityAlerts"])
 
+    def test_npm_release_age_is_timestamp_required_and_fail_closed(self):
+        rules = self.policy["packageRules"]
+        cooldown = next(r for r in rules if r.get("matchDatasources") == ["npm"])
+        self.assertEqual(cooldown["minimumReleaseAge"], "14 days")
+        self.assertEqual(cooldown["minimumReleaseAgeBehaviour"], "timestamp-required")
+        self.assertEqual(cooldown["internalChecksFilter"], "strict")
+        self.assertIn("security:minimumReleaseAgePypi", self.policy["extends"])
+
+    def test_high_risk_rules_take_precedence_over_general_automerge(self):
+        rules = self.policy["packageRules"]
+        start = next(i for i, r in enumerate(rules) if r.get("minimumReleaseAge") == "14 days")
+        self.assertGreater(start, max(i for i, r in enumerate(rules) if r.get("automerge") is True))
+        restricted = rules[start:]
+        self.assertEqual(len(restricted), 8)
+        for rule in restricted[1:]:
+            self.assertIs(rule["automerge"], False)
+            self.assertIs(rule["dependencyDashboardApproval"], True)
+        self.assertEqual(restricted[1]["matchDatasources"], ["npm"])
+        self.assertEqual(set(restricted[1]["matchUpdateTypes"]),
+                         {"pin", "pinDigest", "digest", "lockFileMaintenance"})
+        self.assertIsNone(restricted[1]["minimumReleaseAge"])
+        managers = set(restricted[2]["matchManagers"])
+        self.assertTrue({"github-actions", "terraform", "circleci", "dockerfile",
+                         "docker-compose", "custom.regex"}.issubset(managers))
+        paths = restricted[3]["matchFileNames"]
+        self.assertTrue({"infra/**", ".github/workflows/**", ".circleci/**"}.issubset(paths))
+        self.assertEqual(restricted[4]["matchDatasources"], ["node-version", "python-version"])
+        packages = restricted[5]["matchPackageNames"]
+        self.assertTrue({"@modelcontextprotocol/**", "@cloudflare/**", "wrangler",
+                         "miniflare", "@google-cloud/**", "@azure/**", "jose",
+                         "cryptography", "google-auth", "mcp"}.issubset(packages))
+        self.assertEqual(restricted[6]["matchUpdateTypes"], ["lockFileMaintenance"])
+        self.assertIs(restricted[6]["automerge"], False)
+        self.assertIsNone(restricted[6]["minimumReleaseAge"])
+        self.assertEqual(set(restricted[7]["matchUpdateTypes"]),
+                         {"lockfileUpdate", "rollback", "bump", "replacement"})
+        self.assertIs(restricted[7]["automerge"], False)
+        self.assertIsNone(restricted[7]["minimumReleaseAge"])
+        self.assertTrue(self.policy["platformAutomerge"])
+        self.assertFalse(self.policy["ignoreTests"])
+
     def test_mergify_does_not_queue_or_housekeep_renovate(self):
         self.assertEqual(self.mergify["merge_protections_settings"]["auto_merge_conditions"], [
-            "-author = renovate[bot]",
             {"or": [
-                "label = merge-ready",
+                "author = renovate[bot]",  # required check can pass; queue rules still exclude bot
+                "label = merge-ready",  # explicit selection for old/external PRs
                 {"and": ["author = arbitraged-life", "-from-fork", "number > 87"]},
             ]},
         ])
-        # Historical PRs remain intentionally outside the new unconditional path.
-        # Green checks must not independently authorize external/forked contributions.
-        self.assertTrue(any("label = merge-ready" in branch if isinstance(branch, str)
-                            else False
-                            for branch in self.mergify["merge_protections_settings"]["auto_merge_conditions"][1]["or"]))
+        # Historical PRs remain intentionally outside the unconditional owner path.
+        # Passing status is not permission to auto-queue Renovate/other contributors.
         for rule in self.mergify["queue_rules"]:
             self.assertIn("-author = renovate[bot]", rule["queue_conditions"])
         for rule in self.mergify["pull_request_rules"]:
             self.assertIn("-author = renovate[bot]", rule["conditions"])
+
+    def test_actionlint_compatibility_is_one_exact_runner_label(self):
+        config = yaml.safe_load((ROOT / ".github/actionlint.yaml").read_text())
+        ignores = config["paths"][".github/workflows/**/*.{yml,yaml}"]["ignore"]
+        self.assertEqual(len(ignores), 1)
+        regex = ignores[0]
+        self.assertIsNotNone(re.search(regex, 'label "ubuntu-26.04" is unknown. available labels are ...'))
+        for other in ('label "ubuntu-26.04-arm" is unknown.',
+                      'label "ubuntu-26.05" is unknown.',
+                      'job has unpinned uses reference',
+                      'label "ubuntu-26.04" conflicts with other label'):
+            self.assertIsNone(re.search(regex, other))
 
     def test_existing_required_security_and_ci_results_remain(self):
         gate = next(r for r in self.mergify["merge_protections"] if r["name"] == "main branch validation")
