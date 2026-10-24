@@ -45,6 +45,9 @@ mode immediately before atomic publication. The release path depth
 is limited to 32 components to bound descriptors during readback. Archives and
 installed files are read with explicit size bounds; directory enumeration
 is incremental. Cleanup failures are reported, including the staging name.
+If staging fails before a directory descriptor can be opened, cleanup is
+intentionally deferred for manual inspection: a pathname-only inode snapshot
+cannot make recursive deletion safe against replacement races.
 
 These checks detect many concurrent renames and changes; they do not provide
 an immutable filesystem snapshot or protect against an attacker who can rename

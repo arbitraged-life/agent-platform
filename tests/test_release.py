@@ -409,7 +409,7 @@ class ReleaseTests(unittest.TestCase):
                 os.close(fd)
             self.assertEqual(list(destination.iterdir()), [])
 
-    def test_failed_staging_chmod_cleans_up_own_directory(self):
+    def test_failed_staging_chmod_reports_manual_cleanup_without_deleting(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             bundle, lock = self.bundle(root)
@@ -424,10 +424,18 @@ class ReleaseTests(unittest.TestCase):
 
             with patch.object(release.os, 'chmod',
                               side_effect=fail_first_staging_chmod):
-                with self.assertRaisesRegex(OSError, 'injected staging chmod failure'):
+                with self.assertRaisesRegex(
+                        OSError, 'injected staging chmod failure') as caught:
                     release.install(bundle, lock, root / 'installed')
             self.assertTrue(injected)
-            self.assertEqual(list((root / 'installed').iterdir()), [])
+            stages = list((root / 'installed').glob('.install-*'))
+            self.assertEqual(len(stages), 1)
+            self.assertTrue(any('manual inspection required' in note and
+                                stages[0].name in note
+                                for note in caught.exception.__notes__))
+            # The caller, not the installer, owns explicit cleanup of a stage
+            # that never had a securely opened descriptor.
+            shutil.rmtree(stages[0])
 
     def test_staging_cleanup_failure_is_reported_without_masking_cause(self):
         with tempfile.TemporaryDirectory() as tmp:

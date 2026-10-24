@@ -390,19 +390,19 @@ def _publish_staged_release(destination, directory_fd, temporary_fd, temporary_n
 
 
 def _cleanup_owned_stage(temporary_fd, temporary_name, directory_fd, staged_identity=None):
-    """Remove only the unchanged staging inode, even if its initial open failed."""
-    if temporary_fd is None and staged_identity is None:
-        return None
+    """Delete staging only when an open descriptor pins the target inode."""
+    if temporary_fd is None:
+        if staged_identity is None:
+            return None
+        # A pathname-only inode snapshot is insufficient to safely recurse
+        # through a concurrently replaced directory. Fail closed, report the
+        # abandoned stage name and require explicit out-of-band cleanup.
+        return RuntimeError('Staging directory was never safely opened')
     try:
-        staged = os.fstat(temporary_fd) if temporary_fd is not None else staged_identity
+        staged = os.fstat(temporary_fd)
         named = os.stat(temporary_name, dir_fd=directory_fd, follow_symlinks=False)
         if (stat.S_ISDIR(named.st_mode) and
                 (staged.st_dev, staged.st_ino) == (named.st_dev, named.st_ino)):
-            if temporary_fd is None:
-                # mkdir succeeded but an umask/permission step failed before
-                # opening the stage. Restore private access for safe cleanup.
-                os.chmod(temporary_name, 0o700, dir_fd=directory_fd,
-                         follow_symlinks=False)
             shutil.rmtree(temporary_name, dir_fd=directory_fd)
     except FileNotFoundError:
         pass
