@@ -90,6 +90,11 @@ still must pass the normal required Mergify status. Existing Renovate PRs do
 not enter a competing Mergify queue. Conflict and stale-PR housekeeping also
 exclude Renovate.
 
+The temporary `.github/actionlint.yaml` suppresses only the stale diagnostic
+`label "ubuntu-26.04" is unknown.` for workflow files. This hosted image is
+supported by GitHub; it does **not** suppress other actionlint checks. Remove
+the compatibility expression after actionlint's bundled label set is updated.
+
 ## CI-green automatic queueing
 
 `.mergify.yml` retains an explicit `merge-ready` route for PRs opened before
