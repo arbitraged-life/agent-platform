@@ -42,6 +42,18 @@ test('route CLI refuses string flags instead of granting a false capability',asy
  await writeFile(facts,JSON.stringify({native_available:'false',local_available:true}));
  await assert.rejects(()=>exec(process.execPath,[cli,'route','--facts',facts]),/native_available must be boolean/);
 });
+test('mocked surface capability and authorization outcomes do not bypass denied actions',()=>{
+  const cases=[
+    {label:'native available; local not reachable',facts:{native_available:true,local_available:false},route:'chatgpt-native'},
+    {label:'native lacks operation; local available',facts:{native_available:false,local_available:true},route:'chatgpt-local'},
+    {label:'agent lifecycle reason but no local executor',facts:{native_available:true,local_available:false,delegate_reason:'local-harness',delegate_detail:'local build'},route:'chatgpt-native'},
+    {label:'remote action denied while local fallback is healthy',facts:{native_available:true,local_available:true,authority_blocked:true,delegate_reason:'local-harness',delegate_detail:'different client'},route:'needs-user'},
+    {label:'capabilities unavailable and action denied',facts:{native_available:false,local_available:false,authority_blocked:true},route:'needs-user'},
+    {label:'unsupported delegation reason does not grant agent access',facts:{native_available:true,local_available:true,delegate_reason:'more-power',delegate_detail:'override'},route:'chatgpt-native'},
+  ];
+  for(const {label,facts,route} of cases)assert.equal(routeTask(facts).route,route,label);
+});
+
 test('unknown future projects keep write authorization required',()=>assert.throws(()=>validateTask(packet('/tmp/repo',{project:'NEW',actions:['edit']})),/write authorization/));
 test('SEARCH research cannot silently mutate source',()=>assert.throws(()=>validateTask(packet('/tmp/repo',{project:'SEARCH',actions:['edit']})),/write authorization/));
 test('explicit SEARCH action may be scoped',()=>assert.equal(validateTask(packet('/tmp/repo',{project:'SEARCH',actions:['edit'],source_write_authorized:true})).project,'SEARCH'));

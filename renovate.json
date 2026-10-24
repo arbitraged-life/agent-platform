@@ -247,6 +247,22 @@
       "minimumReleaseAge": null,
       "automerge": false,
       "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Security patch runtime versions are reviewed and CI-gated; do not wait for ordinary weekly updates",
+      "matchDatasources": [
+        "node-version",
+        "python-version"
+      ],
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "schedule": [],
+      "automerge": false,
+      "addLabels": [
+        "security-toolchain"
+      ],
+      "dependencyDashboardApproval": true
     }
   ],
   "customManagers": [
@@ -293,7 +309,9 @@
     "prConcurrentLimit": 10,
     "addLabels": [
       "security"
-    ]
+    ],
+    "schedule": [],
+    "prCreation": "immediate"
   },
   "labels": [
     "dependencies"

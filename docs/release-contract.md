@@ -11,17 +11,32 @@ and a manifest of file hashes. Repeated builds of a commit produce identical
 bytes. The lock contains schema_version, commit, sha256, and artifact filename.
 The consuming repository stores this lock and obtains the named release asset
 from a trusted distribution channel.
+The CLI requires a separately trusted SHA-256 pin of the **lock file itself**;
+a lock and bundle chosen together by an untrusted agent are not an authenticated
+release. An independently reviewed consuming repository or an approved release
+manifest must supply that digest. Canonicalized parent-path aliases (including
+system `/tmp` symlinks) are accepted only after the lock content pin matches.
 
 ```sh
-python3 scripts/platform-release.py install --bundle /tmp/agent-platform.tar --lock /tmp/agent-platform.lock.json --destination /tmp/platform-installations
+# EXPECTED_LOCK_SHA256 must be copied from independently reviewed and pinned
+# consumer configuration; do not calculate it from an untrusted lock at runtime.
+python3 scripts/platform-release.py install --bundle /tmp/agent-platform.tar --lock /tmp/agent-platform.lock.json --expected-lock-sha256 "$EXPECTED_LOCK_SHA256" --destination /tmp/platform-installations
 ```
 
 Installation checks the bundle digest, paths, entry types, sizes, source commit,
 and every file hash before atomically installing a versioned directory. Existing
 versions are immutable; installation never changes an active service or symlink.
 Consumers choose a verified version explicitly and retain the previous version
-for rollback. Bootstrap the installer from an independently pinned source commit;
-never execute an installer extracted from an unverified download.
+for rollback.
+
+Install and independent permission readback require POSIX filesystem mode
+semantics (Linux/macOS); Windows installation and verification explicitly fail
+rather than misrepresenting POSIX executable permissions. Installed files are
+checked for exact expected size, complete permission bits, and streamed SHA-256
+hashes before any `installed-bytes-verified` result is issued.
+
+Bootstrap the installer from an independently pinned source commit; never
+execute an installer extracted from an unverified download.
 
 Reusable workflows are consumed at a full commit SHA. Account-specific triggers,
 reviewer policies, destinations, allowlists, and secret references remain in the
@@ -30,3 +45,32 @@ consumer. No environment-specific configuration is shipped inside the bundle.
 Build and install share a 64 MiB size ceiling and 10,000-entry ceiling. Oversized builds fail before returning a release lock or replacing an existing artifact. Paths containing colons are rejected during installation for cross-platform extraction safety.
 
 Builds stream committed Git archive entries, enforce entry and expanded-byte bounds before reading each body, and terminate the archive producer on rejection. Published bundle files use mode 0644; executable entry permissions come from committed Git modes.
+
+## Independent installed-byte acceptance
+
+After a consumer explicitly installs a pinned release, verify the original
+trusted artifact and the installed content independently:
+
+```sh
+python3 scripts/platform-release.py verify --bundle /tmp/agent-platform.tar --lock /tmp/agent-platform.lock.json --expected-lock-sha256 "$EXPECTED_LOCK_SHA256" --destination /tmp/platform-installations
+```
+
+This read-only command validates the lock and artifact digest, archive manifest,
+installed file inventory and hashes, and reports a source commit, release digest
+and `installed-bytes-verified` state.
+The command-line `install` and `verify` entry points require the bundle and
+trusted lock to be co-located, with the exact lock-declared artifact basename.
+Their `--destination` must resolve to a subdirectory of that independently
+pinned artifact directory. This bounds agent-supplied CLI paths and rejects
+traversal and symlink redirection outside the chosen release staging root.
+For a different install root, place the pinned artifact and lock in a trusted
+staging directory within that root before invoking the CLI.
+They reject symlinks and `..` components to prevent a compromised tool caller
+from redirecting a release-artifact read outside the intended lock directory.
+Python API callers retain responsibility for enforcing their own trusted
+bundle directory before calling `install` or `verify_installation` directly. It fails closed on missing, modified,
+additional, symlinked or otherwise unsupported installed files.
+
+**No deployment or runtime acceptance is inferred.** The consumer must separately
+prove that the verified version was selected, deployed, and actually exercised
+under its intended permissions. Do not auto-upgrade a consumer on this evidence.

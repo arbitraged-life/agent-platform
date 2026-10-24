@@ -3,6 +3,7 @@ from importlib.util import spec_from_loader, module_from_spec
 from pathlib import Path
 # qlty-ignore(bandit:B404): Git fixture operations use argv without a shell.
 import subprocess
+import sys
 import shutil
 import tempfile
 import unittest
@@ -51,6 +52,59 @@ class BoundaryTests(unittest.TestCase):
                             'jobs: {test: {steps: [{uses: null}]}}', 'jobs: [bad]', 'invalid: [']:
                 file.write_text(content)
                 self.assertTrue(validation.boundaries([file], root))
+
+    def test_scheduled_advisory_gate_runs_without_optional_test_insights_credential(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = validation.yaml.safe_load((root / '.github/workflows/test-insights.yml').read_text())
+        steps = workflow['jobs']['node-tests']['steps']
+        audit = next(step for step in steps if step.get('name') == 'Check current dependency advisories (existing scheduled run)')
+        self.assertEqual(audit['if'], "github.event_name == 'schedule'")
+        self.assertEqual(audit['run'], 'python3 scripts/audit_dependencies.py')
+        names = [step.get('name') for step in steps]
+        # Registry outages must not prevent the independent test run or JUnit
+        # receipt; the scheduled advisory still fails the workflow afterward.
+        self.assertLess(names.index('Run Node tests with JUnit'),
+                        names.index('Check current dependency advisories (existing scheduled run)'))
+        self.assertLess(names.index('Check current dependency advisories (existing scheduled run)'),
+                        names.index('Upload test results to Mergify Test Insights'))
+        for step in steps:
+            if step.get('uses', '').startswith(('actions/checkout@', 'actions/setup-node@')):
+                self.assertIn("github.event_name == 'schedule'", step['if'])
+
+    def test_validator_dispatches_advisory_gate_only_for_ci_and_security(self):
+        for command in ['ci', 'security', 'lint', 'test']:
+            with self.subTest(command=command):
+                with patch.object(sys, 'argv', ['validate', command]), \
+                     patch.object(validation, 'source_files', return_value=[]), \
+                     patch.object(validation, 'lint_sources'), \
+                     patch.object(validation.subprocess, 'run') as mock_run:
+                    validation.main()
+                audit = [call for call in mock_run.call_args_list if
+                         any('scripts/audit_dependencies.py' in str(part)
+                             for part in call.args[0])]
+                self.assertEqual(len(audit), 1 if command in {'ci', 'security'} else 0)
+                if audit:
+                    self.assertIs(audit[0].kwargs['check'], True)
+                    self.assertEqual(audit[0].kwargs['cwd'], validation.ROOT)
+
+    def test_renovate_remediates_security_prs_without_expanding_merge_permissions(self):
+        root = Path(__file__).resolve().parents[1]
+        import json
+        policy = json.loads((root / 'renovate.json').read_text())
+        self.assertTrue(policy['vulnerabilityAlerts']['enabled'])
+        self.assertEqual(policy['vulnerabilityAlerts']['schedule'], [])
+        self.assertEqual(policy['vulnerabilityAlerts']['prCreation'], 'immediate')
+        rules = [rule for rule in policy['packageRules'] if
+                 set(rule.get('matchDatasources', [])) == {'node-version','python-version'}]
+        # Preserve the main branch's general review-only runtime rule while
+        # allowing one stricter immediate security patch rule later in order.
+        self.assertEqual(len(rules), 2)
+        self.assertTrue(all(rule['automerge'] is False for rule in rules))
+        self.assertTrue(all(rule['dependencyDashboardApproval'] is True for rule in rules))
+        patches = [rule for rule in rules if rule.get('matchUpdateTypes') == ['patch']]
+        self.assertEqual(len(patches), 1)
+        self.assertEqual(patches[0]['schedule'], [])
+        self.assertIn('security-toolchain', patches[0]['addLabels'])
 
     def test_environment_variants_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

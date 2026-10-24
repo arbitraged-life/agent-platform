@@ -8,6 +8,7 @@ import { evidenceRecord, stableEvidenceId, validateEvidence } from "../../runtim
 import { createOpikExporter } from "../../runtime/observability/opik.mjs";
 import { createPosthogExporter, posthogOperationalRecord } from "../../runtime/observability/posthog.mjs";
 import { createDurableExporter } from "../../runtime/observability/outbox.mjs";
+import { deliveryRecord, validateDeliveryRecord } from "../../runtime/observability/delivery.mjs";
 const timing = { startedMs: 1700000000000, endedMs: 1700000001500 };
 const traceId = createUuidV7(timing.startedMs);
 const base = {
@@ -39,6 +40,24 @@ async function directory(t) {
 function result(event, receipt = accepted) {
   return { event_id: event.event_id, destinations: { opik: receipt, posthog: accepted } };
 }
+
+test("delivery destination schema accepts any key order but rejects missing or extra routes", () => {
+  const event = turnEvent({ runtime: "fixture", runId: "run", ...timing });
+  const timestamp = new Date(timing.endedMs).toISOString();
+  const record = deliveryRecord(event, {
+    observed_at: timestamp,
+    recorded_at: timestamp,
+    destinations: { opik: accepted, posthog: accepted },
+  });
+  const swapped = { ...record, destinations: { posthog: record.destinations.posthog, opik: record.destinations.opik } };
+  assert.equal(validateDeliveryRecord(swapped), swapped);
+  const missing = { ...record, destinations: { opik: record.destinations.opik } };
+  const extra = { ...record, destinations: { ...record.destinations, unused: record.destinations.opik } };
+  assert.throws(() => validateDeliveryRecord(missing), /destinations/);
+  assert.throws(() => validateDeliveryRecord(extra), /destinations/);
+  const array = Object.assign([], record.destinations);
+  assert.throws(() => validateDeliveryRecord({ ...record, destinations: array }), /destinations/);
+});
 
 test("operation evidence rejects unknown fields and never infers effect verification", () => {
   const record = evidenceRecord({

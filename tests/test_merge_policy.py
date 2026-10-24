@@ -43,7 +43,7 @@ class MergePolicyTests(unittest.TestCase):
         start = next(i for i, r in enumerate(rules) if r.get("minimumReleaseAge") == "14 days")
         self.assertGreater(start, max(i for i, r in enumerate(rules) if r.get("automerge") is True))
         restricted = rules[start:]
-        self.assertEqual(len(restricted), 8)
+        self.assertEqual(len(restricted), 9)
         for rule in restricted[1:]:
             self.assertIs(rule["automerge"], False)
             self.assertIs(rule["dependencyDashboardApproval"], True)
@@ -68,19 +68,33 @@ class MergePolicyTests(unittest.TestCase):
                          {"lockfileUpdate", "rollback", "bump", "replacement"})
         self.assertIs(restricted[7]["automerge"], False)
         self.assertIsNone(restricted[7]["minimumReleaseAge"])
+        security_patch = restricted[8]
+        self.assertEqual(security_patch["matchDatasources"], ["node-version", "python-version"])
+        self.assertEqual(security_patch["matchUpdateTypes"], ["patch"])
+        self.assertEqual(security_patch["schedule"], [])
+        self.assertIs(security_patch["automerge"], False)
+        self.assertIs(security_patch["dependencyDashboardApproval"], True)
+        self.assertIn("security-toolchain", security_patch["addLabels"])
+        self.assertEqual(self.policy["vulnerabilityAlerts"]["schedule"], [])
+        self.assertEqual(self.policy["vulnerabilityAlerts"]["prCreation"], "immediate")
         self.assertTrue(self.policy["platformAutomerge"])
         self.assertFalse(self.policy["ignoreTests"])
 
     def test_mergify_does_not_queue_or_housekeep_renovate(self):
-        self.assertEqual(self.mergify["merge_protections_settings"]["auto_merge_conditions"], [
-            {"or": [
-                "author = renovate[bot]",  # required check can pass; queue rules still exclude bot
-                "label = merge-ready",  # explicit selection for old/external PRs
-                {"and": ["author = arbitraged-life", "-from-fork", "number > 87"]},
-            ]},
+        # auto_merge_conditions triggers autoqueue, not just a required check.
+        # A required Mergify status can evaluate Renovate without queueing it.
+        self.assertNotIn("auto_merge_conditions", self.mergify["merge_protections_settings"])
+        queued = [r for r in self.mergify["pull_request_rules"] if "queue" in r["actions"]]
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0]["actions"]["queue"]["name"], "default")
+        self.assertIn("check-success = @mergify/Mergify Merge Protections", queued[0]["conditions"])
+        self.assertIn("-author = renovate[bot]", queued[0]["conditions"])
+        choices = next(c["or"] for c in queued[0]["conditions"] if isinstance(c, dict))
+        self.assertEqual(choices, [
+            "label = merge-ready",
+            {"and": ["author = arbitraged-life", "-from-fork", "number > 87"]},
         ])
-        # Historical PRs remain intentionally outside the unconditional owner path.
-        # Passing status is not permission to auto-queue Renovate/other contributors.
+        # No PR is queued merely to satisfy its required Mergify check.
         for rule in self.mergify["queue_rules"]:
             self.assertIn("-author = renovate[bot]", rule["queue_conditions"])
         for rule in self.mergify["pull_request_rules"]:

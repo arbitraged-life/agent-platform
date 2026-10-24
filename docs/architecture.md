@@ -41,3 +41,66 @@ a release does not activate a service or change a consumer's configuration.
 
 See the [release contract](release-contract.md) for the exact artifact checks and
 the [execution router](execution-router.md) for one reusable runtime interface.
+
+## Security trust boundaries
+
+The generated [runtime import map](generated/runtime-map.md) shows source
+dependencies, not security guarantees. These behavioral boundaries are
+reviewed separately; private authorization and deployed runtime state remain
+owned by each consuming repository.
+
+```mermaid
+flowchart TB
+    subgraph UNTRUSTED["Untrusted inputs — no inherited authority"]
+        PR["PR source, diffs, review comments"]
+        SK["Third-party skill/reference content"]
+    end
+    subgraph PUBLIC["agent-platform — reusable validation"]
+        Review["review engine + feedback validation"]
+        Sandbox["bounded remediation executor + offline verifier"]
+        Router["execution-router: approved packet + workspace fingerprint"]
+        Release["immutable source archive + SHA-256 release verifier"]
+        Observability["schema-restricted telemetry events"]
+    end
+    subgraph PRIVATE["Consumer-owned identities and permissions"]
+        Policy["Trusted policy, allowlists, approval and release lock"]
+        Agent["Authorized local agent sandbox / container"]
+        Publisher["GitHub App / PR publisher + exact-head checks"]
+        Destination["Selected installed version and provider endpoints"]
+    end
+    PR -->|bounded parsed evidence| Review
+    PR -->|read-only archive| Sandbox
+    SK -.->|untrusted reference only| Policy
+    Policy -->|capability and task-specific authorization| Router
+    Router -->|bounded approved execution| Agent
+    Sandbox -->|verified changes, never raw reviewer commands| Publisher
+    Review -->|advisory output, not approval| Publisher
+    Policy -->|trusted release pin| Release
+    Release -->|digest + installed-byte readback| Destination
+    Agent -->|metadata-only event| Observability
+    Observability -->|authorized exporter| Destination
+    Policy -->|credential scope, branch and check policy| Publisher
+```
+
+Boundaries not implied by this diagram:
+
+- The structured-review **job is not credential-isolated**: it declares
+  `pull-requests: write`, and its context/model-running steps receive a
+  `REVIEW_GITHUB_TOKEN` from the publisher secret or GitHub job token. The
+  untrusted candidate is checked out but not executed, and the model prompt
+  must not contain credentials; nevertheless the controlling review process
+  retains write-capable API access. Do not describe this as a credential-free
+  sandbox. Deterministic source/head checks and separately verified publication
+  conditions remain necessary; AI output itself never approves or merges a PR.
+- The execution router binds approval to a specific executable, worktree and
+  source snapshot. A workspace profile is not full OS-level read confinement;
+  host sandbox, MCP permissions, outbound model traffic and authorizations
+  remain independent.
+- A release lock authenticates a known bundle only when its source/digest is
+  trusted. `platform-release.py verify` checks bundle and installed bytes but
+  does not select an active runtime or establish deployed behavior.
+- The telemetry contract accepts structured event metadata, not raw prompts,
+  tool arguments, local file paths or credentials. Downstream exporter
+  authorization and confirmation of ingestion remain separate.
+- Source and generated architecture changes never enable an MCP server,
+  modify consumer policies, grant a token, bypass a CI gate or deploy a service.
