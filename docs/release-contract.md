@@ -60,6 +60,11 @@ installed file inventory and hashes, and reports a source commit, release digest
 and `installed-bytes-verified` state.
 The command-line `install` and `verify` entry points require the bundle and
 trusted lock to be co-located, with the exact lock-declared artifact basename.
+Their `--destination` must resolve to a subdirectory of that independently
+pinned artifact directory. This bounds agent-supplied CLI paths and rejects
+traversal and symlink redirection outside the chosen release staging root.
+For a different install root, place the pinned artifact and lock in a trusted
+staging directory within that root before invoking the CLI.
 They reject symlinks and `..` components to prevent a compromised tool caller
 from redirecting a release-artifact read outside the intended lock directory.
 Python API callers retain responsibility for enforcing their own trusted

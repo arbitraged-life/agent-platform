@@ -182,6 +182,22 @@ def cli_bundle_and_lock(bundle_arg, lock_arg, expected_lock_sha256):
     return expected, lock
 
 
+def cli_release_destination(destination_arg, pinned_bundle):
+    """Constrain agent-supplied destination paths to a pinned release directory.
+
+    The artifact and lock have already passed independent digest validation.
+    Resolve parent symlinks and reject any location outside that trusted directory.
+    Direct Python callers must enforce their own installation-directory policy.
+    """
+    if '..' in destination_arg.parts:
+        raise ValueError('Unsafe release destination path traversal')
+    base = os.path.realpath(pinned_bundle.parent)
+    candidate = os.path.realpath(destination_arg)
+    if base == os.path.sep or not candidate.startswith(base + os.sep):
+        raise ValueError('Release destination must be inside trusted artifact directory')
+    return Path(candidate)
+
+
 def require_posix_installation():
     if os.name != 'posix':
         raise RuntimeError('Release installation and permission verification require POSIX filesystems')
@@ -417,10 +433,11 @@ def main():
         print(json.dumps(build(args.root, args.output), indent=2))
     elif args.command in {'install', 'verify'}:
         pinned_bundle, pinned_lock = cli_bundle_and_lock(args.bundle, args.lock, args.expected_lock_sha256)
+        destination = cli_release_destination(args.destination, pinned_bundle)
         if args.command == 'install':
-            print(install(pinned_bundle, pinned_lock, args.destination))
+            print(install(pinned_bundle, pinned_lock, destination))
         else:
-            print(json.dumps(verify_installation(pinned_bundle, pinned_lock, args.destination), indent=2))
+            print(json.dumps(verify_installation(pinned_bundle, pinned_lock, destination), indent=2))
 
 
 if __name__ == '__main__':

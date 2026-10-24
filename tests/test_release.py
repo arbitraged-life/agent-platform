@@ -198,6 +198,37 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Invalid release artifact name'):
                 release.validate_lock({**lock, 'artifact': '..\\unsafe.tar'})
 
+    def test_cli_rejects_destinations_outside_pinned_lock_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trusted = Path(tmp) / 'trusted'
+            trusted.mkdir()
+            bundle, lock = self.bundle(trusted)
+            lock_path = trusted / 'release.lock.json'
+            lock_path.write_text(json.dumps(lock))
+            pin = release.sha(lock_path.read_bytes())
+            outside = Path(tmp) / 'outside'
+            outside.mkdir()
+
+            def invoke(command, destination):
+                argv = ['platform-release.py', command, '--bundle', str(bundle),
+                        '--lock', str(lock_path), '--expected-lock-sha256', pin,
+                        '--destination', str(destination)]
+                with patch.object(sys, 'argv', argv), patch.object(sys, 'stdout', io.StringIO()):
+                    release.main()
+
+            for command in ('install', 'verify'):
+                with self.subTest(command=command), self.assertRaisesRegex(
+                        ValueError, 'inside trusted artifact directory'):
+                    invoke(command, outside)
+            self.assertEqual(list(outside.iterdir()), [])
+
+            alias = trusted / 'redirect'
+            alias.symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'inside trusted artifact directory'):
+                invoke('verify', alias)
+            with self.assertRaisesRegex(ValueError, 'path traversal'):
+                invoke('install', trusted / '..' / 'outside')
+
     def test_release_readback_rejects_installed_symlinked_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
