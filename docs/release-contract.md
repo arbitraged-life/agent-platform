@@ -56,8 +56,13 @@ python3 scripts/platform-release.py verify --bundle /tmp/agent-platform.tar --lo
 This read-only command validates the lock and artifact digest, archive manifest,
 installed file inventory and hashes, and reports a source commit, release digest
 and `installed-bytes-verified` state. Verification checks exact installed file
-sizes, all permission bits, and streamed SHA-256 hashes before issuing that
-receipt.
+sizes, all permission bits, and bounded SHA-256 reads before issuing that
+receipt. The Python API verifies byte consistency against a **caller-supplied**
+lock; it cannot independently authenticate that lock's origin. The receipt's
+`lock_origin_authenticated` is explicitly unknown. CLI users must independently
+pin the lock digest and Python callers must enforce an equivalent source of
+trust. Verification is a point-in-time readback, not a guarantee against
+concurrent or subsequent changes by another process.
 The command-line `install` and `verify` entry points require the bundle and
 trusted lock to be co-located, with the exact lock-declared artifact basename.
 Their `--destination` must resolve to a subdirectory of that independently

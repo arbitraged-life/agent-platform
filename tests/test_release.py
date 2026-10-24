@@ -229,6 +229,152 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'path traversal'):
                 invoke('install', trusted / '..' / 'outside')
 
+    def test_python_install_rejects_bundle_alias_that_verify_would_reject(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            alias = root / 'otherwise-valid-alias.tar'
+            shutil.copy2(bundle, alias)
+            with self.assertRaisesRegex(ValueError, 'artifact filename mismatch'):
+                release.install(alias, lock, root / 'installed')
+
+    def test_receipt_discloses_unknown_python_lock_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            release.install(bundle, lock, root / 'installed')
+            self.assertIsNone(release.verify_installation(bundle, lock, root / 'installed')
+                              ['lock_origin_authenticated'])
+
+    def test_readback_rejects_growing_file_after_initial_size_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            target = release.install(bundle, lock, root / 'installed')
+            candidate = target / 'runtime/main.mjs'
+            inode = candidate.stat().st_ino
+            original_fstat = release.os.fstat
+            grew = False
+
+            def grow_after_size_check(fd):
+                nonlocal grew
+                current = original_fstat(fd)
+                if current.st_ino == inode and not grew:
+                    grew = True
+                    with candidate.open('ab') as stream:
+                        stream.write(b'x' * 4096)
+                return current
+
+            with patch.object(release.os, 'fstat', side_effect=grow_after_size_check):
+                with self.assertRaisesRegex(ValueError, 'size changed during readback'):
+                    release.verify_installation(bundle, lock, root / 'installed')
+            self.assertTrue(grew, 'the test must grow the file after its first size check')
+
+    def test_readback_rejects_nested_file_replacement_after_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            target = release.install(bundle, lock, root / 'installed')
+            candidate = target / 'runtime/main.mjs'
+            original_read = release._read_installed_file
+            swapped = False
+
+            def replace_after_hash(directory_fd, component, expected_mode, expected_size):
+                nonlocal swapped
+                digest = original_read(directory_fd, component, expected_mode, expected_size)
+                if component == 'main.mjs' and not swapped:
+                    swapped = True
+                    candidate.rename(root / 'old-main.mjs')
+                    candidate.write_bytes((root / 'old-main.mjs').read_bytes())
+                return digest
+
+            with patch.object(release, '_read_installed_file', side_effect=replace_after_hash):
+                with self.assertRaisesRegex(ValueError, 'directory changed during readback'):
+                    release.verify_installation(bundle, lock, root / 'installed')
+            self.assertTrue(swapped)
+
+    def test_readback_rejects_nested_directory_replacement_after_open(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            target = release.install(bundle, lock, root / 'installed')
+            nested = target / 'runtime'
+            original_entry = release._read_installed_entry
+            swapped = False
+
+            def replace_after_open(*args):
+                nonlocal swapped
+                fd, digest = original_entry(*args)
+                if args[1] == 'runtime' and not swapped:
+                    swapped = True
+                    nested.rename(root / 'old-runtime')
+                    shutil.copytree(root / 'old-runtime', nested)
+                return fd, digest
+
+            with patch.object(release, '_read_installed_entry', side_effect=replace_after_open):
+                with self.assertRaisesRegex(ValueError, 'directory changed during readback'):
+                    release.verify_installation(bundle, lock, root / 'installed')
+            self.assertTrue(swapped)
+
+    def test_cli_install_rejects_parent_symlink_swap_after_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trusted = root / 'trusted'
+            trusted.mkdir()
+            stage = trusted / 'staging'
+            stage.mkdir()
+            outside = root / 'outside'
+            outside.mkdir()
+            bundle, lock = self.bundle(trusted)
+            lock_path = trusted / 'release.lock.json'
+            lock_path.write_text(json.dumps(lock))
+            argv = ['platform-release.py', 'install', '--bundle', str(bundle),
+                    '--lock', str(lock_path),
+                    '--expected-lock-sha256', release.sha(lock_path.read_bytes()),
+                    '--destination', str(stage / 'installed')]
+            original_install = release.install
+            swapped = False
+
+            def install_after_symlink_swap(*args, **kwargs):
+                nonlocal swapped
+                swapped = True
+                stage.rename(root / 'old-staging')
+                stage.symlink_to(outside, target_is_directory=True)
+                return original_install(*args, **kwargs)
+
+            with patch.object(sys, 'argv', argv), patch.object(release, 'install',
+                side_effect=install_after_symlink_swap):
+                with self.assertRaises(OSError):
+                    release.main()
+            self.assertTrue(swapped)
+            self.assertEqual(list(outside.iterdir()), [])
+
+    def test_install_rejects_staging_directory_swap_before_atomic_rename(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            dest = root / 'installed'
+            outside = root / 'outside'
+            outside.mkdir()
+            original_extract = release._extract_bundle
+            swapped = False
+
+            def swap_staging_after_extract(data, directory_fd):
+                nonlocal swapped
+                original_extract(data, directory_fd)
+                temporary = next(dest.glob('.install-*'))
+                temporary.rename(root / 'retired-staging')
+                temporary.symlink_to(outside, target_is_directory=True)
+                swapped = True
+
+            with patch.object(release, '_extract_bundle',
+                              side_effect=swap_staging_after_extract):
+                with self.assertRaisesRegex(ValueError, 'staging directory changed'):
+                    release.install(bundle, lock, dest)
+            self.assertTrue(swapped)
+            self.assertEqual(list(outside.iterdir()), [])
+            self.assertFalse((dest / lock['commit']).exists())
+
     def test_release_readback_rejects_installed_symlinked_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

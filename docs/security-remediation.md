@@ -49,6 +49,14 @@ override when Miniflare's normal dependency graph uses a patched version.
 The audit explicitly includes devDependencies under `NODE_ENV=production`;
 malformed registry responses and absent evidence fail closed.
 
+## Manual security merge boundary
+
+Security-titled PRs are excluded from both the Mergify automatic owner
+fast lane and its queue rule even when CI and security checks pass. The
+matching condition is case-insensitive. Review and disposition of security
+findings must precede an explicit manual merge. A draft transition or green
+check alone does not authorize merging security-sensitive changes.
+
 ## Limits and escalation
 
 The npm helper audits only the two declared npm lockfiles. It is **not** an

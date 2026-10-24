@@ -89,6 +89,7 @@ class MergePolicyTests(unittest.TestCase):
         self.assertEqual(queued[0]["actions"]["queue"]["name"], "default")
         self.assertIn("check-success = @mergify/Mergify Merge Protections", queued[0]["conditions"])
         self.assertIn("-author = renovate[bot]", queued[0]["conditions"])
+        self.assertIn("-title ~= (?i)security", queued[0]["conditions"])
         choices = next(c["or"] for c in queued[0]["conditions"] if isinstance(c, dict))
         self.assertEqual(choices, [
             "label = merge-ready",
@@ -97,6 +98,7 @@ class MergePolicyTests(unittest.TestCase):
         # No PR is queued merely to satisfy its required Mergify check.
         for rule in self.mergify["queue_rules"]:
             self.assertIn("-author = renovate[bot]", rule["queue_conditions"])
+            self.assertIn("-title ~= (?i)security", rule["queue_conditions"])
         for rule in self.mergify["pull_request_rules"]:
             self.assertIn("-author = renovate[bot]", rule["conditions"])
 
