@@ -84,6 +84,9 @@ class MergePolicyTests(unittest.TestCase):
         # auto_merge_conditions triggers autoqueue, not just a required check.
         # A required Mergify status can evaluate Renovate without queueing it.
         self.assertNotIn("auto_merge_conditions", self.mergify["merge_protections_settings"])
+        # Security PRs cannot enter the queue, so no unreachable high-priority
+        # security queue rule should suggest otherwise.
+        self.assertNotIn("priority_rules", self.mergify)
         queued = [r for r in self.mergify["pull_request_rules"] if "queue" in r["actions"]]
         self.assertEqual(len(queued), 1)
         self.assertEqual(queued[0]["actions"]["queue"]["name"], "default")

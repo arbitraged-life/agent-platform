@@ -49,12 +49,6 @@ queue_rules:
       - check-success = @github-actions/secrets
       - check-success = qlty check
 
-priority_rules:
-  - name: security fixes first
-    conditions:
-      - title ~= \[security\]
-    priority: high
-
 pull_request_rules:
   - name: queue reviewed non-Renovate PRs after required checks
     conditions:
