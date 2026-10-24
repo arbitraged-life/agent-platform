@@ -19,9 +19,11 @@ and a JSON record with type `benchmark-grade-all`, total, passed, and per-task
 results. Exit status is nonzero if any task fails. Keep this record with the
 model/configuration revision when comparing changes.
 
-`./scripts/validate` runs the regression suite without credentials or network
-access. The rate-limit oracle uses a simulated clock. Fixtures require Node
-24 or newer and Bash on macOS or Linux.
+The benchmark commands above run offline without credentials or network
+access. The full `./scripts/validate` now additionally checks live npm registry
+advisories and therefore **requires network access** and fails closed if npm
+audit cannot retrieve evidence. The rate-limit oracle uses a simulated clock.
+Fixtures require Node 24 or newer and Bash on macOS or Linux.
 
 ## Execution boundary
 

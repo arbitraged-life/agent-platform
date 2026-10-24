@@ -23,11 +23,12 @@ class AdvisoryTests(unittest.TestCase):
             (lock.parent / 'package.json').write_text('{"name":"fixture"}')
 
     @staticmethod
-    def report(*, high=0, moderate=0, package='vite'):
+    def report(*, high=0, critical=0, moderate=0, package='vite'):
         return json.dumps({
             "metadata": {"vulnerabilities": {"info": 0, "low": 0, "moderate": moderate,
-                                            "high": high, "critical": 0}},
-            "vulnerabilities": ({package: {"severity": "high"}} if high else
+                                            "high": high, "critical": critical}},
+            "vulnerabilities": ({package: {"severity": "critical"}} if critical else
+                                {package: {"severity": "high"}} if high else
                                 {package: {"severity": "moderate"}} if moderate else {}),
         })
 
@@ -59,6 +60,18 @@ class AdvisoryTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "high/critical"):
                 module.audit_dependencies(root, runner=lambda cmd, **kwargs:
                     subprocess.CompletedProcess(cmd, 1, self.report(high=1)))
+
+    def test_critical_only_and_non_advisory_npm_failures_are_fatal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.fixture(root)
+            for code, payload in [(1, self.report(critical=1)),
+                                  (0, self.report(critical=1)),
+                                  (1, self.report())]:
+                with self.subTest(code=code, payload=payload):
+                    with self.assertRaisesRegex(RuntimeError, 'high/critical'):
+                        module.audit_dependencies(root, runner=lambda cmd, **kwargs:
+                                                  subprocess.CompletedProcess(cmd, code, payload))
 
     def test_transport_and_nonjson_errors_fail_closed(self):
         with tempfile.TemporaryDirectory() as tmp:

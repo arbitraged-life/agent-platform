@@ -25,13 +25,27 @@ consumer owns deployment, credentials, approvals and merging policy.
 4. Dependabot security updates and Renovate overlap. Retain Renovate as the
    single version-update owner here; inspect account settings before enabling
    a second mutating dependency-update service.
-5. Renovate owns GitHub **native auto-merge** for eligible stable minor/patch
-   updates, pins/digests, and lockfile maintenance after the required checks
-   and Mergify Merge Protections pass. Mergify excludes `renovate[bot]` from
-   its own queue to prevent competing merge writers; this is **not** a ban on
-   GitHub-native auto-merge. Major, pre-1.0, and interpreter security-toolchain
-   patch PRs remain review-only. A security label alone does not approve an
-   otherwise ineligible change.
+5. Renovate owns GitHub **native auto-merge** only for updates that remain
+   eligible under every matching package rule (for example safe stable
+   minor/patch updates after enforced checks). npm, infrastructure, sensitive
+   packages and lockfile maintenance have later review-only overrides.
+   Mergify excludes `renovate[bot]` from its own queue to prevent competing
+   merge writers; this is **not** a ban on GitHub-native auto-merge. Major,
+   pre-1.0, and interpreter security-toolchain patch PRs remain review-only.
+   The additive `renovate-automerge` label does not override an explicit
+   `automerge: false` or dependency-dashboard approval requirement. A security
+   label alone never approves an otherwise ineligible change.
+
+## Nested Worker advisory exception (October 2026)
+
+`skills/turnstile-spin/templates/worker` pins an `undici` override to
+`7.30.1` because the transitive Miniflare release required vulnerable
+`7.29.1`. This blocks CVE-2026-109869 / GHSA-xjj6-f33q-929c; the nested
+lockfile was re-resolved, `npm audit` found zero advisories, Worker unit tests
+passed, and its TypeScript typecheck passed. Review and remove the temporary
+override when Miniflare's normal dependency graph uses a patched version.
+The audit explicitly includes devDependencies under `NODE_ENV=production`;
+malformed registry responses and absent evidence fail closed.
 
 ## Limits and escalation
 

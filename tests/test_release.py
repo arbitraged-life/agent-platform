@@ -174,20 +174,26 @@ class ReleaseTests(unittest.TestCase):
             release.install(bundle, lock, root / 'installed')
             lock_path = root / 'release.lock.json'
             lock_path.write_text(json.dumps(lock))
-            def verify(bundle_path, lock_file):
+            pinned_digest = release.sha(lock_path.read_bytes())
+            def verify(bundle_path, lock_file, expected_digest=pinned_digest):
                 argv = ['platform-release.py', 'verify', '--bundle', str(bundle_path),
-                        '--lock', str(lock_file), '--destination', str(root / 'installed')]
+                        '--lock', str(lock_file), '--expected-lock-sha256', expected_digest,
+                        '--destination', str(root / 'installed')]
                 output = io.StringIO()
                 with patch.object(sys, 'argv', argv), patch.object(sys, 'stdout', output):
                     release.main()
                 return json.loads(output.getvalue())
             valid = verify(bundle, lock_path)
             self.assertEqual(valid['status'], 'installed-bytes-verified')
+            with self.assertRaisesRegex(ValueError, 'digest or size mismatch'):
+                verify(bundle, lock_path, '0' * 64)
+            with self.assertRaisesRegex(ValueError, 'independently pinned'):
+                verify(bundle, lock_path, '')
             another = root / 'another'
             another.mkdir()
             foreign_lock = another / 'release.lock.json'
             foreign_lock.write_text(json.dumps(lock))
-            with self.assertRaisesRegex(ValueError, 'must share the trusted lock directory'):
+            with self.assertRaisesRegex(ValueError, 'same explicit directory'):
                 verify(bundle, foreign_lock)
             with self.assertRaisesRegex(ValueError, 'Invalid release artifact name'):
                 release.validate_lock({**lock, 'artifact': '..\\unsafe.tar'})

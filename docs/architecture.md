@@ -84,9 +84,14 @@ flowchart TB
 
 Boundaries not implied by this diagram:
 
-- The review agent receives untrusted source and feedback **without** GitHub
-  publication credentials. A separate verifier and exact-head publication
-  conditions remain necessary; an AI review does not approve or merge a PR.
+- The structured-review **job is not credential-isolated**: it declares
+  `pull-requests: write`, and its context/model-running steps receive a
+  `REVIEW_GITHUB_TOKEN` from the publisher secret or GitHub job token. The
+  untrusted candidate is checked out but not executed, and the model prompt
+  must not contain credentials; nevertheless the controlling review process
+  retains write-capable API access. Do not describe this as a credential-free
+  sandbox. Deterministic source/head checks and separately verified publication
+  conditions remain necessary; AI output itself never approves or merges a PR.
 - The execution router binds approval to a specific executable, worktree and
   source snapshot. A workspace profile is not full OS-level read confinement;
   host sandbox, MCP permissions, outbound model traffic and authorizations

@@ -3,6 +3,7 @@ from importlib.util import spec_from_loader, module_from_spec
 from pathlib import Path
 # qlty-ignore(bandit:B404): Git fixture operations use argv without a shell.
 import subprocess
+import sys
 import shutil
 import tempfile
 import unittest
@@ -62,6 +63,22 @@ class BoundaryTests(unittest.TestCase):
         for step in steps:
             if step.get('uses', '').startswith(('actions/checkout@', 'actions/setup-node@')):
                 self.assertIn("github.event_name == 'schedule'", step['if'])
+
+    def test_validator_dispatches_advisory_gate_only_for_ci_and_security(self):
+        for command in ['ci', 'security', 'lint', 'test']:
+            with self.subTest(command=command):
+                with patch.object(sys, 'argv', ['validate', command]), \
+                     patch.object(validation, 'source_files', return_value=[]), \
+                     patch.object(validation, 'lint_sources'), \
+                     patch.object(validation.subprocess, 'run') as mock_run:
+                    validation.main()
+                audit = [call for call in mock_run.call_args_list if
+                         any('scripts/audit_dependencies.py' in str(part)
+                             for part in call.args[0])]
+                self.assertEqual(len(audit), 1 if command in {'ci', 'security'} else 0)
+                if audit:
+                    self.assertIs(audit[0].kwargs['check'], True)
+                    self.assertEqual(audit[0].kwargs['cwd'], validation.ROOT)
 
     def test_renovate_remediates_security_prs_without_expanding_merge_permissions(self):
         root = Path(__file__).resolve().parents[1]

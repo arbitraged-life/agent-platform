@@ -11,9 +11,16 @@ and a manifest of file hashes. Repeated builds of a commit produce identical
 bytes. The lock contains schema_version, commit, sha256, and artifact filename.
 The consuming repository stores this lock and obtains the named release asset
 from a trusted distribution channel.
+The CLI requires a separately trusted SHA-256 pin of the **lock file itself**;
+a lock and bundle chosen together by an untrusted agent are not an authenticated
+release. An independently reviewed consuming repository or an approved release
+manifest must supply that digest. Canonicalized parent-path aliases (including
+system `/tmp` symlinks) are accepted only after the lock content pin matches.
 
 ```sh
-python3 scripts/platform-release.py install --bundle /tmp/agent-platform.tar --lock /tmp/agent-platform.lock.json --destination /tmp/platform-installations
+# EXPECTED_LOCK_SHA256 must be copied from independently reviewed and pinned
+# consumer configuration; do not calculate it from an untrusted lock at runtime.
+python3 scripts/platform-release.py install --bundle /tmp/agent-platform.tar --lock /tmp/agent-platform.lock.json --expected-lock-sha256 "$EXPECTED_LOCK_SHA256" --destination /tmp/platform-installations
 ```
 
 Installation checks the bundle digest, paths, entry types, sizes, source commit,
@@ -26,8 +33,10 @@ Install and independent permission readback require POSIX filesystem mode
 semantics (Linux/macOS); Windows installation and verification explicitly fail
 rather than misrepresenting POSIX executable permissions. Installed files are
 checked for exact expected size, complete permission bits, and streamed SHA-256
-hashes before any `installed-bytes-verified` result is issued. Bootstrap the installer from an independently pinned source commit;
-never execute an installer extracted from an unverified download.
+hashes before any `installed-bytes-verified` result is issued.
+
+Bootstrap the installer from an independently pinned source commit; never
+execute an installer extracted from an unverified download.
 
 Reusable workflows are consumed at a full commit SHA. Account-specific triggers,
 reviewer policies, destinations, allowlists, and secret references remain in the
@@ -43,7 +52,7 @@ After a consumer explicitly installs a pinned release, verify the original
 trusted artifact and the installed content independently:
 
 ```sh
-python3 scripts/platform-release.py verify --bundle /tmp/agent-platform.tar --lock /tmp/agent-platform.lock.json --destination /tmp/platform-installations
+python3 scripts/platform-release.py verify --bundle /tmp/agent-platform.tar --lock /tmp/agent-platform.lock.json --expected-lock-sha256 "$EXPECTED_LOCK_SHA256" --destination /tmp/platform-installations
 ```
 
 This read-only command validates the lock and artifact digest, archive manifest,

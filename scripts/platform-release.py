@@ -150,20 +150,28 @@ def validate_lock(lock):
         raise ValueError('Invalid release artifact name')
 
 
-def cli_bundle_and_lock(bundle_arg, lock_arg):
-    """Constrain CLI-selected artifact bytes to the directory of a trusted lock.
+def cli_bundle_and_lock(bundle_arg, lock_arg, expected_lock_sha256):
+    """Verify a separately pinned lock digest before accepting CLI artifact bytes.
 
-    These inputs can be supplied by an LLM or user. Trust the explicitly
-    selected lock's parent as the artifact directory, never an independent
-    arbitrary `--bundle` path. Keep direct Python install/verify calls usable
-    for consumers that already enforce their own artifact trust boundary.
+    The caller must obtain the expected digest from an independently trusted
+    source. Colocation alone cannot authenticate an attacker-supplied lock;
+    resolving symlinked parent aliases is safe only with this content pin.
+    Direct Python callers must enforce an equivalent trusted lock boundary.
     """
+    if not isinstance(expected_lock_sha256, str) or not re.fullmatch('[0-9a-f]{64}', expected_lock_sha256):
+        raise ValueError('Missing or invalid independently pinned release lock SHA-256')
     if (bundle_arg.is_symlink() or lock_arg.is_symlink() or
             '..' in bundle_arg.parts or '..' in lock_arg.parts):
         raise ValueError('Unsafe release argument path')
+    if bundle_arg.parent.absolute() != lock_arg.parent.absolute():
+        raise ValueError('Release bundle and lock must use the same explicit directory')
     trusted_lock = lock_arg.resolve(strict=True)
     trusted_dir = trusted_lock.parent
-    lock = json.loads(trusted_lock.read_text())
+    with trusted_lock.open('rb') as stream:
+        lock_bytes = stream.read(65537)
+    if len(lock_bytes) > 65536 or sha(lock_bytes) != expected_lock_sha256:
+        raise ValueError('Untrusted release lock: digest or size mismatch')
+    lock = json.loads(lock_bytes)
     validate_lock(lock)
     expected = trusted_dir / lock['artifact']
     supplied = bundle_arg.resolve(strict=True)
@@ -311,16 +319,18 @@ def main():
     installer = sub.add_parser('install')
     installer.add_argument('--bundle', type=Path, required=True)
     installer.add_argument('--lock', type=Path, required=True)
+    installer.add_argument('--expected-lock-sha256', required=True)
     installer.add_argument('--destination', type=Path, required=True)
     verifier = sub.add_parser('verify')
     verifier.add_argument('--bundle', type=Path, required=True)
     verifier.add_argument('--lock', type=Path, required=True)
+    verifier.add_argument('--expected-lock-sha256', required=True)
     verifier.add_argument('--destination', type=Path, required=True)
     args = parser.parse_args()
     if args.command == 'build':
         print(json.dumps(build(args.root, args.output), indent=2))
     elif args.command in {'install', 'verify'}:
-        pinned_bundle, pinned_lock = cli_bundle_and_lock(args.bundle, args.lock)
+        pinned_bundle, pinned_lock = cli_bundle_and_lock(args.bundle, args.lock, args.expected_lock_sha256)
         if args.command == 'install':
             print(install(pinned_bundle, pinned_lock, args.destination))
         else:
