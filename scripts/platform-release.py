@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build reproducible release bundles and install digest-pinned local bundles."""
 import argparse
+from contextlib import ExitStack
 import hashlib
 import io
 import json
@@ -140,7 +141,7 @@ def _extract_bundle(data, temporary):
 
 
 def validate_lock(lock):
-    if not isinstance(lock, dict) or set(lock) != {'schema_version', 'commit', 'sha256', 'artifact'} or lock['schema_version'] != 1:
+    if not isinstance(lock, dict) or set(lock) != {'schema_version', 'commit', 'sha256', 'artifact'} or type(lock.get('schema_version')) is not int or lock['schema_version'] != 1:
         raise ValueError('Unsupported release lock')
     if not isinstance(lock['commit'], str) or not re.fullmatch('[0-9a-f]{40}', lock['commit']) or not isinstance(lock['sha256'], str) or not re.fullmatch('[0-9a-f]{64}', lock['sha256']):
         raise ValueError('Invalid release identity')
@@ -187,6 +188,27 @@ def require_posix_installation():
         raise RuntimeError('Release installation and permission verification require POSIX filesystems')
 
 
+def digest_installed_member(root_fd, name, expected_size, expected_mode):
+    """Hash a member through dirfd-anchored, no-follow path traversal."""
+    parts = PurePosixPath(name).parts
+    with ExitStack() as opened:
+        parent_fd = root_fd
+        for part in parts[:-1]:
+            parent_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                dir_fd=parent_fd)
+            opened.callback(os.close, parent_fd)
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        with os.fdopen(fd, 'rb') as stream:
+            metadata = os.fstat(stream.fileno())
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError('Installed release has a special file')
+            if metadata.st_size != expected_size:
+                raise ValueError('Installed release size mismatch')
+            if stat.S_IMODE(metadata.st_mode) != expected_mode:
+                raise ValueError('Installed release permission mismatch')
+            return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
 def install(bundle, lock, destination):
     require_posix_installation()
     validate_lock(lock)
@@ -204,7 +226,7 @@ def install(bundle, lock, destination):
     try:
         _extract_bundle(data, temporary)
         manifest = json.loads((temporary / MANIFEST_NAME).read_text())
-        if manifest.get('schema_version') != 1 or manifest.get('commit') != lock['commit']:
+        if type(manifest.get('schema_version')) is not int or manifest['schema_version'] != 1 or manifest.get('commit') != lock['commit']:
             raise ValueError('Release manifest identity mismatch')
         actual = {str(p.relative_to(temporary)): sha(p.read_bytes()) for p in temporary.rglob('*') if p.is_file() and p != temporary / MANIFEST_NAME}
         if actual != manifest.get('files'):
@@ -253,7 +275,7 @@ def verify_installation(bundle, lock, destination):
         expected_sizes = {member.name: member.size for member in members}
         manifest_bytes = archive.extractfile(MANIFEST_NAME).read()
         manifest = json.loads(manifest_bytes)
-        if manifest.get('schema_version') != 1 or manifest.get('commit') != lock['commit']:
+        if type(manifest.get('schema_version')) is not int or manifest['schema_version'] != 1 or manifest.get('commit') != lock['commit']:
             raise ValueError('Release manifest identity mismatch')
         declared = manifest.get('files')
         if not isinstance(declared, dict) or set(declared) | {MANIFEST_NAME} != names:
@@ -265,35 +287,36 @@ def verify_installation(bundle, lock, destination):
     target = destination / lock['commit']
     if target.is_symlink() or not target.is_dir():
         raise ValueError('Verified installation directory is unavailable')
-    installed = {}
-    expected_dirs = {str(parent) for name in names for parent in PurePosixPath(name).parents
-                     if str(parent) != '.'}
-    for file in target.rglob('*'):
-        if file.is_symlink():
-            raise ValueError('Installed release has a symbolic link')
-        name = file.relative_to(target).as_posix()
-        if file.is_dir():
-            if name not in expected_dirs:
-                raise ValueError('Installed release file inventory mismatch')
-            continue
-        if not file.is_file():
-            raise ValueError('Installed release has a special file')
-        if name not in expected_modes:
-            raise ValueError('Installed release file inventory mismatch')
-        # O_NOFOLLOW avoids trusting a symlink swapped in after the initial
-        # inventory check. Inspect the opened inode, not a prior path stat.
-        descriptor = os.open(file, os.O_RDONLY | os.O_NOFOLLOW)
-        with os.fdopen(descriptor, 'rb') as stream:
-            current = os.fstat(stream.fileno())
-            if not stat.S_ISREG(current.st_mode):
+    root_fd = os.open(target, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        root_identity = os.fstat(root_fd)
+        installed = {}
+        expected_dirs = {str(parent) for name in names for parent in PurePosixPath(name).parents
+                         if str(parent) != '.'}
+        for file in target.rglob('*'):
+            if file.is_symlink():
+                raise ValueError('Installed release has a symbolic link')
+            name = file.relative_to(target).as_posix()
+            if file.is_dir():
+                if name not in expected_dirs:
+                    raise ValueError('Installed release file inventory mismatch')
+                continue
+            if not file.is_file():
                 raise ValueError('Installed release has a special file')
-            if current.st_size != expected_sizes[name]:
-                raise ValueError('Installed release size mismatch')
-            if stat.S_IMODE(current.st_mode) != expected_modes[name]:
-                raise ValueError('Installed release permission mismatch')
-            installed[name] = hashlib.file_digest(stream, 'sha256').hexdigest()
-        if len(installed) > 10000:
-            raise ValueError('Too many installed release entries')
+            if name not in expected_modes:
+                raise ValueError('Installed release file inventory mismatch')
+            installed[name] = digest_installed_member(root_fd, name, expected_sizes[name],
+                                                      expected_modes[name])
+            if len(installed) > 10000:
+                raise ValueError('Too many installed release entries')
+    finally:
+        os.close(root_fd)
+    # Do not attest a detached/replaced target path after inspecting its inode.
+    current_target = os.stat(target, follow_symlinks=False)
+    if (not stat.S_ISDIR(current_target.st_mode) or
+            (current_target.st_dev, current_target.st_ino) !=
+            (root_identity.st_dev, root_identity.st_ino)):
+        raise ValueError('Verified installation directory changed during readback')
     if set(installed) != names or installed[MANIFEST_NAME] != sha(manifest_bytes):
         raise ValueError('Installed release file inventory/manifest mismatch')
     if any(installed[name] != expected for name, expected in declared.items()):

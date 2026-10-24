@@ -198,6 +198,26 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Invalid release artifact name'):
                 release.validate_lock({**lock, 'artifact': '..\\unsafe.tar'})
 
+    def test_release_lock_and_manifest_reject_noninteger_schema_versions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            for schema in (True, 1.0):
+                with self.subTest(schema=schema), self.assertRaisesRegex(ValueError, 'Unsupported release lock'):
+                    release.validate_lock({**lock, 'schema_version': schema})
+            for schema in (True, 1.0):
+                manifest = {'schema_version': schema, 'commit': 'a' * 40,
+                            'files': {'runtime/main.mjs': release.sha(b'export const version = 1;\n')}}
+                with tarfile.open(bundle, 'w') as archive:
+                    for name, content in [('runtime/main.mjs', b'export const version = 1;\n'),
+                                          ('release-manifest.json', json.dumps(manifest).encode())]:
+                        info = tarfile.TarInfo(name)
+                        info.size = len(content)
+                        archive.addfile(info, io.BytesIO(content))
+                revised = {**lock, 'sha256': release.sha(bundle.read_bytes())}
+                with self.subTest(manifest_schema=schema), self.assertRaisesRegex(ValueError, 'manifest identity mismatch'):
+                    release.install(bundle, revised, root / 'installed')
+
     def test_release_readback_refuses_permission_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -215,6 +235,24 @@ class ReleaseTests(unittest.TestCase):
             with (target / 'runtime/main.mjs').open('wb') as stream:
                 stream.truncate(release.MAX_RELEASE_BYTES + 1024)
             with self.assertRaisesRegex(ValueError, 'size mismatch'):
+                release.verify_installation(bundle, lock, root / 'installed')
+
+    def test_dirfd_readback_refuses_symlinked_intermediate_components(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            target = release.install(bundle, lock, root / 'installed')
+            actual = root / 'other-runtime'
+            (target / 'runtime').rename(actual)
+            (target / 'runtime').symlink_to(actual, target_is_directory=True)
+            descriptor = os.open(target, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                with self.assertRaises(OSError):
+                    release.digest_installed_member(descriptor, 'runtime/main.mjs',
+                                                    len((actual / 'main.mjs').read_bytes()), 0o644)
+            finally:
+                os.close(descriptor)
+            with self.assertRaisesRegex(ValueError, 'symbolic link'):
                 release.verify_installation(bundle, lock, root / 'installed')
 
     def test_installation_refuses_platform_without_posix_permission_guarantees(self):

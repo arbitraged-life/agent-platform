@@ -60,6 +60,13 @@ class BoundaryTests(unittest.TestCase):
         audit = next(step for step in steps if step.get('name') == 'Check current dependency advisories (existing scheduled run)')
         self.assertEqual(audit['if'], "github.event_name == 'schedule'")
         self.assertEqual(audit['run'], 'python3 scripts/audit_dependencies.py')
+        names = [step.get('name') for step in steps]
+        # Registry outages must not prevent the independent test run or JUnit
+        # receipt; the scheduled advisory still fails the workflow afterward.
+        self.assertLess(names.index('Run Node tests with JUnit'),
+                        names.index('Check current dependency advisories (existing scheduled run)'))
+        self.assertLess(names.index('Check current dependency advisories (existing scheduled run)'),
+                        names.index('Upload test results to Mergify Test Insights'))
         for step in steps:
             if step.get('uses', '').startswith(('actions/checkout@', 'actions/setup-node@')):
                 self.assertIn("github.event_name == 'schedule'", step['if'])

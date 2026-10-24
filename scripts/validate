@@ -177,8 +177,9 @@ def main():
     if args.command in ['ci', 'lint', 'security']:
         lint_sources(files, ROOT)
     if args.command in ['ci', 'security']:
-        # Audit all owned dependency lockfiles, including dev tools. No npm install
-        # or lockfile mutation. Missing registry evidence is not a clean result.
+        # Audit the two explicitly declared npm lockfiles (see LOCKFILES),
+        # including dev tools. New lockfiles require inventory updates. No install
+        # or lockfile mutation; missing registry evidence fails closed.
         subprocess.run([sys.executable, str(ROOT / 'scripts/audit_dependencies.py')],
                        check=True, cwd=ROOT)
     if args.command in ['ci', 'test']:

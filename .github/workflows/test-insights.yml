@@ -48,9 +48,6 @@ jobs:
         if: github.event_name == 'schedule'
         with:
           python-version: '3.14.9'
-      - name: Check current dependency advisories (existing scheduled run)
-        if: github.event_name == 'schedule'
-        run: python3 scripts/audit_dependencies.py
       - name: Run Node tests with JUnit
         id: tests
         if: steps.uploader.outputs.available == 'true'
@@ -65,6 +62,9 @@ jobs:
               tests/unit/*.test.mjs || failed=1
           done
           exit "$failed"
+      - name: Check current dependency advisories (existing scheduled run)
+        if: github.event_name == 'schedule'
+        run: python3 scripts/audit_dependencies.py
       - name: Upload test results to Mergify Test Insights
         if: always() && steps.uploader.outputs.available == 'true'
         uses: Mergifyio/gha-mergify-ci@ce0d6bef01217d90fb9e908e6966b0f6f4ea26d5 # v26

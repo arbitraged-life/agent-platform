@@ -78,14 +78,17 @@ The generic protection requires Linux and macOS validation, the GitHub secrets
 job, Qlty, GitGuardian, Socket, no changes-requested reviews, and a Conventional
 Commit title. These checks are not weakened by automatic queueing: if any
 required check is absent, pending, or failing, Mergify cannot merge.
-Mergify's required **Merge Protections** check evaluates Renovate PRs under
-all standard CI/security gates. This does **not** put Renovate into Mergify's
-merge queue: the explicit queue rule still excludes `renovate[bot]`.
-Renovate's version- and risk-scoped native GitHub auto-merge controls whether
-its own PR is eligible; high-risk/major upgrades remain review-only.
-Mergify still excludes Renovate from queue execution, conflict notifications,
-and stale-PR housekeeping. Keep these gates separate to avoid a circular
-requirement in which GitHub demands a Mergify status that refuses all bot PRs.
+Mergify's required **Merge Protections** check evaluates *every* PR,
+including Renovate, under the same CI and security gates. The configuration
+**omits** `merge_protections_settings.auto_merge_conditions`: that field
+actually triggers automatic queueing, not just check reporting. Instead, an
+explicit non-Renovate `pull_request_rules` action queues eligible owner PRs
+or deliberately `merge-ready`-selected PRs only after Merge Protections pass.
+The queue rule independently excludes `renovate[bot]`. Renovate remains the
+native GitHub merge owner, with major/high-risk upgrades review-only; its PRs
+still must pass the normal required Mergify status. Existing Renovate PRs do
+not enter a competing Mergify queue. Conflict and stale-PR housekeeping also
+exclude Renovate.
 
 ## CI-green automatic queueing
 

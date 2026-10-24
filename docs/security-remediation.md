@@ -9,9 +9,10 @@ consumer owns deployment, credentials, approvals and merging policy.
    Renovate's `vulnerabilityAlerts` opens **security-labelled PRs** immediately,
    independently of the ordinary Monday update schedule. Renovate's GitHub
    Actions manager already tracks `setup-node` and `setup-python` version
-   inputs; patch releases for those interpreters use an immediate, review-only
-   fast lane rather than waiting for the general Monday update schedule.
-   No duplicate dependency updater or custom version parser is needed.
+   inputs. Interpreter patch updates bypass the ordinary Monday scheduling
+   window but **still require Dependency Dashboard approval before PR creation**
+   and never auto-merge; the exception is prompt consideration, not bypassed
+   review. No duplicate updater or custom parser is needed.
 2. `scripts/audit_dependencies.py` requests registry advisories for **both**
    npm lockfiles, including development packages, without installing software.
    High/critical advisories, missing lockfiles, malformed responses, and
