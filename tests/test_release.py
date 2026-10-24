@@ -173,19 +173,20 @@ class ReleaseTests(unittest.TestCase):
             lock_path = root / 'release.lock.json'
             lock_path.write_text(json.dumps(lock))
             def verify(bundle_path, lock_file):
-                return subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / 'scripts/platform-release.py'),
-                                       'verify', '--bundle', str(bundle_path), '--lock', str(lock_file),
-                                       '--destination', str(root / 'installed')], capture_output=True, text=True)
+                argv = ['platform-release.py', 'verify', '--bundle', str(bundle_path),
+                        '--lock', str(lock_file), '--destination', str(root / 'installed')]
+                output = io.StringIO()
+                with patch.object(sys, 'argv', argv), patch.object(sys, 'stdout', output):
+                    release.main()
+                return json.loads(output.getvalue())
             valid = verify(bundle, lock_path)
-            self.assertEqual(valid.returncode, 0, valid.stderr)
-            self.assertEqual(json.loads(valid.stdout)['status'], 'installed-bytes-verified')
+            self.assertEqual(valid['status'], 'installed-bytes-verified')
             another = root / 'another'
             another.mkdir()
             foreign_lock = another / 'release.lock.json'
             foreign_lock.write_text(json.dumps(lock))
-            outside = verify(bundle, foreign_lock)
-            self.assertNotEqual(outside.returncode, 0)
-            self.assertIn('must share the trusted lock directory', outside.stderr)
+            with self.assertRaisesRegex(ValueError, 'must share the trusted lock directory'):
+                verify(bundle, foreign_lock)
             with self.assertRaisesRegex(ValueError, 'Invalid release artifact name'):
                 release.validate_lock({**lock, 'artifact': '..\\unsafe.tar'})
 
