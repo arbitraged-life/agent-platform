@@ -1,0 +1,11 @@
+# GitHub made ubuntu-26.04 GA on 2026-09-17:
+# https://github.blog/changelog/2026-09-17-ubuntu-26-generally-available-and-latest-migration/
+#
+# The bundled actionlint runner-label allowlist still lags this hosted image.
+# Ignore ONLY its obsolete unknown-label diagnostic for this exact verified
+# hosted runner; keep every other workflow/security check active.
+# Remove this exception once the actionlint/Qlty label set includes ubuntu-26.04.
+paths:
+  ".github/workflows/**/*.yml":
+    ignore:
+      - '^label "ubuntu-26\.04" is unknown\.'
