@@ -40,6 +40,8 @@ def audit_dependencies(root=ROOT, *, runner=subprocess.run):
         try:
             report = json.loads(result.stdout)
             counts = report["metadata"]["vulnerabilities"]
+            if not isinstance(counts, dict):
+                raise ValueError("invalid advisory counts")
             if any(type(counts.get(level)) is not int or counts[level] < 0 for level in SEVERITIES):
                 raise ValueError("invalid advisory counts")
             issues = report["vulnerabilities"]

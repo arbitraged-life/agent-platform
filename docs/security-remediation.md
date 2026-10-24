@@ -28,8 +28,9 @@ consumer owns deployment, credentials, approvals and merging policy.
    a second mutating dependency-update service.
 5. Renovate owns GitHub **native auto-merge** only for updates that remain
    eligible under every matching package rule (for example safe stable
-   minor/patch updates after enforced checks). npm, infrastructure, sensitive
-   packages and lockfile maintenance have later review-only overrides.
+   minor/patch updates after enforced checks). npm pin/digest/lockfile
+   updates, infrastructure, and sensitive packages have later review-only
+   overrides.
    Mergify excludes `renovate[bot]` from its own queue to prevent competing
    merge writers; this is **not** a ban on GitHub-native auto-merge. Major,
    pre-1.0, and interpreter security-toolchain patch PRs remain review-only.

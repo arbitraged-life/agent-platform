@@ -87,10 +87,13 @@ Boundaries not implied by this diagram:
 - The structured-review **job is not credential-isolated**: it declares
   `pull-requests: write`, and its context/model-running steps receive a
   `REVIEW_GITHUB_TOKEN` from the publisher secret or GitHub job token. The
-  untrusted candidate is checked out but not executed, and the model prompt
-  must not contain credentials; nevertheless the controlling review process
-  retains write-capable API access. Do not describe this as a credential-free
-  sandbox. Deterministic source/head checks and separately verified publication
+  untrusted candidate is checked out but not executed. Workflow environment
+  credentials must not be deliberately placed into model prompts, but reviewed
+  diffs and peer comments may themselves contain secrets: this path does not
+  guarantee deterministic redaction before invoking the model provider.
+  The controlling review process also retains write-capable API access.
+  Do not describe this as a credential-free sandbox. Deterministic source/head
+  checks and separately verified publication
   conditions remain necessary; AI output itself never approves or merges a PR.
 - The execution router binds approval to a specific executable, worktree and
   source snapshot. A workspace profile is not full OS-level read confinement;
