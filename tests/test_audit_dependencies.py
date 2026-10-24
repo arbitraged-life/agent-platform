@@ -46,6 +46,8 @@ class AdvisoryTests(unittest.TestCase):
                 self.assertEqual(command[:2], ['npm', 'audit'])
                 self.assertIn('--package-lock-only', command)
                 self.assertIn('--ignore-scripts', command)
+                # Explicit CLI include defeats NODE_ENV=production/npm omit=dev defaults.
+                self.assertIn('--include=dev', command)
                 self.assertNotIn('--omit=dev', command)
                 self.assertEqual(arguments['timeout'], 120)
 

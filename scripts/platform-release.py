@@ -8,6 +8,7 @@ import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shutil
+import stat
 # qlty-ignore(bandit:B404): Required CLI execution uses argv arrays without a shell.
 import subprocess
 import tarfile
@@ -263,7 +264,9 @@ def verify_installation(bundle, lock, destination):
             raise ValueError('Installed release has a special file')
         if name not in expected_modes:
             raise ValueError('Installed release file inventory mismatch')
-        if (file.stat().st_mode & 0o777) != expected_modes[name]:
+        # Include setuid/setgid/sticky bits; masking to 0777 would certify
+        # unintended elevated permissions despite the canonical 0644/0755 mode.
+        if stat.S_IMODE(file.stat().st_mode) != expected_modes[name]:
             raise ValueError('Installed release permission mismatch')
         installed[name] = sha(file.read_bytes())
         if len(installed) > 10000:

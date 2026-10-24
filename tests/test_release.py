@@ -199,6 +199,26 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'permission mismatch'):
                 release.verify_installation(bundle, lock, root / 'installed')
 
+    def test_release_readback_refuses_setuid_or_setgid_permission_drift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            target = release.install(bundle, lock, root / 'installed')
+            file = target / 'runtime/main.mjs'
+            file.chmod(0o4644)
+            self.assertEqual(file.stat().st_mode & 0o4000, 0o4000)
+            with self.assertRaisesRegex(ValueError, 'permission mismatch'):
+                release.verify_installation(bundle, lock, root / 'installed')
+            # Some macOS filesystems clear setgid automatically. Verify the
+            # denial whenever the filesystem actually preserves that bit.
+            file.chmod(0o2644)
+            if file.stat().st_mode & 0o2000:
+                with self.assertRaisesRegex(ValueError, 'permission mismatch'):
+                    release.verify_installation(bundle, lock, root / 'installed')
+            file.chmod(0o644)
+            self.assertEqual(release.verify_installation(bundle, lock, root / 'installed')['status'],
+                             'installed-bytes-verified')
+
     def test_release_readback_refuses_unexpected_files_and_corrupt_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

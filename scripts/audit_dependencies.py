@@ -28,7 +28,7 @@ def audit_dependencies(root=ROOT, *, runner=subprocess.run):
         # npm audit uses the registry to check advisories. Lockfile-only ensures
         # no install or lockfile rewrite; include devDependencies (e.g. Vite).
         command = ["npm", "audit", "--package-lock-only", "--audit-level=high",
-                   "--json", "--ignore-scripts", "--no-fund"]
+                   "--include=dev", "--json", "--ignore-scripts", "--no-fund"]
         try:
             result = runner(command, cwd=lock.parent, capture_output=True, text=True, timeout=120)
         except (OSError, subprocess.TimeoutExpired) as exc:
