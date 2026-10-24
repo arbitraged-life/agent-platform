@@ -29,6 +29,56 @@ class MergePolicyTests(unittest.TestCase):
         self.assertTrue(any(r.get("matchUpdateTypes") == ["major"] and r.get("automerge") is False for r in rules))
         self.assertNotIn("automerge", self.policy["vulnerabilityAlerts"])
 
+    def test_npm_release_age_is_timestamp_required_and_fail_closed(self):
+        rules = self.policy["packageRules"]
+        cooldown = next(r for r in rules if r.get("matchDatasources") == ["npm"])
+        self.assertEqual(cooldown["minimumReleaseAge"], "14 days")
+        self.assertEqual(cooldown["minimumReleaseAgeBehaviour"], "timestamp-required")
+        self.assertEqual(cooldown["internalChecksFilter"], "strict")
+        self.assertIn("security:minimumReleaseAgePypi", self.policy["extends"])
+
+    def test_high_risk_rules_take_precedence_over_general_automerge(self):
+        rules = self.policy["packageRules"]
+        start = next(i for i, r in enumerate(rules) if r.get("minimumReleaseAge") == "14 days")
+        self.assertGreater(start, max(i for i, r in enumerate(rules) if r.get("automerge") is True))
+        restricted = rules[start:]
+        self.assertEqual(len(restricted), 9)
+        for rule in restricted[1:]:
+            self.assertIs(rule["automerge"], False)
+            self.assertIs(rule["dependencyDashboardApproval"], True)
+        self.assertEqual(restricted[1]["matchDatasources"], ["npm"])
+        self.assertEqual(set(restricted[1]["matchUpdateTypes"]),
+                         {"pin", "pinDigest", "digest", "lockFileMaintenance"})
+        self.assertIsNone(restricted[1]["minimumReleaseAge"])
+        managers = set(restricted[2]["matchManagers"])
+        self.assertTrue({"github-actions", "terraform", "circleci", "dockerfile",
+                         "docker-compose", "custom.regex"}.issubset(managers))
+        paths = restricted[3]["matchFileNames"]
+        self.assertTrue({"infra/**", ".github/workflows/**", ".circleci/**"}.issubset(paths))
+        self.assertEqual(restricted[4]["matchDatasources"], ["node-version", "python-version"])
+        packages = restricted[5]["matchPackageNames"]
+        self.assertTrue({"@modelcontextprotocol/**", "@cloudflare/**", "wrangler",
+                         "miniflare", "@google-cloud/**", "@azure/**", "jose",
+                         "cryptography", "google-auth", "mcp"}.issubset(packages))
+        self.assertEqual(restricted[6]["matchUpdateTypes"], ["lockFileMaintenance"])
+        self.assertIs(restricted[6]["automerge"], False)
+        self.assertIsNone(restricted[6]["minimumReleaseAge"])
+        self.assertEqual(set(restricted[7]["matchUpdateTypes"]),
+                         {"lockfileUpdate", "rollback", "bump", "replacement"})
+        self.assertIs(restricted[7]["automerge"], False)
+        self.assertIsNone(restricted[7]["minimumReleaseAge"])
+        security_patch = restricted[8]
+        self.assertEqual(security_patch["matchDatasources"], ["node-version", "python-version"])
+        self.assertEqual(security_patch["matchUpdateTypes"], ["patch"])
+        self.assertEqual(security_patch["schedule"], [])
+        self.assertIs(security_patch["automerge"], False)
+        self.assertIs(security_patch["dependencyDashboardApproval"], True)
+        self.assertIn("security-toolchain", security_patch["addLabels"])
+        self.assertEqual(self.policy["vulnerabilityAlerts"]["schedule"], [])
+        self.assertEqual(self.policy["vulnerabilityAlerts"]["prCreation"], "immediate")
+        self.assertTrue(self.policy["platformAutomerge"])
+        self.assertFalse(self.policy["ignoreTests"])
+
     def test_mergify_does_not_queue_or_housekeep_renovate(self):
         self.assertEqual(self.mergify["merge_protections_settings"]["auto_merge_conditions"], [
             "-author = renovate[bot]",

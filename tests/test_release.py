@@ -188,6 +188,14 @@ class ReleaseTests(unittest.TestCase):
                 release.verify_installation(bundle, lock, root / 'installed')
 
     def test_corruption_denied(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            bundle.write_bytes(bundle.read_bytes() + b'corrupt')
+            with self.assertRaisesRegex(ValueError, 'digest mismatch'):
+                release.install(bundle, lock, root / 'installed')
+            self.assertFalse((root / 'installed').exists())
+
     def test_archive_mode_bits_are_clamped_to_canonical_values_on_install(self):
         """Non-standard archive modes must be clamped, not propagated to disk."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -213,13 +221,6 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(actual_mode, 0o755)
             self.assertNotEqual(actual_mode, 0o700)
 
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            bundle, lock = self.bundle(root)
-            bundle.write_bytes(bundle.read_bytes() + b'corrupt')
-            with self.assertRaisesRegex(ValueError, 'digest mismatch'):
-                release.install(bundle, lock, root / 'installed')
-            self.assertFalse((root / 'installed').exists())
 
     def test_traversal_duplicates_and_wrong_manifests_leave_no_install(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -27,10 +27,21 @@ class SkillTests(unittest.TestCase):
 
     def test_discovery_and_installed_hashes(self):
         rows = MODULE['catalog'](self.root)
-        self.assertEqual(len(rows), 41)
+        self.assertEqual(len(rows), 42)
         lock = MODULE['verify_upstream'](self.root)
         self.assertEqual(len(lock['files']), 358)
         self.assertEqual(len(lock['overlays']), 10)
+
+    def test_website_monitoring_is_discoverable_and_bounded(self):
+        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
+        self.assertIn("website-change-monitoring", rows)
+        skill = (self.root / "skills/website-change-monitoring/SKILL.md").read_text()
+        for expected in ("provider-hosted", "wait_for_monitor_check",
+                         "first workspace", "all pages", "default email recipient",
+                         "unconfirmed material", "mcpproxy upstream add",
+                         "idempotency key", "Re-list"):
+            self.assertIn(expected, skill)
+        self.assertNotIn("9425976", skill)
 
     def test_q_first_is_discoverable_and_helper_has_no_embedded_api_key(self):
         rows = {row["name"]: row for row in MODULE["catalog"](self.root)}

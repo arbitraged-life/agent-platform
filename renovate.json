@@ -118,6 +118,137 @@
       "automerge": false
     },
     {
+      "description": "Hold npm releases for 14 days; require a verifiable registry timestamp before update admission",
+      "matchDatasources": [
+        "npm"
+      ],
+      "minimumReleaseAge": "14 days",
+      "minimumReleaseAgeBehaviour": "timestamp-required",
+      "internalChecksFilter": "strict"
+    },
+    {
+      "description": "Manually review npm pin, digest and lockfile updates that cannot prove release age",
+      "matchDatasources": [
+        "npm"
+      ],
+      "matchUpdateTypes": [
+        "pin",
+        "pinDigest",
+        "digest",
+        "lockFileMaintenance"
+      ],
+      "automerge": false,
+      "dependencyDashboardApproval": true,
+      "minimumReleaseAge": null
+    },
+    {
+      "description": "Review CI actions, infrastructure, container images, and script-managed toolchain pins before merging",
+      "matchManagers": [
+        "github-actions",
+        "circleci",
+        "terraform",
+        "dockerfile",
+        "docker-compose",
+        "custom.regex",
+        "helmv3",
+        "helm-values",
+        "kubernetes",
+        "devcontainer"
+      ],
+      "automerge": false,
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Review dependency updates in CI, deployment and infrastructure manifests even when detected by another manager",
+      "matchFileNames": [
+        ".github/workflows/**",
+        ".circleci/**",
+        ".buildkite/**",
+        "infra/**",
+        "**/Dockerfile*",
+        "**/compose.y*ml",
+        "**/docker-compose.y*ml",
+        "**/wrangler.toml",
+        "**/wrangler.jsonc"
+      ],
+      "automerge": false,
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Review runtime engine upgrades independently of dependency version classification",
+      "matchDatasources": [
+        "node-version",
+        "python-version"
+      ],
+      "automerge": false,
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Review authentication, cryptographic, cloud-control and MCP dependencies before merging",
+      "matchPackageNames": [
+        "@modelcontextprotocol/**",
+        "@cloudflare/**",
+        "@aws-sdk/**",
+        "@auth/**",
+        "@actions/**",
+        "@octokit/auth-**",
+        "@playwright/mcp",
+        "@wonderwhy-er/desktop-commander",
+        "mcp",
+        "fastmcp",
+        "mcp-remote",
+        "mcp-proxy",
+        "jose",
+        "jsonwebtoken",
+        "openid-client",
+        "oauth4webapi",
+        "passport",
+        "passport-*",
+        "next-auth",
+        "cryptography",
+        "authlib",
+        "pyjwt",
+        "python-jose",
+        "requests-oauthlib",
+        "google-auth",
+        "google-auth-oauthlib",
+        "pyopenssl",
+        "msal",
+        "certifi",
+        "urllib3",
+        "wrangler",
+        "miniflare",
+        "workerd",
+        "@google-cloud/**",
+        "google-cloud-*",
+        "google-api-python-client",
+        "@azure/**"
+      ],
+      "automerge": false,
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Require explicit review for all lock-file maintenance because it refreshes transitive dependencies without release-age evidence",
+      "matchUpdateTypes": [
+        "lockFileMaintenance"
+      ],
+      "automerge": false,
+      "dependencyDashboardApproval": true,
+      "minimumReleaseAge": null
+    },
+    {
+      "description": "Manually review update types without release-age timestamps instead of leaving them permanently pending",
+      "matchUpdateTypes": [
+        "lockfileUpdate",
+        "rollback",
+        "bump",
+        "replacement"
+      ],
+      "minimumReleaseAge": null,
+      "automerge": false,
+      "dependencyDashboardApproval": true
+    },
+    {
       "description": "Security patch runtime versions are reviewed and CI-gated; do not wait for ordinary weekly updates",
       "matchDatasources": [
         "node-version",
@@ -130,7 +261,8 @@
       "automerge": false,
       "addLabels": [
         "security-toolchain"
-      ]
+      ],
+      "dependencyDashboardApproval": true
     }
   ],
   "customManagers": [
@@ -179,8 +311,7 @@
       "security"
     ],
     "schedule": [],
-    "prCreation": "immediate",
-    "minimumReleaseAge": null
+    "prCreation": "immediate"
   },
   "labels": [
     "dependencies"
