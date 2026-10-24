@@ -20,8 +20,12 @@ system `/tmp` symlinks) are accepted only after the lock content pin matches.
 ```sh
 # EXPECTED_LOCK_SHA256 must be copied from independently reviewed and pinned
 # consumer configuration; do not calculate it from an untrusted lock at runtime.
-python3 scripts/platform-release.py install --bundle /tmp/agent-platform.tar --lock /tmp/agent-platform.lock.json --expected-lock-sha256 "$EXPECTED_LOCK_SHA256" --destination /tmp/platform-installations --directory-mode 0755
+python3 scripts/platform-release.py install --bundle /tmp/agent-platform.tar --lock /tmp/agent-platform.lock.json --expected-lock-sha256 "$EXPECTED_LOCK_SHA256" --destination /tmp/platform-installations
 ```
+
+If a release is intentionally consumed by another OS account, append
+--directory-mode 0750 (for an appropriately shared group) or
+--directory-mode 0755 (world-readable). Omit the option for the safer 0700 default.
 
 Installation checks the bundle digest, paths, entry types, sizes, source commit,
 and every file hash before atomically installing a versioned directory. On Linux

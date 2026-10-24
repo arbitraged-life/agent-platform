@@ -184,6 +184,11 @@ def _create_install_component(parent_fd, component, directory_mode):
         raise ValueError('New release installation directory changed during mode normalization')
 
 
+def _require_directory_mode(directory_mode):
+    if type(directory_mode) is not int or directory_mode not in INSTALL_DIRECTORY_MODES:
+        raise ValueError('Unsupported release directory mode')
+
+
 def _open_install_destination(destination, *, create=True, directory_mode=0o700):
     """Open every path component without following links, creating missing dirs.
 
@@ -192,8 +197,7 @@ def _open_install_destination(destination, *, create=True, directory_mode=0o700)
     """
     if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
         raise RuntimeError('Safe installation requires no-follow POSIX directory APIs')
-    if type(directory_mode) is not int or directory_mode not in INSTALL_DIRECTORY_MODES:
-        raise ValueError('Unsupported release directory mode')
+    _require_directory_mode(directory_mode)
     path = Path(destination).absolute()
     if '..' in path.parts:
         raise ValueError('Unsafe release installation directory')
@@ -385,15 +389,20 @@ def _publish_staged_release(destination, directory_fd, temporary_fd, temporary_n
     _assert_destination_unchanged(destination, directory_fd)
 
 
-def _cleanup_owned_stage(temporary_fd, temporary_name, directory_fd):
-    """Attempt deletion only when the stage name still refers to our inode."""
-    if temporary_fd is None:
+def _cleanup_owned_stage(temporary_fd, temporary_name, directory_fd, staged_identity=None):
+    """Remove only the unchanged staging inode, even if its initial open failed."""
+    if temporary_fd is None and staged_identity is None:
         return None
     try:
-        staged = os.fstat(temporary_fd)
+        staged = os.fstat(temporary_fd) if temporary_fd is not None else staged_identity
         named = os.stat(temporary_name, dir_fd=directory_fd, follow_symlinks=False)
         if (stat.S_ISDIR(named.st_mode) and
                 (staged.st_dev, staged.st_ino) == (named.st_dev, named.st_ino)):
+            if temporary_fd is None:
+                # mkdir succeeded but an umask/permission step failed before
+                # opening the stage. Restore private access for safe cleanup.
+                os.chmod(temporary_name, 0o700, dir_fd=directory_fd,
+                         follow_symlinks=False)
             shutil.rmtree(temporary_name, dir_fd=directory_fd)
     except FileNotFoundError:
         pass
@@ -409,13 +418,14 @@ def install(bundle, lock, destination, *, destination_is_canonical=False, destin
     Python API callers enforce their own trusted destination/lock provenance.
     """
     require_posix_installation()
+    _require_directory_mode(directory_mode)
     data = _read_pinned_bundle(bundle, lock)
     # Python callers may use macOS system aliases, e.g. /tmp -> /private/tmp.
     destination = Path(destination) if destination_is_canonical else Path(os.path.realpath(destination))
     directory_fd = (os.dup(destination_fd) if destination_fd is not None
                     else _open_install_destination(destination, directory_mode=directory_mode))
     temporary_name = '.install-' + secrets.token_hex(12)
-    temporary_fd = None
+    temporary_fd, staged_identity = None, None
     try:
         _assert_destination_unchanged(destination, directory_fd)
         try:
@@ -425,6 +435,8 @@ def install(bundle, lock, destination, *, destination_is_canonical=False, destin
         else:
             raise ValueError('Immutable install already exists; choose it explicitly or inspect drift')
         os.mkdir(temporary_name, 0o700, dir_fd=directory_fd)
+        staged_identity = os.stat(temporary_name, dir_fd=directory_fd,
+                                  follow_symlinks=False)
         # A caller can inherit an umask of 0777; recover private access by
         # dirfd-relative no-follow chmod without exposing staged data.
         os.chmod(temporary_name, 0o700, dir_fd=directory_fd,
@@ -439,7 +451,7 @@ def install(bundle, lock, destination, *, destination_is_canonical=False, destin
         original_error = sys.exception()
         try:
             cleanup_failure = _cleanup_owned_stage(
-                temporary_fd, temporary_name, directory_fd)
+                temporary_fd, temporary_name, directory_fd, staged_identity)
         finally:
             if temporary_fd is not None:
                 os.close(temporary_fd)

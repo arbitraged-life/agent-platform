@@ -394,6 +394,41 @@ class ReleaseTests(unittest.TestCase):
                     release.main()
             self.assertFalse(missing.exists())
 
+    def test_pinned_fd_cannot_bypass_directory_mode_allowlist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            destination = root / 'installed'
+            destination.mkdir()
+            fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                with self.assertRaisesRegex(ValueError, 'Unsupported release directory mode'):
+                    release.install(bundle, lock, destination, destination_fd=fd,
+                                    destination_is_canonical=True, directory_mode=0o777)
+            finally:
+                os.close(fd)
+            self.assertEqual(list(destination.iterdir()), [])
+
+    def test_failed_staging_chmod_cleans_up_own_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            original_chmod = release.os.chmod
+            injected = []
+
+            def fail_first_staging_chmod(path, mode, *args, **kwargs):
+                if str(path).startswith('.install-') and not injected:
+                    injected.append(True)
+                    raise OSError('injected staging chmod failure')
+                return original_chmod(path, mode, *args, **kwargs)
+
+            with patch.object(release.os, 'chmod',
+                              side_effect=fail_first_staging_chmod):
+                with self.assertRaisesRegex(OSError, 'injected staging chmod failure'):
+                    release.install(bundle, lock, root / 'installed')
+            self.assertTrue(injected)
+            self.assertEqual(list((root / 'installed').iterdir()), [])
+
     def test_staging_cleanup_failure_is_reported_without_masking_cause(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
