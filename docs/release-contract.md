@@ -23,11 +23,36 @@ system `/tmp` symlinks) are accepted only after the lock content pin matches.
 python3 scripts/platform-release.py install --bundle /tmp/agent-platform.tar --lock /tmp/agent-platform.lock.json --expected-lock-sha256 "$EXPECTED_LOCK_SHA256" --destination /tmp/platform-installations
 ```
 
+If a release is intentionally consumed by another OS account, append
+--directory-mode 0750 (for an appropriately shared group) or
+--directory-mode 0755 (world-readable). Omit the option for the safer 0700 default.
+
 Installation checks the bundle digest, paths, entry types, sizes, source commit,
-and every file hash before atomically installing a versioned directory. Existing
-versions are immutable; installation never changes an active service or symlink.
-Consumers choose a verified version explicitly and retain the previous version
-for rollback.
+and every file hash before atomically installing a versioned directory. On Linux
+and macOS, publication uses an OS-provided atomic **no-replace** rename and fails
+closed if the primitive is unavailable. Existing versions are immutable;
+installation never changes an active service or symlink. Consumers choose a
+verified version explicitly and retain the previous version for rollback.
+
+Install and verify use pinned directory descriptors and rewalk every destination
+ancestor without following symlinks before acceptance. CLI callers retain the
+descriptor captured during destination validation, rather than reopening a
+potentially replaced path. Installation roots must not be group/world writable;
+new install roots use a caller-selected mode: 0700 by default, or 0750 or
+0755 for cross-account consumers, under a restrictive umask; temporary staging
+remains private (0700) through validation, then adopts the selected consumer
+mode immediately before atomic publication. The release path depth
+is limited to 32 components to bound descriptors during readback. Archives and
+installed files are read with explicit size bounds; directory enumeration
+is incremental. Cleanup failures are reported, including the staging name.
+If staging fails before a directory descriptor can be opened, cleanup is
+intentionally deferred for manual inspection: a pathname-only inode snapshot
+cannot make recursive deletion safe against replacement races.
+
+These checks detect many concurrent renames and changes; they do not provide
+an immutable filesystem snapshot or protect against an attacker who can rename
+trusted ancestors using the same privileges as the installer. Consumers must
+control their install roots and filesystem writers independently.
 
 Installation and independent permission readback require POSIX filesystem
 mode semantics (Linux/macOS). Windows installation and verification explicitly
@@ -56,8 +81,13 @@ python3 scripts/platform-release.py verify --bundle /tmp/agent-platform.tar --lo
 This read-only command validates the lock and artifact digest, archive manifest,
 installed file inventory and hashes, and reports a source commit, release digest
 and `installed-bytes-verified` state. Verification checks exact installed file
-sizes, all permission bits, and streamed SHA-256 hashes before issuing that
-receipt.
+sizes, all permission bits, and bounded SHA-256 reads before issuing that
+receipt. The Python API verifies byte consistency against a **caller-supplied**
+lock; it cannot independently authenticate that lock's origin. The receipt's
+`lock_origin_authenticated` is explicitly unknown. CLI users must independently
+pin the lock digest and Python callers must enforce an equivalent source of
+trust. Verification is a point-in-time readback, not a guarantee against
+concurrent or subsequent changes by another process.
 The command-line `install` and `verify` entry points require the bundle and
 trusted lock to be co-located, with the exact lock-declared artifact basename.
 Their `--destination` must resolve to a subdirectory of that independently

@@ -84,11 +84,17 @@ class MergePolicyTests(unittest.TestCase):
         # auto_merge_conditions triggers autoqueue, not just a required check.
         # A required Mergify status can evaluate Renovate without queueing it.
         self.assertNotIn("auto_merge_conditions", self.mergify["merge_protections_settings"])
+        # Security PRs cannot enter the queue, so no unreachable high-priority
+        # security queue rule should suggest otherwise.
+        self.assertNotIn("priority_rules", self.mergify)
         queued = [r for r in self.mergify["pull_request_rules"] if "queue" in r["actions"]]
         self.assertEqual(len(queued), 1)
         self.assertEqual(queued[0]["actions"]["queue"]["name"], "default")
         self.assertIn("check-success = @mergify/Mergify Merge Protections", queued[0]["conditions"])
         self.assertIn("-author = renovate[bot]", queued[0]["conditions"])
+        self.assertIn("-title ~= (?i)security", queued[0]["conditions"])
+        self.assertIn("#approved-reviews-by >= 1", queued[0]["conditions"])
+        # Renaming a security PR does not remove the independent review gate.
         choices = next(c["or"] for c in queued[0]["conditions"] if isinstance(c, dict))
         self.assertEqual(choices, [
             "label = merge-ready",
@@ -97,6 +103,8 @@ class MergePolicyTests(unittest.TestCase):
         # No PR is queued merely to satisfy its required Mergify check.
         for rule in self.mergify["queue_rules"]:
             self.assertIn("-author = renovate[bot]", rule["queue_conditions"])
+            self.assertIn("-title ~= (?i)security", rule["queue_conditions"])
+            self.assertIn("#approved-reviews-by >= 1", rule["queue_conditions"])
         for rule in self.mergify["pull_request_rules"]:
             self.assertIn("-author = renovate[bot]", rule["conditions"])
 

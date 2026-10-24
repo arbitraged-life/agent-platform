@@ -41,22 +41,23 @@ queue_rules:
     queue_conditions:
       - base = main
       - -author = renovate[bot]
+      # A renamed security PR must never bypass independent approval.
+      - "#approved-reviews-by >= 1"
+      # Security changes require an intentional reviewed merge, not the owner
+      # fast lane that merged PRs #88 and #91 when they became non-draft.
+      - '-title ~= (?i)security'
       - check-success = @github-actions/validate (ubuntu-24.04)
       - check-success = @github-actions/validate (macos-14)
       - check-success = @github-actions/secrets
       - check-success = qlty check
-
-priority_rules:
-  - name: security fixes first
-    conditions:
-      - title ~= \[security\]
-    priority: high
 
 pull_request_rules:
   - name: queue reviewed non-Renovate PRs after required checks
     conditions:
       - base = main
       - -author = renovate[bot]
+      - "#approved-reviews-by >= 1"
+      - '-title ~= (?i)security'
       - -draft
       - -closed
       - -conflict

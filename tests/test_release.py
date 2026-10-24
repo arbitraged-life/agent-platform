@@ -229,6 +229,379 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'path traversal'):
                 invoke('install', trusted / '..' / 'outside')
 
+    def test_atomic_publication_refuses_concurrent_target_creation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            destination = root / 'installed'
+            publish = release._rename_no_replace
+            raced = []
+
+            def create_target_before_publish(stage, commit, directory_fd):
+                target = destination / commit
+                target.mkdir()
+                (target / 'sentinel').write_text('must survive')
+                raced.append(True)
+                return publish(stage, commit, directory_fd)
+
+            with patch.object(release, '_rename_no_replace',
+                              side_effect=create_target_before_publish):
+                with self.assertRaises(FileExistsError):
+                    release.install(bundle, lock, destination)
+            self.assertTrue(raced)
+            self.assertEqual((destination / lock['commit'] / 'sentinel').read_text(),
+                             'must survive')
+            self.assertFalse(list(destination.glob('.install-*')))
+
+    def test_cli_rejects_replaced_destination_inode_after_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trusted = root / 'trusted'
+            trusted.mkdir()
+            ancestor = trusted / 'mutable'
+            ancestor.mkdir()
+            (ancestor / 'installed').mkdir()
+            bundle, lock = self.bundle(trusted)
+            lock_path = trusted / 'release.lock.json'
+            lock_path.write_text(json.dumps(lock))
+            argv = ['platform-release.py', 'install', '--bundle', str(bundle),
+                    '--lock', str(lock_path),
+                    '--expected-lock-sha256', release.sha(lock_path.read_bytes()),
+                    '--destination', str(ancestor / 'installed')]
+            original_install = release.install
+            mutated = []
+
+            def replace_after_validation(*args, **kwargs):
+                self.assertIsNotNone(kwargs.get('destination_fd'),
+                                     'CLI must pin the validated destination fd')
+                ancestor.rename(root / 'moved-ancestor')
+                ancestor.mkdir()
+                (ancestor / 'installed').mkdir()
+                mutated.append(True)
+                return original_install(*args, **kwargs)
+
+            with patch.object(sys, 'argv', argv), patch.object(
+                    release, 'install', side_effect=replace_after_validation):
+                with self.assertRaisesRegex(ValueError, 'destination changed'):
+                    release.main()
+            self.assertTrue(mutated)
+            self.assertFalse((ancestor / 'installed' / lock['commit']).exists())
+            self.assertFalse((root / 'moved-ancestor' / 'installed' /
+                              lock['commit']).exists())
+
+    def test_install_detects_ancestor_relocation_before_returning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ancestor = root / 'ancestor'
+            ancestor.mkdir()
+            destination = ancestor / 'installed'
+            bundle, lock = self.bundle(root)
+            publish = release._rename_no_replace
+
+            def relocate_at_publish(stage, commit, directory_fd):
+                ancestor.rename(root / 'relocated-ancestor')
+                ancestor.symlink_to(root / 'relocated-ancestor',
+                                    target_is_directory=True)
+                return publish(stage, commit, directory_fd)
+
+            with patch.object(release, '_rename_no_replace',
+                              side_effect=relocate_at_publish):
+                with self.assertRaises((ValueError, OSError)):
+                    release.install(bundle, lock, destination)
+            self.assertTrue(ancestor.is_symlink())
+            self.assertTrue((root / 'relocated-ancestor' / 'installed').exists())
+
+    @unittest.skipUnless(sys.platform == 'darwin' or hasattr(os, 'O_PATH') or hasattr(os, 'O_SEARCH'),
+                         'Search-only POSIX descriptor support required')
+    def test_search_only_ancestor_allows_valid_install(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ancestor = root / 'search-only'
+            ancestor.mkdir()
+            destination = ancestor / 'installed'
+            destination.mkdir()
+            bundle, lock = self.bundle(root)
+            ancestor.chmod(0o111)
+            try:
+                target = release.install(bundle, lock, destination)
+                self.assertTrue((target / 'runtime/main.mjs').is_file())
+            finally:
+                ancestor.chmod(0o700)
+
+    def test_public_directory_permissions_and_private_staging(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            directory = root / 'installed'
+            original_extract = release._extract_bundle
+            seen_modes = []
+
+            def check_staging(data, fd):
+                seen_modes.append(os.fstat(fd).st_mode & 0o777)
+                return original_extract(data, fd)
+
+            with patch.object(release, '_extract_bundle', side_effect=check_staging):
+                release.install(bundle, lock, directory, directory_mode=0o755)
+            self.assertTrue(directory.stat().st_mode & 0o011,
+                            'other accounts must be able to traverse release roots')
+            self.assertEqual(seen_modes, [0o700])
+            published = directory / lock['commit']
+            self.assertEqual(published.stat().st_mode & 0o777, 0o755)
+            directory.chmod(0o777)
+            with self.assertRaisesRegex(ValueError, 'Unsafe writable release'):
+                release.install(bundle, lock, directory)
+
+    def test_directory_mode_defaults_private_and_rejects_unsafe_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            published = release.install(bundle, lock, root / 'private-install')
+            self.assertEqual((root / 'private-install').stat().st_mode & 0o777, 0o700)
+            self.assertEqual(published.stat().st_mode & 0o777, 0o700)
+            for unsafe in (0o777, 0o766, 0, True, None):
+                with self.subTest(mode=unsafe), self.assertRaisesRegex(
+                        ValueError, 'Unsupported release directory mode'):
+                    release.install(bundle, lock, root / 'unsafe-install',
+                                    directory_mode=unsafe)
+
+    def test_restrictive_umask_does_not_block_new_directory_creation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            old_umask = os.umask(0o777)
+            try:
+                published = release.install(bundle, lock,
+                                            root / 'subdir/installed',
+                                            directory_mode=0o755)
+            finally:
+                os.umask(old_umask)
+            self.assertEqual(published.stat().st_mode & 0o777, 0o755)
+            self.assertEqual((root / 'subdir').stat().st_mode & 0o777, 0o755)
+
+    def test_missing_cli_verification_destination_is_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            pin_file = root / 'release.lock.json'
+            pin_file.write_text(json.dumps(lock))
+            missing = root / 'missing-destination'
+            argv = ['platform-release.py', 'verify', '--bundle', str(bundle),
+                    '--lock', str(pin_file),
+                    '--expected-lock-sha256', release.sha(pin_file.read_bytes()),
+                    '--destination', str(missing)]
+            with patch.object(sys, 'argv', argv), patch.object(sys, 'stdout', io.StringIO()):
+                with self.assertRaises(OSError):
+                    release.main()
+            self.assertFalse(missing.exists())
+
+    def test_pinned_fd_cannot_bypass_directory_mode_allowlist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            destination = root / 'installed'
+            destination.mkdir()
+            fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                with self.assertRaisesRegex(ValueError, 'Unsupported release directory mode'):
+                    release.install(bundle, lock, destination, destination_fd=fd,
+                                    destination_is_canonical=True, directory_mode=0o777)
+            finally:
+                os.close(fd)
+            self.assertEqual(list(destination.iterdir()), [])
+
+    def test_failed_staging_chmod_reports_manual_cleanup_without_deleting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            original_chmod = release.os.chmod
+            injected = []
+
+            def fail_first_staging_chmod(path, mode, *args, **kwargs):
+                if str(path).startswith('.install-') and not injected:
+                    injected.append(True)
+                    raise OSError('injected staging chmod failure')
+                return original_chmod(path, mode, *args, **kwargs)
+
+            with patch.object(release.os, 'chmod',
+                              side_effect=fail_first_staging_chmod):
+                with self.assertRaisesRegex(
+                        OSError, 'injected staging chmod failure') as caught:
+                    release.install(bundle, lock, root / 'installed')
+            self.assertTrue(injected)
+            stages = list((root / 'installed').glob('.install-*'))
+            self.assertEqual(len(stages), 1)
+            self.assertTrue(any('manual inspection required' in note and
+                                stages[0].name in note
+                                for note in caught.exception.__notes__))
+            # The caller, not the installer, owns explicit cleanup of a stage
+            # that never had a securely opened descriptor.
+            shutil.rmtree(stages[0])
+
+    def test_staging_cleanup_failure_is_reported_without_masking_cause(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            def fail_extract(*args):
+                raise ValueError('original validation failure')
+
+            with patch.object(release, '_extract_bundle', side_effect=fail_extract):
+                with patch.object(release.shutil, 'rmtree', side_effect=OSError(
+                        'simulated cleanup failure')):
+                    with self.assertRaisesRegex(ValueError, 'original validation failure') as caught:
+                        release.install(bundle, lock, root / 'installed')
+            self.assertTrue(any('cleanup failed' in note for note in caught.exception.__notes__))
+
+    def test_depth_limit_applies_to_bundle_paths(self):
+        too_deep = '/'.join(['nested'] * 33)
+        with self.assertRaisesRegex(ValueError, 'Unsafe release entry'):
+            release.release_path(too_deep)
+
+    def test_python_install_rejects_bundle_alias_that_verify_would_reject(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            alias = root / 'otherwise-valid-alias.tar'
+            shutil.copy2(bundle, alias)
+            with self.assertRaisesRegex(ValueError, 'artifact filename mismatch'):
+                release.install(alias, lock, root / 'installed')
+
+    def test_receipt_discloses_unknown_python_lock_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            release.install(bundle, lock, root / 'installed')
+            self.assertIsNone(release.verify_installation(bundle, lock, root / 'installed')
+                              ['lock_origin_authenticated'])
+
+    def test_readback_rejects_growing_file_after_initial_size_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            target = release.install(bundle, lock, root / 'installed')
+            candidate = target / 'runtime/main.mjs'
+            inode = candidate.stat().st_ino
+            original_fstat = release.os.fstat
+            grew = False
+
+            def grow_after_size_check(fd):
+                nonlocal grew
+                current = original_fstat(fd)
+                if current.st_ino == inode and not grew:
+                    grew = True
+                    with candidate.open('ab') as stream:
+                        stream.write(b'x' * 4096)
+                return current
+
+            with patch.object(release.os, 'fstat', side_effect=grow_after_size_check):
+                with self.assertRaisesRegex(ValueError, 'size changed during readback'):
+                    release.verify_installation(bundle, lock, root / 'installed')
+            self.assertTrue(grew, 'the test must grow the file after its first size check')
+
+    def test_readback_rejects_nested_file_replacement_after_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            target = release.install(bundle, lock, root / 'installed')
+            candidate = target / 'runtime/main.mjs'
+            original_read = release._read_installed_file
+            swapped = False
+
+            def replace_after_hash(directory_fd, component, expected_mode, expected_size):
+                nonlocal swapped
+                digest = original_read(directory_fd, component, expected_mode, expected_size)
+                if component == 'main.mjs' and not swapped:
+                    swapped = True
+                    candidate.rename(root / 'old-main.mjs')
+                    candidate.write_bytes((root / 'old-main.mjs').read_bytes())
+                return digest
+
+            with patch.object(release, '_read_installed_file', side_effect=replace_after_hash):
+                with self.assertRaisesRegex(ValueError, 'directory changed during readback'):
+                    release.verify_installation(bundle, lock, root / 'installed')
+            self.assertTrue(swapped)
+
+    def test_readback_rejects_nested_directory_replacement_after_open(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            target = release.install(bundle, lock, root / 'installed')
+            nested = target / 'runtime'
+            original_entry = release._read_installed_entry
+            swapped = False
+
+            def replace_after_open(*args):
+                nonlocal swapped
+                fd, digest = original_entry(*args)
+                if args[1] == 'runtime' and not swapped:
+                    swapped = True
+                    nested.rename(root / 'old-runtime')
+                    shutil.copytree(root / 'old-runtime', nested)
+                return fd, digest
+
+            with patch.object(release, '_read_installed_entry', side_effect=replace_after_open):
+                with self.assertRaisesRegex(ValueError, 'directory changed during readback'):
+                    release.verify_installation(bundle, lock, root / 'installed')
+            self.assertTrue(swapped)
+
+    def test_cli_install_rejects_parent_symlink_swap_after_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trusted = root / 'trusted'
+            trusted.mkdir()
+            stage = trusted / 'staging'
+            stage.mkdir()
+            outside = root / 'outside'
+            outside.mkdir()
+            bundle, lock = self.bundle(trusted)
+            lock_path = trusted / 'release.lock.json'
+            lock_path.write_text(json.dumps(lock))
+            argv = ['platform-release.py', 'install', '--bundle', str(bundle),
+                    '--lock', str(lock_path),
+                    '--expected-lock-sha256', release.sha(lock_path.read_bytes()),
+                    '--destination', str(stage / 'installed')]
+            original_install = release.install
+            swapped = False
+
+            def install_after_symlink_swap(*args, **kwargs):
+                nonlocal swapped
+                swapped = True
+                stage.rename(root / 'old-staging')
+                stage.symlink_to(outside, target_is_directory=True)
+                return original_install(*args, **kwargs)
+
+            with patch.object(sys, 'argv', argv), patch.object(release, 'install',
+                side_effect=install_after_symlink_swap):
+                with self.assertRaises(OSError):
+                    release.main()
+            self.assertTrue(swapped)
+            self.assertEqual(list(outside.iterdir()), [])
+
+    def test_install_rejects_staging_directory_swap_before_atomic_rename(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            dest = root / 'installed'
+            outside = root / 'outside'
+            outside.mkdir()
+            original_extract = release._extract_bundle
+            swapped = False
+
+            def swap_staging_after_extract(data, directory_fd):
+                nonlocal swapped
+                original_extract(data, directory_fd)
+                temporary = next(dest.glob('.install-*'))
+                temporary.rename(root / 'retired-staging')
+                temporary.symlink_to(outside, target_is_directory=True)
+                swapped = True
+
+            with patch.object(release, '_extract_bundle',
+                              side_effect=swap_staging_after_extract):
+                with self.assertRaisesRegex(ValueError, 'staging directory changed'):
+                    release.install(bundle, lock, dest)
+            self.assertTrue(swapped)
+            self.assertEqual(list(outside.iterdir()), [])
+            self.assertFalse((dest / lock['commit']).exists())
+
     def test_release_readback_rejects_installed_symlinked_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
