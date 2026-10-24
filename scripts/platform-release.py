@@ -174,7 +174,13 @@ def cli_bundle_and_lock(bundle_arg, lock_arg):
     return expected, lock
 
 
+def require_posix_installation():
+    if os.name != 'posix':
+        raise RuntimeError('Release installation and permission verification require POSIX filesystems')
+
+
 def install(bundle, lock, destination):
+    require_posix_installation()
     validate_lock(lock)
     if bundle.stat().st_size > MAX_RELEASE_BYTES:
         raise ValueError('Release bundle exceeds size limit')
@@ -211,6 +217,7 @@ def verify_installation(bundle, lock, destination):
     Read-only acceptance evidence. Passing does NOT prove that an installed
     release is selected, deployed, executing, or permitted to act.
     """
+    require_posix_installation()
     validate_lock(lock)
     if bundle.name != lock['artifact'] or bundle.stat().st_size > MAX_RELEASE_BYTES:
         raise ValueError('Release artifact name/size mismatch')
@@ -235,6 +242,7 @@ def verify_installation(bundle, lock, destination):
         if MANIFEST_NAME not in names:
             raise ValueError('Missing release manifest')
         expected_modes = {member.name: (0o755 if member.mode & 0o111 else 0o644) for member in members}
+        expected_sizes = {member.name: member.size for member in members}
         manifest_bytes = archive.extractfile(MANIFEST_NAME).read()
         manifest = json.loads(manifest_bytes)
         if manifest.get('schema_version') != 1 or manifest.get('commit') != lock['commit']:
@@ -255,7 +263,7 @@ def verify_installation(bundle, lock, destination):
     for file in target.rglob('*'):
         if file.is_symlink():
             raise ValueError('Installed release has a symbolic link')
-        name = str(file.relative_to(target))
+        name = file.relative_to(target).as_posix()
         if file.is_dir():
             if name not in expected_dirs:
                 raise ValueError('Installed release file inventory mismatch')
@@ -264,14 +272,21 @@ def verify_installation(bundle, lock, destination):
             raise ValueError('Installed release has a special file')
         if name not in expected_modes:
             raise ValueError('Installed release file inventory mismatch')
-        # Include setuid/setgid/sticky bits; masking to 0777 would certify
-        # unintended elevated permissions despite the canonical 0644/0755 mode.
-        if stat.S_IMODE(file.stat().st_mode) != expected_modes[name]:
-            raise ValueError('Installed release permission mismatch')
-        installed[name] = sha(file.read_bytes())
+        # O_NOFOLLOW avoids trusting a symlink swapped in after the initial
+        # inventory check. Inspect the opened inode, not a prior path stat.
+        descriptor = os.open(file, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, 'rb') as stream:
+            current = os.fstat(stream.fileno())
+            if not stat.S_ISREG(current.st_mode):
+                raise ValueError('Installed release has a special file')
+            if current.st_size != expected_sizes[name]:
+                raise ValueError('Installed release size mismatch')
+            if stat.S_IMODE(current.st_mode) != expected_modes[name]:
+                raise ValueError('Installed release permission mismatch')
+            installed[name] = hashlib.file_digest(stream, 'sha256').hexdigest()
         if len(installed) > 10000:
             raise ValueError('Too many installed release entries')
-    if set(installed) != names or (target / MANIFEST_NAME).read_bytes() != manifest_bytes:
+    if set(installed) != names or installed[MANIFEST_NAME] != sha(manifest_bytes):
         raise ValueError('Installed release file inventory/manifest mismatch')
     if any(installed[name] != expected for name, expected in declared.items()):
         raise ValueError('Installed release content mismatch')

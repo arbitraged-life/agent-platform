@@ -20,7 +20,13 @@ Installation checks the bundle digest, paths, entry types, sizes, source commit,
 and every file hash before atomically installing a versioned directory. Existing
 versions are immutable; installation never changes an active service or symlink.
 Consumers choose a verified version explicitly and retain the previous version
-for rollback. Bootstrap the installer from an independently pinned source commit;
+for rollback.
+
+Install and independent permission readback require POSIX filesystem mode
+semantics (Linux/macOS); Windows installation and verification explicitly fail
+rather than misrepresenting POSIX executable permissions. Installed files are
+checked for exact expected size, complete permission bits, and streamed SHA-256
+hashes before any `installed-bytes-verified` result is issued. Bootstrap the installer from an independently pinned source commit;
 never execute an installer extracted from an unverified download.
 
 Reusable workflows are consumed at a full commit SHA. Account-specific triggers,

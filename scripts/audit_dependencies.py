@@ -42,13 +42,17 @@ def audit_dependencies(root=ROOT, *, runner=subprocess.run):
             counts = report["metadata"]["vulnerabilities"]
             if any(type(counts.get(level)) is not int or counts[level] < 0 for level in SEVERITIES):
                 raise ValueError("invalid advisory counts")
-            issues = report.get("vulnerabilities", {})
-            if not isinstance(issues, dict):
+            issues = report["vulnerabilities"]
+            if not isinstance(issues, dict) or any(
+                    not isinstance(detail, dict) or detail.get("severity") not in SEVERITIES
+                    for detail in issues.values()):
                 raise ValueError("invalid vulnerability map")
+            if bool(issues) != any(counts[level] for level in SEVERITIES):
+                raise ValueError("inconsistent advisory summary and vulnerability map")
         except (ValueError, KeyError, TypeError) as exc:
             raise RuntimeError(f"Dependency advisory response unavailable: {relative}") from exc
         exposed = sorted(name for name, detail in issues.items()
-                         if isinstance(detail, dict) and detail.get("severity") in {"high", "critical"})
+                         if detail["severity"] in {"high", "critical"})
         reports.append({"lockfile": relative, "counts": {k: counts[k] for k in SEVERITIES},
                         "vulnerable_high_packages": exposed})
         if result.returncode != 0 or exposed or counts["high"] or counts["critical"]:

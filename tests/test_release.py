@@ -161,7 +161,9 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(receipt['verified_files'], 1)
             self.assertIsNone(receipt['runtime_deployed'])
             self.assertIsNone(receipt['runtime_accepted'])
-            (target / 'runtime/main.mjs').write_text('tampered')
+            installed_file = target / 'runtime/main.mjs'
+            original = installed_file.read_bytes()
+            installed_file.write_bytes(b'X' + original[1:])  # same length, different digest
             with self.assertRaisesRegex(ValueError, 'content mismatch'):
                 release.verify_installation(bundle, lock, installed)
 
@@ -198,6 +200,26 @@ class ReleaseTests(unittest.TestCase):
             (target / 'runtime/main.mjs').chmod(0o755)
             with self.assertRaisesRegex(ValueError, 'permission mismatch'):
                 release.verify_installation(bundle, lock, root / 'installed')
+
+    def test_release_readback_rejects_oversized_installed_file_without_reading_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            target = release.install(bundle, lock, root / 'installed')
+            with (target / 'runtime/main.mjs').open('wb') as stream:
+                stream.truncate(release.MAX_RELEASE_BYTES + 1024)
+            with self.assertRaisesRegex(ValueError, 'size mismatch'):
+                release.verify_installation(bundle, lock, root / 'installed')
+
+    def test_installation_refuses_platform_without_posix_permission_guarantees(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            with patch.object(release.os, 'name', 'nt'):
+                with self.assertRaisesRegex(RuntimeError, 'require POSIX'):
+                    release.install(bundle, lock, root / 'installed')
+                with self.assertRaisesRegex(RuntimeError, 'require POSIX'):
+                    release.verify_installation(bundle, lock, root / 'installed')
 
     def test_release_readback_refuses_setuid_or_setgid_permission_drift(self):
         with tempfile.TemporaryDirectory() as tmp:

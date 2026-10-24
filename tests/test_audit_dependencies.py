@@ -27,7 +27,8 @@ class AdvisoryTests(unittest.TestCase):
         return json.dumps({
             "metadata": {"vulnerabilities": {"info": 0, "low": 0, "moderate": moderate,
                                             "high": high, "critical": 0}},
-            "vulnerabilities": ({package: {"severity": "high"}} if high else {}),
+            "vulnerabilities": ({package: {"severity": "high"}} if high else
+                                {package: {"severity": "moderate"}} if moderate else {}),
         })
 
     def test_both_root_and_nested_dev_lockfiles_are_audited_without_install(self):
@@ -79,6 +80,24 @@ class AdvisoryTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, self.report(), "registry degraded")
             with self.assertRaisesRegex(RuntimeError, "stderr unavailable"):
                 module.audit_dependencies(root, runner=runner)
+
+    def test_missing_and_malformed_vulnerability_map_fail_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.fixture(root)
+            report = json.loads(self.report())
+            variants = [
+                {key: value for key, value in report.items() if key != 'vulnerabilities'},
+                {**report, 'vulnerabilities': {'undici': None}},
+                {**report, 'vulnerabilities': {'undici': {}}},
+                {**report, 'vulnerabilities': {'undici': {'severity': 'mystery'}}},
+                {**report, 'metadata': {'vulnerabilities': {**report['metadata']['vulnerabilities'],
+                                                           'moderate': 1}}},
+            ]
+            for payload in variants:
+                with self.subTest(payload=payload), self.assertRaisesRegex(RuntimeError, 'unavailable'):
+                    module.audit_dependencies(root, runner=lambda command, **kwargs:
+                                              subprocess.CompletedProcess(command, 0, json.dumps(payload)))
 
     def test_missing_nested_lockfile_is_not_silently_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
