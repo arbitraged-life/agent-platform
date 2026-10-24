@@ -78,8 +78,19 @@ The generic protection requires Linux and macOS validation, the GitHub secrets
 job, Qlty, GitGuardian, Socket, no changes-requested reviews, and a Conventional
 Commit title. These checks are not weakened by automatic queueing: if any
 required check is absent, pending, or failing, Mergify cannot merge.
-Mergify excludes Renovate from automatic queue entry, queue conditions,
-conflict notifications, and stale-PR housekeeping.
+Mergify's required **Merge Protections** check evaluates Renovate PRs under
+all standard CI/security gates. This does **not** put Renovate into Mergify's
+merge queue: the explicit queue rule still excludes `renovate[bot]`.
+Renovate's version- and risk-scoped native GitHub auto-merge controls whether
+its own PR is eligible; high-risk/major upgrades remain review-only.
+Mergify still excludes Renovate from queue execution, conflict notifications,
+and stale-PR housekeeping. Keep these gates separate to avoid a circular
+requirement in which GitHub demands a Mergify status that refuses all bot PRs.
+
+The temporary `.github/actionlint.yaml` suppresses only the stale diagnostic
+`label "ubuntu-26.04" is unknown.` for workflow files. This hosted image is
+supported by GitHub; it does **not** suppress other actionlint checks. Remove
+the compatibility expression after actionlint's bundled label set is updated.
 
 ## CI-green automatic queueing
 

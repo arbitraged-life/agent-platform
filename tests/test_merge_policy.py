@@ -1,5 +1,6 @@
 """Public dependency merge ownership and eligibility contract."""
 import json
+import re
 from pathlib import Path
 import unittest
 import yaml
@@ -72,21 +73,30 @@ class MergePolicyTests(unittest.TestCase):
 
     def test_mergify_does_not_queue_or_housekeep_renovate(self):
         self.assertEqual(self.mergify["merge_protections_settings"]["auto_merge_conditions"], [
-            "-author = renovate[bot]",
             {"or": [
-                "label = merge-ready",
+                "author = renovate[bot]",  # required check can pass; queue rules still exclude bot
+                "label = merge-ready",  # explicit selection for old/external PRs
                 {"and": ["author = arbitraged-life", "-from-fork", "number > 87"]},
             ]},
         ])
-        # Historical PRs remain intentionally outside the new unconditional path.
-        # Green checks must not independently authorize external/forked contributions.
-        self.assertTrue(any("label = merge-ready" in branch if isinstance(branch, str)
-                            else False
-                            for branch in self.mergify["merge_protections_settings"]["auto_merge_conditions"][1]["or"]))
+        # Historical PRs remain intentionally outside the unconditional owner path.
+        # Passing status is not permission to auto-queue Renovate/other contributors.
         for rule in self.mergify["queue_rules"]:
             self.assertIn("-author = renovate[bot]", rule["queue_conditions"])
         for rule in self.mergify["pull_request_rules"]:
             self.assertIn("-author = renovate[bot]", rule["conditions"])
+
+    def test_actionlint_compatibility_is_one_exact_runner_label(self):
+        config = yaml.safe_load((ROOT / ".github/actionlint.yaml").read_text())
+        ignores = config["paths"][".github/workflows/**/*.{yml,yaml}"]["ignore"]
+        self.assertEqual(len(ignores), 1)
+        regex = ignores[0]
+        self.assertIsNotNone(re.search(regex, 'label "ubuntu-26.04" is unknown. available labels are ...'))
+        for other in ('label "ubuntu-26.04-arm" is unknown.',
+                      'label "ubuntu-26.05" is unknown.',
+                      'job has unpinned uses reference',
+                      'label "ubuntu-26.04" conflicts with other label'):
+            self.assertIsNone(re.search(regex, other))
 
     def test_existing_required_security_and_ci_results_remain(self):
         gate = next(r for r in self.mergify["merge_protections"] if r["name"] == "main branch validation")

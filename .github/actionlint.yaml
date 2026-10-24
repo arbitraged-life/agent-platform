@@ -1,0 +1,7 @@
+# Temporary compatibility for actionlint versions that lag GitHub's official
+# ubuntu-26.04 hosted runner label (GA 2026-09-17). Remove when recognized.
+# Ignore only this exact unknown-label diagnostic; all other lint rules remain.
+paths:
+  ".github/workflows/**/*.{yml,yaml}":
+    ignore:
+      - 'label "ubuntu-26[.]04" is unknown[.]'
