@@ -143,8 +143,34 @@ def validate_lock(lock):
         raise ValueError('Unsupported release lock')
     if not isinstance(lock['commit'], str) or not re.fullmatch('[0-9a-f]{40}', lock['commit']) or not isinstance(lock['sha256'], str) or not re.fullmatch('[0-9a-f]{64}', lock['sha256']):
         raise ValueError('Invalid release identity')
-    if not isinstance(lock['artifact'], str) or lock['artifact'] != Path(lock['artifact']).name or not lock['artifact']:
+    if (not isinstance(lock['artifact'], str) or not lock['artifact'] or
+            lock['artifact'] in {'.', '..'} or lock['artifact'] != Path(lock['artifact']).name or
+            PureWindowsPath(lock['artifact']).name != lock['artifact']):
         raise ValueError('Invalid release artifact name')
+
+
+def cli_bundle_and_lock(bundle_arg, lock_arg):
+    """Constrain CLI-selected artifact bytes to the directory of a trusted lock.
+
+    These inputs can be supplied by an LLM or user. Trust the explicitly
+    selected lock's parent as the artifact directory, never an independent
+    arbitrary `--bundle` path. Keep direct Python install/verify calls usable
+    for consumers that already enforce their own artifact trust boundary.
+    """
+    if (bundle_arg.is_symlink() or lock_arg.is_symlink() or
+            '..' in bundle_arg.parts or '..' in lock_arg.parts):
+        raise ValueError('Unsafe release argument path')
+    trusted_lock = lock_arg.resolve(strict=True)
+    trusted_dir = trusted_lock.parent
+    lock = json.loads(trusted_lock.read_text())
+    validate_lock(lock)
+    expected = trusted_dir / lock['artifact']
+    supplied = bundle_arg.resolve(strict=True)
+    if not supplied.is_relative_to(trusted_dir) or supplied != expected:
+        raise ValueError('Release bundle must share the trusted lock directory and exact artifact name')
+    if not supplied.is_file() or supplied.is_symlink():
+        raise ValueError('Unsafe release bundle file')
+    return expected, lock
 
 
 def install(bundle, lock, destination):
@@ -275,10 +301,12 @@ def main():
     args = parser.parse_args()
     if args.command == 'build':
         print(json.dumps(build(args.root, args.output), indent=2))
-    elif args.command == 'install':
-        print(install(args.bundle, json.loads(args.lock.read_text()), args.destination))
-    else:
-        print(json.dumps(verify_installation(args.bundle, json.loads(args.lock.read_text()), args.destination), indent=2))
+    elif args.command in {'install', 'verify'}:
+        pinned_bundle, pinned_lock = cli_bundle_and_lock(args.bundle, args.lock)
+        if args.command == 'install':
+            print(install(pinned_bundle, pinned_lock, args.destination))
+        else:
+            print(json.dumps(verify_installation(pinned_bundle, pinned_lock, args.destination), indent=2))
 
 
 if __name__ == '__main__':

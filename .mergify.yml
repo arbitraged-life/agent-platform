@@ -8,9 +8,12 @@ merge_protections_settings:
   # New owner-authored, same-repository PRs queue after required CI and
   # Merge Protections pass. Existing PRs stay label-gated to avoid bulk
   # merging the pre-cutover backlog; Renovate keeps its own merge owner.
+  # Evaluate Renovate against the required protection check while keeping
+  # actual Mergify queue rules Renovate-excluded. Renovate's own per-PR
+  # eligibility policy owns native GitHub auto-merge; no bulk major merge.
   auto_merge_conditions:
-    - -author = renovate[bot]
     - or:
+        - author = renovate[bot]
         - label = merge-ready
         - and:
             - author = arbitraged-life

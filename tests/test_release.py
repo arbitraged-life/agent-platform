@@ -165,6 +165,30 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'content mismatch'):
                 release.verify_installation(bundle, lock, installed)
 
+    def test_cli_verify_accepts_lock_pinned_colocated_bundle_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle, lock = self.bundle(root)
+            release.install(bundle, lock, root / 'installed')
+            lock_path = root / 'release.lock.json'
+            lock_path.write_text(json.dumps(lock))
+            def verify(bundle_path, lock_file):
+                return subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / 'scripts/platform-release.py'),
+                                       'verify', '--bundle', str(bundle_path), '--lock', str(lock_file),
+                                       '--destination', str(root / 'installed')], capture_output=True, text=True)
+            valid = verify(bundle, lock_path)
+            self.assertEqual(valid.returncode, 0, valid.stderr)
+            self.assertEqual(json.loads(valid.stdout)['status'], 'installed-bytes-verified')
+            another = root / 'another'
+            another.mkdir()
+            foreign_lock = another / 'release.lock.json'
+            foreign_lock.write_text(json.dumps(lock))
+            outside = verify(bundle, foreign_lock)
+            self.assertNotEqual(outside.returncode, 0)
+            self.assertIn('must share the trusted lock directory', outside.stderr)
+            with self.assertRaisesRegex(ValueError, 'Invalid release artifact name'):
+                release.validate_lock({**lock, 'artifact': '..\\unsafe.tar'})
+
     def test_release_readback_refuses_permission_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

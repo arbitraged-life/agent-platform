@@ -81,17 +81,14 @@ class MergePolicyTests(unittest.TestCase):
 
     def test_mergify_does_not_queue_or_housekeep_renovate(self):
         self.assertEqual(self.mergify["merge_protections_settings"]["auto_merge_conditions"], [
-            "-author = renovate[bot]",
             {"or": [
-                "label = merge-ready",
+                "author = renovate[bot]",  # required check can pass; queue rules still exclude bot
+                "label = merge-ready",  # explicit selection for old/external PRs
                 {"and": ["author = arbitraged-life", "-from-fork", "number > 87"]},
             ]},
         ])
-        # Historical PRs remain intentionally outside the new unconditional path.
-        # Green checks must not independently authorize external/forked contributions.
-        self.assertTrue(any("label = merge-ready" in branch if isinstance(branch, str)
-                            else False
-                            for branch in self.mergify["merge_protections_settings"]["auto_merge_conditions"][1]["or"]))
+        # Historical PRs remain intentionally outside the unconditional owner path.
+        # Passing status is not permission to auto-queue Renovate/other contributors.
         for rule in self.mergify["queue_rules"]:
             self.assertIn("-author = renovate[bot]", rule["queue_conditions"])
         for rule in self.mergify["pull_request_rules"]:
