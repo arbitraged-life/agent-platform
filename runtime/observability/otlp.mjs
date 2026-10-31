@@ -4,7 +4,10 @@ import { DeliveryError, acceptedReceipt, sendTelemetry } from "./delivery.mjs";
 import configSchema from "../../schemas/otlp-config.schema.json" with { type: "json" };
 
 const HOSTS = {
-  honeycomb: new Set(["api.honeycomb.io", "api.eu1.honeycomb.io"]),
+  honeycomb: new Set([
+    "api.honeycomb.io",
+    "api.eu1.honeycomb.io",
+  ]),
   logfire: new Set(["logfire-us.pydantic.dev", "logfire-eu.pydantic.dev"]),
 };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
