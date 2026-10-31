@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync } from "node:crypto";
+import { createServer } from "node:http";
 import { createUuidV7, turnEvent } from "../../runtime/observability/records.mjs";
 import { evidenceRecord, validateEvidence, validateObservabilityRecord } from "../../runtime/observability/evidence.mjs";
 import { createOtlpExporter, mapOtlpRecord, otelSpanId, otelTraceId } from "../../runtime/observability/otlp.mjs";
@@ -27,6 +28,36 @@ const configurations = {
   honeycomb: { schema_version: 1, destination: "honeycomb", endpoint: "https://api.honeycomb.io", credential_env: "TOKEN", service_name: "agents" },
   logfire: { schema_version: 1, destination: "logfire", endpoint: "https://logfire-us.pydantic.dev", credential_env: "TOKEN", service_name: "agents" },
 };
+
+test("HTTP redirects are rejected explicitly without forwarding telemetry credentials", async (t) => {
+  let initial = 0, redirected = 0;
+  const server = createServer((request, response) => {
+    request.resume();
+    if (request.url === "/ingest") {
+      initial++;
+      response.writeHead(307, { location: "/redirected" }).end();
+    } else {
+      redirected++;
+      response.writeHead(200, { "content-type": "application/json" }).end("{}");
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    server.closeAllConnections();
+    return new Promise((resolve) => server.close(resolve));
+  });
+  for (const destination of ["honeycomb", "logfire"]) {
+    const exporter = createOtlpExporter(configurations[destination], {
+      environment: { TOKEN: "synthetic-credential" },
+      fetcher: (_url, options) => fetch(`http://127.0.0.1:${server.address().port}/ingest`, options),
+    });
+    await assert.rejects(() => exporter(bundle([finish()])), (error) =>
+      error.receipt.reason_code === "HTTP_307" &&
+      error.receipt.delivery_status === "failed" && error.receipt.retryable === false);
+  }
+  assert.equal(initial, 2);
+  assert.equal(redirected, 0);
+});
 
 test("stable OTLP IDs and exactly one completed root with child tool; no invented model span", () => {
   const records = [start(), operation(), finish()];

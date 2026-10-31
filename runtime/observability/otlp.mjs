@@ -348,7 +348,7 @@ export function createOtlpExporter(configuration, { environment = process.env, f
       try {
         response = await sendTelemetry(fetcher,
           `${config.endpoint}/v1/${signal === "spans" ? "traces" : "logs"}`, {
-            method: "POST", redirect: "error", signal: AbortSignal.timeout(5000),
+            method: "POST", redirect: "manual", signal: AbortSignal.timeout(5000),
             headers: { "Content-Type": isJson ? "application/json" : "application/x-protobuf",
               ...(isJson ? { "x-honeycomb-team": credential } : { Authorization: credential }) },
             body,

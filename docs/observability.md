@@ -210,9 +210,11 @@ terminal event; the bundle preserves stable event IDs and parent references.
 The standard OTLP/HTTP transport uses JSON for Honeycomb and protobuf for Logfire, with explicit regional endpoints,
 credential environment-variable names and service name. No credentials are
 discovered by the public runtime. Honeycomb uses `x-honeycomb-team`; Logfire uses
-its project token in `Authorization`, per the destination recipe. Redirects are
-refused, payload/response sizes and time are bounded, and raw response bodies
-are not receipts. HTTP success with OTLP partial rejection is not full acceptance.
+its project token in `Authorization`, per the destination recipe. Redirects use
+manual mode and non-2xx responses are rejected without forwarding credentials;
+this also supports workerd, which rejects Fetch's `error` redirect mode.
+Payload/response sizes and time are bounded, and raw response bodies are not
+receipts. HTTP success with OTLP partial rejection is not full acceptance.
 Partial/uncertain requests are not replayed; only known nonacceptance is eligible
 for the existing bounded retry policy. Independent resource acknowledgements
 prevent resending an accepted signal or destination because another failed.
