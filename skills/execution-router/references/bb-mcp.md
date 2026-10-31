@@ -80,7 +80,7 @@ readback is available.
 | State | `read`: `thread show ID` |
 | Result | `read`: `thread output ID` |
 | Bounded history | `read`: `thread log ID --limit N` |
-| Questions or permission requests | `read`: `thread interactions list ID`, then discovered show command |
+| Questions or permission requests | `read`: `thread interactions list ID`; use `search` to discover the command for inspecting a selected interaction, then call it through `read` |
 | Steer active work or start a follow-up turn | `run`: `thread tell ID --mode auto --message-file -`, with stdin |
 | Stop this task | `run`: `thread stop ID` |
 
