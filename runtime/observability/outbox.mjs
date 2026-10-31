@@ -27,6 +27,32 @@ function ownerIdentity() {
 const settled = (row) =>
   row.state === "recorded" && row.receipt &&
   Object.values(row.receipt.destinations).every((r) => ["accepted", "disabled"].includes(r.delivery_status));
+async function releaseAfterDelivery(lock, claim, deliver) {
+  const errors = [];
+  let result;
+  try {
+    result = await deliver();
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    const owner = await lock.stat();
+    const current = await lstat(claim);
+    if (owner.dev !== current.dev || owner.ino !== current.ino)
+      throw new Error("Outbox claim ownership changed");
+    await rm(claim);
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await lock.close();
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, "Outbox delivery and claim release failed");
+  return result;
+}
 /** Durable, bounded local queue. A lost response or abandoned claim never causes replay. */
 export function createDurableExporter({
   directory,
@@ -149,7 +175,7 @@ export function createDurableExporter({
       }
       return { ...row.receipt, event_id: id, outbox_status: "claimed", delivery_status: "uncertain" };
     }
-    try {
+    return releaseAfterDelivery(lock, claim, async () => {
       row = await read(`${id}.json`);
       if (row.state === "in_flight") return interrupt(row);
       if (row.state === "interrupted")
@@ -178,17 +204,7 @@ export function createDurableExporter({
         delivery_attempts: row.attempts,
         evicted_delivered_count: row.evicted_delivered_count ?? 0,
       };
-    } finally {
-      try {
-        const owner = await lock.stat();
-        const current = await lstat(claim);
-        if (owner.dev !== current.dev || owner.ino !== current.ino)
-          throw new Error("Outbox claim ownership changed");
-        await rm(claim);
-      } finally {
-        await lock.close();
-      }
-    }
+    });
   }
   async function submit(event) {
     const snapshot = structuredClone(event);

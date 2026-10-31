@@ -285,6 +285,9 @@ active, or ambiguous claims require operator reconciliation. Interrupted rows
 remain non-replayable and non-evictable, without starving later drain candidates.
 Recovery callbacks must be idempotent; routing's durable uncertain markers provide
 that accounting barrier.
+Claim release verifies ownership and closes the descriptor even after delivery
+failure. If delivery and cleanup both fail, an `AggregateError` preserves every
+cause instead of replacing the original error; a replacement claim is not removed.
 The read-only queue view counts unfinished or admitted-but-not-yet-routed traces
 as pending, excluding capacity-blocked traces. A trace is blocked only after a
 capacity check records a block; initial admission is not quota exhaustion.

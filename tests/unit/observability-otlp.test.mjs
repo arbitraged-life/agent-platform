@@ -195,7 +195,10 @@ test("canonical capture is bounded and redacted; handcrafted unsanitized evidenc
 });
 
 test("credential URIs and embedded error bodies are sanitized without losing operation evidence", () => {
-  const uri = operation({ captureContent: true, toolResult: { detail: "postgres://reader:fake-password@example.test/db" } });
+  const credentialUri = new URL("postgres://example.test/db");
+  credentialUri.username = "reader";
+  credentialUri.password = "fake-password";
+  const uri = operation({ captureContent: true, toolResult: { detail: credentialUri.href } });
   assert.equal(uri.tool_result.redacted, true);
   assert.doesNotMatch(uri.tool_result.preview, /reader|fake-password/);
   const error = operation({ captureContent: true, toolResult: "compile error: PRIVATE_DETAIL" });

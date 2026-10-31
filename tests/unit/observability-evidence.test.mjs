@@ -390,6 +390,26 @@ test("an interrupted row cannot be evicted even when its old receipts were accep
 });
 
 
+test("delivery and claim-release failures preserve both causes without deleting a replacement claim", async (t) => {
+  const dir = await directory(t);
+  const event = turnEvent({ runtime: "fixture", runId: "claim-release", ...timing });
+  const claim = path.join(dir, `${event.event_id}.claim`);
+  const failure = new Error("capacity store unavailable");
+  const queue = createDurableExporter({
+    directory: dir,
+    exporter: async () => assert.fail("network called"),
+    beforeAttempt: async () => {
+      await rm(claim);
+      await writeFile(claim, "replacement owner", { mode: 0o600 });
+      throw failure;
+    },
+  });
+  await assert.rejects(queue(event), error => error instanceof AggregateError &&
+    error.errors[0] === failure && error.errors[1].message === "Outbox claim ownership changed");
+  assert.equal(await readFile(claim, "utf8"), "replacement owner");
+  assert.equal((await queue(event)).delivery_status, "uncertain");
+});
+
 test("invalid outbox retry IDs reject through the Promise API", async (t) => {
   const queue = createDurableExporter({ directory: await directory(t), exporter: async () => assert.fail("network called") });
   await assert.rejects(queue.retry("invalid"), /Invalid outbox event ID/);
