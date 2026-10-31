@@ -86,6 +86,25 @@ test('split uses whole-trace capacity, returns explicit shortfall, retains block
   assert.equal(sent.length, 3);
 });
 
+test('readonly queue accounting distinguishes admitted traces from capacity-blocked traces', async t => {
+  const directory = await directoryFor(t), { exporters } = fixtures();
+  const delivery = createTelemetryDelivery({ directory, configuration: config('mirror', 0, 0), exporters, now: clock });
+  await delivery.admit(root());
+  await delivery.flushPersistence();
+  const admitted = readTelemetryUsage({ directory });
+  assert.equal(admitted.pending_traces, 1);
+  assert.equal(admitted.blocked_traces, 0);
+  assert.equal((await delivery.drain())[0].delivery_status, 'capacity_blocked');
+  const blocked = readTelemetryUsage({ directory });
+  assert.equal(blocked.pending_traces, 0);
+  assert.equal(blocked.blocked_traces, 1);
+  const resumed = createTelemetryDelivery({ directory, configuration: config(), exporters, now: clock });
+  assert.equal((await resumed.drain())[0].delivery_status, 'accepted');
+  const completed = readTelemetryUsage({ directory });
+  assert.equal(completed.pending_traces, 0);
+  assert.equal(completed.blocked_traces, 0);
+});
+
 test('independent acknowledgements retry only known rejection and retain counters after outbox eviction', async t => {
   const directory = await directoryFor(t), sent = [];
   let rejectOnce = true;

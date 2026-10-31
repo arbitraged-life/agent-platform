@@ -272,6 +272,10 @@ operator reconciliation, not blind replay. `getUsage()` and read-only
 `readTelemetryUsage()` expose local counters without claiming remote visibility
 or vendor billing. Attempt counters cover dispatched signals, not unsent peers.
 Each sink acknowledgement is checkpointed before advancing to the next request.
+The read-only queue view counts unfinished or admitted-but-not-yet-routed traces
+as pending. A trace is blocked only after a capacity check records a block;
+initial admission alone is not evidence of exhausted capacity. These queue
+counts are distinct traces, not billable records or in-flight HTTP requests.
 
 ### Other runtime hosts
 

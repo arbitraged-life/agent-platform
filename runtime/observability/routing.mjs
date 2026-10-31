@@ -522,10 +522,18 @@ export function readTelemetryUsage({ directory }) {
       WHERE u.sink=? ORDER BY u.period_start DESC`).all(sink).map(row => ({
         ...row, available: row.allowance - row.other_usage - row.reserved,
       }))]));
+    const queues = db.prepare(`WITH blocked AS (
+      SELECT DISTINCT b.trace_id FROM bundles b JOIN demand d ON d.bundle_id=b.bundle_id WHERE d.state='blocked'
+    ), waiting AS (
+      SELECT trace_id FROM events WHERE state='pending'
+      UNION SELECT b.trace_id FROM bundles b WHERE b.state='ready'
+        AND NOT EXISTS (SELECT 1 FROM traces t WHERE t.trace_id=b.trace_id)
+    )
+    SELECT (SELECT COUNT(*) FROM waiting WHERE trace_id NOT IN (SELECT trace_id FROM blocked)) AS pending_traces,
+      (SELECT COUNT(*) FROM blocked) AS blocked_traces`).get();
     return {
       sinks,
-      pending_traces: db.prepare('SELECT COUNT(DISTINCT trace_id) AS total FROM events WHERE state=?').get('pending').total,
-      blocked_traces: db.prepare('SELECT COUNT(*) AS total FROM bundles b WHERE b.state=? AND NOT EXISTS (SELECT 1 FROM traces t WHERE t.trace_id=b.trace_id)').get('ready').total,
+      ...queues,
     };
   } finally { db.close(); }
 }
