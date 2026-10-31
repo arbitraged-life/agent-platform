@@ -7,6 +7,7 @@ function fixture(settings = {}, respond = () => ({ code: 200, body: "{}" })) {
   const properties = new Map(Object.entries(settings));
   const calls = [];
   let clock = 1730000000000;
+  let afterWrite = () => {};
   const gas = {
     Utilities: {
       DigestAlgorithm: { SHA_256: "SHA_256" },
@@ -18,7 +19,7 @@ function fixture(settings = {}, respond = () => ({ code: 200, body: "{}" })) {
     PropertiesService: { getScriptProperties: () => ({
       getKeys: () => [...properties.keys()],
       getProperty: (key) => properties.get(key) ?? null,
-      setProperty: (key, value) => { properties.set(key, String(value)); },
+      setProperty: (key, value) => { properties.set(key, String(value)); afterWrite(key); },
       deleteProperty: (key) => { properties.delete(key); }
     }) },
     LockService: { getScriptLock: () => ({ waitLock: () => {}, releaseLock: () => {} }) },
@@ -31,7 +32,8 @@ function fixture(settings = {}, respond = () => ({ code: 200, body: "{}" })) {
     } },
     now: () => clock
   };
-  return { properties, calls, gas, setNow: (time) => { clock = time; }, capture: createAppsScriptObservability(gas).capture };
+  return { properties, calls, gas, setNow: (time) => { clock = time; },
+    afterWrite: (hook) => { afterWrite = hook; }, capture: createAppsScriptObservability(gas).capture };
 }
 const TARGET = {
   AGENT_TELEMETRY_MODE: "mirror", HONEYCOMB_OTLP_ENDPOINT: "https://api.honeycomb.io",
@@ -67,7 +69,8 @@ const GENERATION = { traceId: "classifier-1", sessionId: "session-1", provider: 
   assert.equal(attrs["gen_ai.usage.total_tokens"], undefined);
   assert.equal(attrs["gen_ai.operation.name"], "chat");
   assert.equal(attrs["agent.outcome"], "failed");
-  assert.doesNotMatch(JSON.stringify(f.calls.map((call) => call.args.payload)), /SECRET_PROMPT|SECRET_RESPONSE|secret-error|secret-h|secret-l/);
+ assert.doesNotMatch(f.calls.map((call) => Buffer.from(call.args.payload).toString("latin1")).join("\n"),
+   /SECRET_PROMPT|SECRET_RESPONSE|secret-error|secret-h|secret-l/);
   assert.equal(f.capture(GENERATION), true);
   assert.equal(f.calls.length, 2);
   const replay = fixture(TARGET);
@@ -150,6 +153,27 @@ test("bounded pending queue retains blocked traces and rejects new admissions ex
   assert.match(record.traceId, /^[a-f0-9]{32}$/);
   assert.equal(record.spanId, undefined);
  });
+
+test("timed operation is an independent span when generation timing is unknown", () => {
+ const f = fixture({ ...TARGET, AGENT_TELEMETRY_MODE: "split", LOGFIRE_ALLOWANCE: "0" });
+ assert.equal(f.capture({ ...GENERATION, startedMs: undefined, endedMs: undefined,
+   operations: [{ id: "lookup-1", name: "lookup", startedMs: 1730000000001, endedMs: 1730000000002 }] }), true);
+ const span = JSON.parse(f.calls.find((call) => call.url.endsWith("/v1/traces")).args.payload)
+   .resourceSpans[0].scopeSpans[0].spans[0];
+ assert.equal(span.name, "lookup");
+ assert.equal(span.parentSpanId, undefined);
+ assert.equal(span.startTimeUnixNano, "1730000000001000000");
+ assert.equal(span.endTimeUnixNano, "1730000000002000000");
+ assert.equal(JSON.parse(f.calls.find((call) => call.url.endsWith("/v1/logs")).args.payload)
+   .resourceLogs[0].scopeLogs[0].logRecords.length, 1);
+});
+
+test("public capture cannot override the governed receipt key", () => {
+ const f = fixture({ ...TARGET, AGENT_TELEMETRY_MODE: "split", HONEYCOMB_ALLOWANCE: "0", LOGFIRE_ALLOWANCE: "0" });
+ assert.equal(f.capture(GENERATION, "UNSAFE_EXTERNAL_RECEIPT"), false);
+ assert.equal(f.properties.has("UNSAFE_EXTERNAL_RECEIPT"), false);
+ assert.equal([...f.properties.keys()].filter((key) => key.startsWith("AGENT_TELEMETRY_TRACE_")).length, 1);
+});
 
 test("unknown timing Logfire protobuf carries trace identity without a nonexistent span", () => {
   const f = fixture({ ...TARGET, AGENT_TELEMETRY_MODE: "split", HONEYCOMB_ALLOWANCE: "0" });
@@ -255,12 +279,18 @@ test("OTLP JSON partialSuccess with only an error message defaults missing rejec
 
  test("protobuf partial-success responses consume reservation without replaying a partly accepted batch", () => {
   const f = fixture({ ...TARGET, AGENT_TELEMETRY_MODE: "split", HONEYCOMB_ALLOWANCE: "0" },
-    () => ({ code: 200, bytes: [10, 2, 8, 1] }));
+    () => ({ code: 200, bytes: [10, 5, 8, 1, 18, 1, 120] }));
   const generation = { ...GENERATION, operations: [
     { id: "real-child", name: "lookup", startedMs: 1730000000001, endedMs: 1730000000002 }] };
   assert.equal(f.capture(generation), false);
   assert.equal(f.capture(generation), false);
   assert.equal(f.calls.length, 1);
+ const usage = createAppsScriptObservability(f.gas).getUsage().destinations.find((dest) => dest.name === "logfire").periods[0];
+ assert.equal(usage.reserved, 2);
+ assert.equal(usage.counts.attempted, 2);
+ assert.equal(usage.counts.accepted, 1);
+ assert.equal(usage.counts.failed, 1);
+ assert.equal(usage.counts.uncertain, 0);
  });
 
  test("partial acceptance retains unresolved evidence and never replays accepted subset", () => {
@@ -389,4 +419,61 @@ test("replay repairs a persisted admission missing its observed accounting", () 
   assert.equal(usage.destinations[0].periods[0].counts.observed, 1);
   assert.equal(usage.destinations[0].periods[0].counts.blocked, 1);
   assert.equal(f.calls.length, 0);
+});
+
+test("interruption at each admission and demand property write cannot inflate either billing period", () => {
+ for (let crashAt = 1; crashAt <= 15; crashAt++) {
+   const f = fixture({ ...TARGET, HONEYCOMB_ALLOWANCE: "0", LOGFIRE_ALLOWANCE: "0" });
+   let writes = 0;
+   f.afterWrite((key) => {
+     if (key.startsWith("AGENT_TELEMETRY_") && ++writes === crashAt)
+       throw new Error("interrupted after durable write");
+   });
+   assert.throws(() => f.capture(GENERATION), /interrupted after durable write/);
+   f.afterWrite(() => {});
+   assert.equal(createAppsScriptObservability(f.gas).capture(GENERATION), false);
+   const usage = createAppsScriptObservability(f.gas).getUsage();
+   for (const dest of usage.destinations) {
+     assert.equal(dest.periods[0].counts.observed, 1, `${dest.name}: write ${crashAt}`);
+     assert.equal(dest.periods[0].counts.blocked, 1, `${dest.name}: write ${crashAt}`);
+   }
+   assert.equal(f.calls.length, 0);
+ }
+});
+
+test("interruption while recording observed demand replays only unsent signals", () => {
+ for (let crashAt = 1; crashAt <= 9; crashAt++) {
+   const f = fixture(TARGET);
+   let writes = 0;
+   f.afterWrite((key) => {
+     if (key.startsWith("AGENT_TELEMETRY_") && ++writes === crashAt)
+       throw new Error("interrupted after durable write");
+   });
+   assert.throws(() => f.capture(GENERATION), /interrupted after durable write/);
+   f.afterWrite(() => {});
+   assert.equal(createAppsScriptObservability(f.gas).capture(GENERATION), true);
+   assert.equal(f.calls.length, 2);
+   assert.equal(createAppsScriptObservability(f.gas).capture(GENERATION), true);
+   assert.equal(f.calls.length, 2);
+   for (const dest of createAppsScriptObservability(f.gas).getUsage().destinations)
+     assert.equal(dest.periods[0].counts.observed, 1, `${dest.name}: write ${crashAt}`);
+ }
+});
+
+test("a different admission reconciles an interrupted receipt before recording its own demand", () => {
+ const f = fixture({ ...TARGET, HONEYCOMB_ALLOWANCE: "0", LOGFIRE_ALLOWANCE: "0" });
+ let writes = 0;
+ f.afterWrite((key) => {
+   if (key.startsWith("AGENT_TELEMETRY_") && ++writes === 4)
+     throw new Error("interrupted after durable write");
+ });
+ assert.throws(() => f.capture(GENERATION), /interrupted after durable write/);
+ f.afterWrite(() => {});
+ assert.equal(createAppsScriptObservability(f.gas).capture({ ...GENERATION, traceId: "classifier-2" }), false);
+ assert.equal(createAppsScriptObservability(f.gas).capture(GENERATION), false);
+ for (const dest of createAppsScriptObservability(f.gas).getUsage().destinations) {
+   assert.equal(dest.periods[0].counts.observed, 2);
+   assert.equal(dest.periods[0].counts.blocked, 2);
+ }
+ assert.equal(f.calls.length, 0);
 });

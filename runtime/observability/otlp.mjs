@@ -106,7 +106,7 @@ function operation(record, { parentSpanId = otelSpanId(record.trace_id), root = 
       severityNumber: ["failed", "denied"].includes(record.outcome) ? 17 : 9 },
   };
   return { span: {
-    traceId, spanId: otelSpanId(record.event_id), ...(parentSpanId ? { parentSpanId } : {}),
+    traceId, spanId: otelSpanId(record.event_id, root ? "" : "operation"), ...(parentSpanId ? { parentSpanId } : {}),
     name: root ? "mcp.proxy.request" : safe(record.tool_name ?? "agent.tool"), kind: 1,
     startTimeUnixNano: timestamp(record.started_at), endTimeUnixNano: timestamp(record.ended_at),
     attributes: attributes({ ...base, "agent.timing.known": true }),
@@ -133,7 +133,7 @@ export function mapOtlpRecord(record) {
     // A late standalone event carries an explicit propagated parent reference.
     // Its parent was delivered previously, outside this record's mapping context.
     if (record.record_type !== "agent.trace" && item.parent_event_id)
-      return otelSpanId(item.parent_event_id);
+      return otelSpanId(item.parent_event_id, item.parent_event_id === traceId ? "" : "operation");
     let ancestor = item.parent_event_id;
     let nearest = null;
     const visited = new Set([item.event_id]);
@@ -143,7 +143,7 @@ export function mapOtlpRecord(record) {
       const parent = operations.get(ancestor);
       if (!parent) break;
       if (nearest === null && parent.started_at !== null && parent.ended_at !== null)
-        nearest = otelSpanId(parent.event_id);
+        nearest = otelSpanId(parent.event_id, "operation");
       ancestor = parent.parent_event_id;
     }
     return nearest ?? (emittedRoot ? otelSpanId(traceId) : null);
@@ -189,7 +189,7 @@ function varint(value) {
 function wire(field, value, type = "bytes") {
   if (type === "number") return Buffer.concat([varint(field * 8), varint(value)]);
   if (type === "fixed64") { const data = Buffer.allocUnsafe(8); data.writeBigUInt64LE(BigInt(value)); return Buffer.concat([varint(field * 8 + 1), data]); }
-  const bytes = typeof value === "string" ? Buffer.from(value) : Buffer.from(value);
+  const bytes = Buffer.from(value);
   return Buffer.concat([varint(field * 8 + 2), varint(bytes.length), bytes]);
 }
 function message(parts) { return Buffer.concat(parts.filter(Boolean)); }
@@ -288,9 +288,10 @@ function parseJsonResponse(bytes, signal) {
   if (partial === undefined && !Object.hasOwn(result, "partial_success")) return { rejected: 0, partial: false };
   if (!partial || typeof partial !== "object" || Array.isArray(partial)) throw new Error("Invalid OTLP response");
   const count = signal === "spans" ? partial.rejectedSpans ?? partial.rejected_spans : partial.rejectedLogRecords ?? partial.rejected_log_records;
-  if (count === undefined && typeof (partial.errorMessage ?? partial.error_message) === "string" &&
-      (partial.errorMessage ?? partial.error_message).length > 0)
-    return { rejected: 0, partial: true };
+  const errorMessage = partial.errorMessage ?? partial.error_message;
+  if (errorMessage !== undefined && typeof errorMessage !== "string")
+    throw new Error("Invalid OTLP response");
+  if (count === undefined) return { rejected: 0, partial: true };
   if (!(typeof count === "number" && Number.isSafeInteger(count) && count >= 0) &&
       !(typeof count === "string" && /^(?:0|[1-9][0-9]*)$/.test(count) && Number.isSafeInteger(Number(count))))
     throw new Error("Invalid OTLP rejection count");

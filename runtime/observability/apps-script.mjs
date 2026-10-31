@@ -96,10 +96,11 @@ export function createAppsScriptObservability(platform) {
       const childId = spanId(traceId, operation.id);
       const fields = attr({ "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": operation.name,
         "agent.timing.known": timestamp(operation.startedMs) && timestamp(operation.endedMs) && operation.endedMs >= operation.startedMs });
-      if (known && timestamp(operation.startedMs) && timestamp(operation.endedMs) && operation.endedMs >= operation.startedMs) {
-        spans.push({ traceId: traceHex, spanId: childId, parentSpanId: rootId, name: operation.name,
-          kind: 1, startTimeUnixNano: nanos(operation.startedMs), endTimeUnixNano: nanos(operation.endedMs),
-          attributes: fields, status: { code: operation.failed === true ? 2 : 1 } });
+      if (timestamp(operation.startedMs) && timestamp(operation.endedMs) && operation.endedMs >= operation.startedMs) {
+        spans.push({ traceId: traceHex, spanId: childId, ...(known ? { parentSpanId: rootId } : {}),
+          name: operation.name, kind: 1, startTimeUnixNano: nanos(operation.startedMs),
+          endTimeUnixNano: nanos(operation.endedMs), attributes: fields,
+          status: { code: operation.failed === true ? 2 : 1 } });
       } else logs.push({ traceId: traceHex, ...(known ? { spanId: rootId } : {}), timeUnixNano: nanos(observed),
         body: { stringValue: "Observed operation with unknown timing" }, attributes: fields,
         severityNumber: operation.failed === true ? 17 : 9 });
@@ -178,13 +179,15 @@ export function createAppsScriptObservability(platform) {
     }
     while (index < data.length) {
       if (number(data.length) !== 10) throw new Error("Invalid OTLP response");
-      const end = index + number(data.length);
+      const length = number(data.length);
+      const end = index + length;
       if (end > data.length) throw new Error("Invalid OTLP response");
       while (index < end) {
         const field = number(end);
         if (field === 8) rejected = number(end);
         else if (field === 18) {
-          index += number(end);
+          const length = number(end);
+          index += length;
           if (index > end) throw new Error("Invalid OTLP response");
         } else throw new Error("Invalid OTLP response");
       }
@@ -245,12 +248,45 @@ export function createAppsScriptObservability(platform) {
     counts[field] = (counts[field] || 0) + amount;
     properties.setProperty(key, JSON.stringify(counts));
   }
+  // The aggregate and pending journal share one atomic property write. A receipt marker
+  // follows it; replay completes that marker without incrementing the aggregate again.
+  function reconcileDemand(period, name) {
+    const key = usageKey(period, name);
+    const counts = JSON.parse(properties.getProperty(key) || "{}");
+    if (!counts.pendingDemand) return;
+    const { receiptKey, field } = counts.pendingDemand;
+    if (!["observed", "blocked"].includes(field) ||
+        !receiptKey.startsWith(`${APP_TELEMETRY_PREFIX}TRACE_`))
+      throw new Error("Invalid telemetry demand journal");
+    const saved = properties.getProperty(receiptKey);
+    if (!saved) throw new Error("Missing telemetry demand receipt");
+    const receipt = JSON.parse(saved);
+    receipt.accounting ||= { observed: {}, blocked: {} };
+    if (receipt.accounting[field][name] !== periodKey(period)) {
+      receipt.accounting[field][name] = periodKey(period);
+      properties.setProperty(receiptKey, JSON.stringify(receipt));
+    }
+    delete counts.pendingDemand;
+    properties.setProperty(key, JSON.stringify(counts));
+  }
+  function accountDemand(period, name, field, receiptKey, receipt) {
+    const key = usageKey(period, name);
+    const counts = JSON.parse(properties.getProperty(key) ||
+      '{"observed":0,"blocked":0,"attempted":0,"accepted":0,"failed":0,"dropped":0,"uncertain":0}');
+    counts[field] = (counts[field] || 0) + receipt.mapped.units;
+    counts.pendingDemand = { receiptKey, field };
+    properties.setProperty(key, JSON.stringify(counts));
+    receipt.accounting[field][name] = periodKey(period);
+    properties.setProperty(receiptKey, JSON.stringify(receipt));
+    delete counts.pendingDemand;
+    properties.setProperty(key, JSON.stringify(counts));
+  }
   function locked(action) {
     const lock = LockService.getScriptLock();
     lock.waitLock(30000);
     try { return action(); } finally { lock.releaseLock(); }
   }
-  function capture(options, receiptKey) {
+  function captureStored(options, receiptKey) {
     const config = settings();
     if (config.mode === "legacy") return false;
     if (!options || typeof options.traceId !== "string" || !options.traceId || options.traceId.length > 256 ||
@@ -266,6 +302,7 @@ export function createAppsScriptObservability(platform) {
         const previous = Number(properties.getProperty(keyForBaseline) || "0");
         if (dest.otherUsage < previous) throw new Error("Invalid telemetry configuration: decreasing external usage");
         if (dest.otherUsage > previous) properties.setProperty(keyForBaseline, String(dest.otherUsage));
+        reconcileDemand(dest.period, dest.name);
       }
       const saved = properties.getProperty(key);
       let next = saved ? JSON.parse(saved) : null;
@@ -299,9 +336,7 @@ export function createAppsScriptObservability(platform) {
       for (const dest of config.destinations) {
         const period = periodKey(dest.period);
         if (next.accounting.observed[dest.name] !== period) {
-          addUsage(dest.period, dest.name, "observed", next.mapped.units);
-          next.accounting.observed[dest.name] = period;
-          properties.setProperty(key, JSON.stringify(next));
+          accountDemand(dest.period, dest.name, "observed", key, next);
         }
       }
       const mapped = next.mapped;
@@ -320,9 +355,7 @@ export function createAppsScriptObservability(platform) {
         for (const dest of config.destinations) {
           const period = periodKey(dest.period);
           if (next.accounting.blocked[dest.name] === period) continue;
-          addUsage(dest.period, dest.name, "blocked", mapped.units);
-          next.accounting.blocked[dest.name] = period;
-          properties.setProperty(key, JSON.stringify(next));
+          accountDemand(dest.period, dest.name, "blocked", key, next);
         }
         return next;
       }
@@ -425,6 +458,7 @@ export function createAppsScriptObservability(platform) {
     return state.status === "routed" && state.destinations.every((dest) =>
       Object.values(state.signals[dest]).every((status) => status === "accepted"));
   }
+  function capture(options) { return captureStored(options); }
   /** Operator-triggered only: pending unsent signals survive invocation termination. */
   function drain() {
     if (settings().mode === "legacy") return 0;
@@ -436,7 +470,7 @@ export function createAppsScriptObservability(platform) {
       if (!saved || (saved.status !== "capacity_blocked" &&
           !Object.values(saved.signals).some((signals) =>
             Object.values(signals).includes("reserved") || Object.values(signals).includes("retryable")))) continue;
-      capture({ traceId: "pending" }, key);
+      captureStored({ traceId: "pending" }, key);
       attempted++;
     }
     return attempted;

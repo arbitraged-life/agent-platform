@@ -99,7 +99,7 @@ export function acceptedReceipt(eventId, acceptedRecords = []) {
 const DELIVERY_FIELDS = ["delivery_status", "readback_status", "reason_code", "failure_stage", "retryable"];
 export function deliveryRecord(event, receipt) {
   const destinations = {};
-  for (const [name, value] of Object.entries(receipt.destinations)) {
+  for (const [name, value] of Object.entries(receipt.destinations).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) {
     destinations[name] = Object.fromEntries(
       DELIVERY_FIELDS.map((key) => [key, value[key] ?? (key === "retryable" ? false : null)]),
     );
@@ -151,12 +151,13 @@ export function validateDeliveryRecord(record) {
       new Date(Date.parse(record[name])).toISOString() !== record[name]
     )
       throw new Error("Invalid delivery time");
+  const destinationNames = Object.keys(record.destinations ?? {});
   if (!record.destinations || typeof record.destinations !== "object" ||
       Array.isArray(record.destinations) ||
-      ![1, 2].includes(Object.keys(record.destinations).length) ||
+      ![1, 2].includes(destinationNames.length) ||
       !(
-        Object.keys(record.destinations).sort().join(",") === "opik,posthog" ||
-        Object.keys(record.destinations).every(name => ["honeycomb", "logfire"].includes(name))
+        (destinationNames.includes("opik") && destinationNames.includes("posthog")) ||
+        destinationNames.every(name => ["honeycomb", "logfire"].includes(name))
       ))
     throw new Error("Invalid delivery destinations");
   for (const value of Object.values(record.destinations)) {

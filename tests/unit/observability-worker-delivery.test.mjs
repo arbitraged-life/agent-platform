@@ -66,6 +66,38 @@ test('unknown transport and interrupted in-flight sink stay uncertain; other sin
   assert.equal(retried, 0);
 });
 
+test('ambiguous exporter exception accounts planned attempted and uncertain units only once', async () => {
+  const store = storage(), event = bundle('z');
+  const deliver = setup(store, config(), { honeycomb: async () => { throw Error('lost response'); } });
+  const first = await deliver(event);
+  assert.equal(first.destinations.honeycomb.delivery_status, 'uncertain');
+  assert.equal(deliver.usage().honeycomb.attempted, 2);
+  assert.equal(deliver.usage().honeycomb.uncertain, 2);
+  await deliver(event);
+  assert.equal(deliver.usage().honeycomb.attempted, 2);
+  assert.equal(deliver.usage().honeycomb.uncertain, 2);
+});
+
+test('exception after a signal checkpoint counts only the still-ambiguous attempted signal', async () => {
+  const store = storage(), event = bundle('u'), trace = event.trace_id.replaceAll('-', '');
+  event.records[0].started_at = null;
+  event.records[0].ended_at = null;
+  const honeycomb = async (record, { onSignal }) => {
+    const progress = { ...acceptedReceipt(record.event_id, [`spans:${trace}`]),
+      delivery_status: 'pending', signal_outcomes: { spans: { status: 'accepted' } } };
+    await onSignal({ signal: 'spans', status: 'accepted', receipt: progress,
+      billable_counts: { attempted_spans: 1, attempted_logs: 0, accepted_spans: 1,
+        accepted_logs: 0, rejected_spans: 0, rejected_logs: 0 } });
+    throw Error('lost log response');
+  };
+  const deliver = setup(store, config(), { honeycomb });
+  const first = await deliver(event);
+  assert.equal(first.destinations.honeycomb.delivery_status, 'uncertain');
+  assert.equal(deliver.usage().honeycomb.attempted, 2);
+  assert.equal(deliver.usage().honeycomb.accepted, 1);
+  assert.equal(deliver.usage().honeycomb.uncertain, 1);
+});
+
 test('unresolved delivery retains buffer capacity rather than discarding its only canonical payload', async () => {
   const store = storage();
   const deliver = createWorkerTelemetryDelivery({
@@ -100,7 +132,7 @@ test('signal checkpoint commits before peer delivery and never counts an unattem
   const store = storage(), event = bundle('w'), trace = event.trace_id.replaceAll('-', '');
   event.records[0].started_at = null;
   event.records[0].ended_at = null;
-  let peerCalls = 0;
+  let peerCalls = 0, observedCheckpoint, observedPeerCalls;
   const rejected = new DeliveryError({ code: 'HTTP_429', httpStatus: 429, retryable: true });
   const honeycomb = async (record, { onSignal }) => {
     const progress = { ...rejected.receipt, signal_outcomes: { spans: 'failed' },
@@ -109,13 +141,15 @@ test('signal checkpoint commits before peer delivery and never counts an unattem
       billable_counts: { attempted_spans: 1, attempted_logs: 0,
         accepted_spans: 0, accepted_logs: 0, rejected_spans: 0, rejected_logs: 0 }, receipt: progress });
     const persisted = store.sql.exec('SELECT receipts FROM telemetry_events WHERE event_id=?', event.event_id).toArray()[0];
-    assert.equal(JSON.parse(persisted.receipts).honeycomb.reason_code, 'HTTP_429');
-    assert.equal(peerCalls, 0);
+    observedCheckpoint = JSON.parse(persisted.receipts).honeycomb.reason_code;
+    observedPeerCalls = peerCalls;
     throw rejected;
   };
   const deliver = setup(store, config(), { honeycomb,
     logfire: async record => { peerCalls++; return receipt(record); } });
   await deliver(event);
+  assert.equal(observedCheckpoint, 'HTTP_429');
+  assert.equal(observedPeerCalls, 0);
   assert.equal(deliver.usage().honeycomb.attempted, 1);
   assert.equal(deliver.usage().honeycomb.failed, 1);
   assert.equal(deliver.usage().honeycomb.accepted, 0);
@@ -126,7 +160,7 @@ test('partial span rejection remains durable when logs are 429 then accepted on 
   const store = storage(), event = bundle('x'), trace = event.trace_id.replaceAll('-', '');
   event.records[0].started_at = null;
   event.records[0].ended_at = null;
-  let clock = now, attempts = 0, peerCalls = 0;
+  let clock = now, attempts = 0, peerCalls = 0, retryAccepted, retryPartial, retryRejected;
   const span = `spans:${trace}`, log = `logs:${trace}`;
   const empty = { attempted_spans: 0, attempted_logs: 0,
     accepted_spans: 0, accepted_logs: 0, rejected_spans: 0, rejected_logs: 0 };
@@ -146,9 +180,9 @@ test('partial span rejection remains durable when logs are 429 then accepted on 
       error.receipt = { ...error.receipt, ...pending, delivery_status: 'failed' };
       throw error;
     }
-    assert.deepEqual(acceptedRecords, [span]);
-    assert.equal(previousReceipt.has_partial_rejection, true);
-    assert.equal(previousReceipt.signal_outcomes.spans.rejected, 1);
+    retryAccepted = acceptedRecords;
+    retryPartial = previousReceipt.has_partial_rejection;
+    retryRejected = previousReceipt.signal_outcomes.spans.rejected;
     const pending = { ...acceptedReceipt(record.event_id, [span, log]), delivery_status: 'pending',
       has_partial_rejection: true, signal_outcomes: { ...previousReceipt.signal_outcomes, logs: { rejected: 0 } } };
     await onSignal({ signal: 'logs', status: 'accepted', accepted_records: [span, log],
@@ -164,6 +198,9 @@ test('partial span rejection remains durable when logs are 429 then accepted on 
   assert.equal(create().usage().honeycomb.dropped, 1);
   clock += 1000;
   const final = await create().drain();
+  assert.deepEqual(retryAccepted, [span]);
+  assert.equal(retryPartial, true);
+  assert.equal(retryRejected, 1);
   assert.equal(final[0].destinations.honeycomb.has_partial_rejection, true);
   assert.equal(final[0].delivery_status, 'failed');
   assert.equal(create().usage().honeycomb.accepted, 1);
@@ -266,7 +303,11 @@ test('OTLP partial rejection is retained without replay of its signal', async ()
   const first = await deliver(event);
   assert.equal(first.destinations.honeycomb.delivery_status, 'failed');
   assert.equal(first.destinations.honeycomb.billable_counts.rejected_spans, 1);
-  await setup(store)(event);
+  const repeated = await setup(store, config(), { honeycomb: async record => {
+    calls++;
+    return receipt(record);
+  } })(event);
+  assert.equal(repeated.destinations.honeycomb.delivery_status, 'failed');
   assert.equal(calls, 1);
   assert.equal(deliver.usage().honeycomb.dropped, 1);
 });
@@ -375,7 +416,7 @@ test('new-period retry carries accepted signal keys so only the remaining signal
   const store = storage(), event = bundle('s'), trace = event.trace_id.replaceAll('-', '');
   event.records[0].started_at = null;
   event.records[0].ended_at = null;
-  let clock = now, calls = 0, peerCalls = 0;
+  let clock = now, calls = 0, peerCalls = 0, seenAccepted;
   const honeycomb = async (record, { acceptedRecords = [] } = {}) => {
     calls++;
     if (calls === 1) {
@@ -386,7 +427,7 @@ test('new-period retry carries accepted signal keys so only the remaining signal
       };
       throw error;
     }
-    assert.deepEqual(acceptedRecords, [`spans:${trace}`]);
+    seenAccepted = acceptedRecords;
     return acceptedReceipt(record.event_id, [...acceptedRecords, `logs:${trace}`]);
   };
   const logfire = async record => { peerCalls++; return receipt(record); };
@@ -402,6 +443,7 @@ test('new-period retry carries accepted signal keys so only the remaining signal
   const resumed = createWorkerTelemetryDelivery({ storage: store, configuration: november,
     now: () => clock, exporters: { honeycomb, logfire } });
   assert.equal((await resumed(event)).delivery_status, 'accepted');
+  assert.deepEqual(seenAccepted, [`spans:${trace}`]);
   assert.equal(resumed.usage().honeycomb.accepted, 1);
   assert.equal(october.usage().honeycomb.accepted, 1);
   assert.equal(resumed.usage().logfire.accepted, 0);
@@ -418,4 +460,82 @@ test('split picks exactly one entire trace and counts reserved monthly units acr
   assert.equal((await setup(store, config('split', 2), exporters)(bundle('j'))).route, 'logfire');
   assert.deepEqual(destinations, ['honeycomb', 'logfire']);
   assert.equal((await deliver(bundle('k'))).delivery_status, 'capacity_blocked');
+});
+
+test('split admits either active sink independently of its inactive peer', async () => {
+  const store = storage(), event = bundle('x'), destinations = [];
+  const exporters = {
+    honeycomb: async record => { destinations.push('honeycomb'); return receipt(record); },
+    logfire: async record => { destinations.push('logfire'); return receipt(record); },
+  };
+  const october = config('split', 10);
+  october.sinks.logfire.period_start = '2026-11-01T00:00:00.000Z';
+  october.sinks.logfire.period_end = '2026-12-01T00:00:00.000Z';
+  const send = createWorkerTelemetryDelivery({ storage: store, configuration: october, now: () => now, exporters });
+  assert.equal((await send(event)).route, 'honeycomb');
+  assert.deepEqual(destinations, ['honeycomb']);
+  const late = bundle('y'), reserve = config('split', 0);
+  reserve.sinks.honeycomb.period_start = '2026-11-01T00:00:00.000Z';
+  reserve.sinks.honeycomb.period_end = '2026-12-01T00:00:00.000Z';
+  reserve.sinks.logfire.period_start = '2026-10-01T00:00:00.000Z';
+  reserve.sinks.logfire.period_end = '2026-11-01T00:00:00.000Z';
+  reserve.sinks.logfire.allowance = 10;
+  const second = createWorkerTelemetryDelivery({ storage: store, configuration: reserve, now: () => now, exporters });
+  assert.equal((await second(late)).route, 'logfire');
+  assert.deepEqual(destinations, ['honeycomb', 'logfire']);
+});
+
+test('split retry stays with its assigned sink when only the other sink is active', async () => {
+  const store = storage(), event = bundle('v'), destinations = [];
+  let clock = now, rejected = true;
+  const exporters = {
+    honeycomb: async record => {
+      destinations.push('honeycomb');
+      if (rejected) {
+        rejected = false;
+        throw new DeliveryError({ code: 'HTTP_429', httpStatus: 429, retryable: true });
+      }
+      return receipt(record);
+    },
+    logfire: async record => { destinations.push('logfire'); return receipt(record); },
+  };
+  const october = config('split', 10);
+  october.sinks.logfire.period_start = '2026-11-01T00:00:00.000Z';
+  october.sinks.logfire.period_end = '2026-12-01T00:00:00.000Z';
+  const first = createWorkerTelemetryDelivery({ storage: store, configuration: october,
+    now: () => clock, exporters, retryDelayMs: 1000 });
+  assert.equal((await first(event)).route, 'honeycomb');
+  clock = Date.parse('2026-11-02T00:00:00.000Z');
+  const unavailable = createWorkerTelemetryDelivery({ storage: store, configuration: october,
+    now: () => clock, exporters, retryDelayMs: 1000 });
+  const blocked = await unavailable(event);
+  assert.equal(blocked.delivery_status, 'capacity_blocked');
+  assert.equal(blocked.route, 'honeycomb');
+  assert.equal(unavailable.nextAttemptAt(), null);
+  assert.deepEqual(destinations, ['honeycomb']);
+  const november = config('split', 10);
+  for (const sink of Object.values(november.sinks)) {
+    sink.period_start = '2026-11-01T00:00:00.000Z';
+    sink.period_end = '2026-12-01T00:00:00.000Z';
+  }
+  const resumed = createWorkerTelemetryDelivery({ storage: store, configuration: november,
+    now: () => clock, exporters, retryDelayMs: 1000 });
+  assert.equal((await resumed(event)).route, 'honeycomb');
+  assert.deepEqual(destinations, ['honeycomb', 'honeycomb']);
+});
+
+test('Worker configuration shape is order-insensitive and rejects unknown fields', async () => {
+  const ordered = { mode: 'split', sinks: {
+    logfire: { other_usage: 0, allowance: 2, period_end: '2026-11-01T00:00:00.000Z',
+      period_start: '2026-10-01T00:00:00.000Z' },
+    honeycomb: { other_usage: 0, allowance: 2, period_end: '2026-11-01T00:00:00.000Z',
+      period_start: '2026-10-01T00:00:00.000Z' },
+  }, schema_version: 1 };
+  assert.equal((await setup(storage(), ordered)(bundle('m'))).delivery_status, 'accepted');
+  assert.throws(() => setup(storage(), { ...ordered, sinks: {
+    ...ordered.sinks, unexpected: ordered.sinks.honeycomb,
+  } }), /configuration/);
+  assert.throws(() => setup(storage(), { ...ordered, sinks: {
+    ...ordered.sinks, honeycomb: { ...ordered.sinks.honeycomb, unexpected: 1 },
+  } }), /capacity|exporter/);
 });

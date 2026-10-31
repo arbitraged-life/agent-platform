@@ -70,10 +70,17 @@ test("stable OTLP IDs and exactly one completed root with child tool; no invente
   assert.equal(mapped.logs.length, 0);
   assert.equal(mapped.spans[0].spanId, otelSpanId(traceId));
   assert.equal(mapped.spans[1].parentSpanId, mapped.spans[0].spanId);
-  assert.equal(mapped.spans[1].spanId, otelSpanId(records[1].event_id));
   assert.equal(mapped.spans[0].status.code, 2);
   assert.equal(mapped.units.honeycomb, 2);
   assert.equal(mapped.units.logfire, 2);
+});
+
+test("operation sharing the trace UUID remains a distinct child span", () => {
+  const mapped = mapOtlpRecord(bundle([start(), operation({ eventId: traceId }), finish()]));
+  const [root, child] = mapped.spans;
+  assert.notEqual(child.spanId, root.spanId);
+  assert.equal(child.parentSpanId, root.spanId);
+  assert.notEqual(child.parentSpanId, child.spanId);
 });
 
 test("unknown tool timing maps to a linked log rather than an invented zero-duration span", () => {
@@ -108,7 +115,6 @@ test("standalone late tool retains its supplied root span link without duplicati
   const tool = operation({ outcome: "failed", failureStage: "provider_execution", parentEventId: traceId });
   const mapped = mapOtlpRecord(tool);
   assert.equal(mapped.spans.length, 1);
-  assert.equal(mapped.spans[0].spanId, otelSpanId(tool.event_id));
   assert.equal(mapped.spans[0].parentSpanId, mapOtlpRecord(bundle([finish()])).spans[0].spanId);
   assert.equal(mapped.spans[0].traceId, otelTraceId(traceId));
   assert.equal(mapped.spans[0].attributes.find((attr) => attr.key === "agent.parent.event_id").value.stringValue, traceId);
@@ -182,7 +188,30 @@ test("canonical capture is bounded and redacted; handcrafted unsanitized evidenc
   assert.ok(!JSON.stringify(tool).includes("abcdefghijklmnopqrstuvwxyz"));
   assert.throws(() => validateEvidence({ ...tool, tool_arguments: { ...tool.tool_arguments, preview: 'Authorization: Bearer token' } }), /capture|saniti|sensitive/i);
   assert.deepEqual(operation({ toolResult: "hidden" }).tool_result, { preview: null, byte_count: null, sha256: null, truncated: false, omitted: true, redacted: false });
-  assert.throws(() => validateObservabilityRecord(bundle([finish(), ...Array.from({ length: 7000 }, (_, i) => operation({ eventId: createUuidV7(startedMs + i) }))])), /size|large|bundle/i);
+  const oversized = bundle([finish(), ...Array.from({ length: 130 }, () =>
+    operation({ captureContent: true, toolResult: "x".repeat(4000) }))]);
+  assert.ok(Buffer.byteLength(JSON.stringify(oversized)) < 1024 * 1024);
+  assert.throws(() => validateObservabilityRecord(oversized), /Trace bundle exceeds size limit/);
+});
+
+test("credential URIs and embedded error bodies are sanitized without losing operation evidence", () => {
+  const uri = operation({ captureContent: true, toolResult: { detail: "postgres://reader:fake-password@example.test/db" } });
+  assert.equal(uri.tool_result.redacted, true);
+  assert.doesNotMatch(uri.tool_result.preview, /reader|fake-password/);
+  const error = operation({ captureContent: true, toolResult: "compile error: PRIVATE_DETAIL" });
+  assert.equal(error.tool_result.redacted, true);
+  assert.doesNotMatch(error.tool_result.preview, /PRIVATE_DETAIL/);
+  assert.equal(error.event_name, "agent.operation.observed");
+});
+
+test("oversized source content is omitted rather than materialized and hashed in full", () => {
+  for (const value of ["x".repeat(1024 * 1024), Array(4096).fill("x")]) {
+    const tool = operation({ captureContent: true, toolResult: value });
+    assert.equal(tool.event_name, "agent.operation.observed");
+    assert.equal(tool.tool_result.omitted, true);
+    assert.equal(tool.tool_result.byte_count, null);
+    assert.equal(tool.tool_result.sha256, null);
+  }
 });
 
 test("complete and unterminated PEM private keys never survive capture preview or digest input", () => {
@@ -339,6 +368,18 @@ test("partial-success JSON warning with omitted zero rejection count is full acc
   const receipt = await exporter(bundle([finish()]));
   assert.equal(receipt.delivery_status, "accepted");
   assert.equal(receipt.billable_counts.rejected_spans, 0);
+});
+
+test("empty partial-success messages acknowledge spans and logs with protobuf defaults", async () => {
+  const exporter = createOtlpExporter(configurations.honeycomb, {
+    environment: { TOKEN: "synthetic" },
+    fetcher: async () => new Response(JSON.stringify({ partialSuccess: {} })),
+  });
+  const receipt = await exporter(bundle([finish(), operation({ startedMs: null, endedMs: null })]));
+  assert.equal(receipt.delivery_status, "accepted");
+  assert.equal(receipt.billable_counts.accepted_spans, 1);
+  assert.equal(receipt.billable_counts.accepted_logs, 1);
+  assert.equal(receipt.billable_counts.rejected_spans + receipt.billable_counts.rejected_logs, 0);
 });
 
 test("429 before traces cannot count unattempted logs", async () => {

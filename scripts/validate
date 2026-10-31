@@ -22,6 +22,18 @@ if yaml.__version__ != '6.0.3':
     raise SystemExit('Validation dependency version mismatch; run ./scripts/setup')
 
 
+def has_discoverable_tests(directory):
+    for candidate in directory.rglob('test_*.py'):
+        if not candidate.is_file() or not candidate.stem.isidentifier():
+            continue
+        relative = candidate.relative_to(directory)
+        if (all(part.isidentifier() for part in relative.parts[:-1]) and
+                all((directory / parent / '__init__.py').is_file()
+                    for parent in relative.parents if parent != Path('.'))):
+            return True
+    return False
+
+
 def step_actions(steps):
     if not isinstance(steps, list):
         raise ValueError('Action steps must be a list')
@@ -188,7 +200,7 @@ def main():
         github_scripts = ROOT / '.github/scripts'
         # Python 3.14 reports an empty discovery scope as failure; a scripts
         # directory alone is not evidence that this optional test suite exists.
-        if any(github_scripts.rglob('test_*.py')):
+        if has_discoverable_tests(github_scripts):
             subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', '.github/scripts', '-p', 'test_*.py'], check=True, cwd=ROOT)
         subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_*.py'], check=True, cwd=ROOT)
         for task in ['test', 'typecheck']:

@@ -86,6 +86,69 @@ test('split uses whole-trace capacity, returns explicit shortfall, retains block
   assert.equal(sent.length, 3);
 });
 
+test('mirror shortage cannot be canceled by peer surplus; split reports capacity needed at one whole-trace destination', async t => {
+  const { exporters } = fixtures();
+  const mirror = createTelemetryDelivery({ directory: await directoryFor(t),
+    configuration: config('mirror', 0, 50), exporters, now: clock });
+  const blockedMirror = await mirror(root());
+  assert.equal(blockedMirror.delivery_status, 'capacity_blocked');
+  assert.equal(blockedMirror.shortfall.honeycomb, 1);
+  assert.equal(blockedMirror.shortfall.logfire, 0);
+  assert.equal(blockedMirror.combined_shortfall.trace_fraction, 1);
+  const split = createTelemetryDelivery({ directory: await directoryFor(t),
+    configuration: config('split', 1, 1), exporters, now: clock });
+  const indivisible = { schema_version: 1, record_type: 'agent.trace', event_id: traceId, trace_id: traceId,
+    records: [root(), operation()] };
+  const blockedSplit = await split(indivisible);
+  assert.equal(blockedSplit.delivery_status, 'capacity_blocked');
+  assert.equal(blockedSplit.shortfall.honeycomb, 1);
+  assert.equal(blockedSplit.shortfall.logfire, 1);
+  assert.equal(blockedSplit.combined_shortfall.trace_fraction, 0.5);
+  assert.equal(blockedSplit.combined_shortfall.honeycomb_units, 1);
+  assert.equal(blockedSplit.combined_shortfall.logfire_units, 1);
+});
+
+test('split admits an active sink despite an inactive peer and never reassigns its trace', async t => {
+  const directory = await directoryFor(t), { exporters, sent } = fixtures();
+  const allocation = config('split', 2, 2);
+  allocation.sinks.logfire.period_start = '2023-12-01T00:00:00.000Z';
+  allocation.sinks.logfire.period_end = '2024-01-01T00:00:00.000Z';
+  const initial = createTelemetryDelivery({ directory, configuration: allocation, exporters, now: clock });
+  assert.equal((await initial(root())).route, 'honeycomb');
+  assert.deepEqual(sent.map(item => item.name), ['honeycomb']);
+  const next = config('split', 2, 2);
+  next.sinks.logfire.period_start = '2023-12-01T00:00:00.000Z';
+  next.sinks.logfire.period_end = '2024-01-01T00:00:00.000Z';
+  const late = operation(traceId, started + 300);
+  const inactive = createTelemetryDelivery({ directory, configuration: next, exporters,
+    now: () => Date.parse('2023-12-02T00:00:00.000Z') });
+  const blocked = await inactive(late);
+  assert.equal(blocked.delivery_status, 'capacity_blocked');
+  assert.equal(blocked.route, 'honeycomb');
+  assert.deepEqual(sent.map(item => item.name), ['honeycomb']);
+  next.sinks.honeycomb.period_start = '2023-12-01T00:00:00.000Z';
+  next.sinks.honeycomb.period_end = '2024-01-01T00:00:00.000Z';
+  const later = createTelemetryDelivery({ directory, configuration: next, exporters,
+    now: () => Date.parse('2023-12-02T00:00:00.000Z') });
+  assert.equal((await later(late)).route, 'honeycomb');
+  assert.deepEqual(sent.map(item => item.name), ['honeycomb', 'honeycomb']);
+});
+
+test('routing configuration shapes ignore property order but reject unknown keys', async t => {
+  const directory = await directoryFor(t), { exporters } = fixtures();
+  const ordered = { mode: 'split', sinks: {
+    logfire: { other_usage: 0, allowance: 2, period_end: period.period_end, period_start: period.period_start },
+    honeycomb: { other_usage: 0, allowance: 2, period_end: period.period_end, period_start: period.period_start },
+  }, schema_version: 1 };
+  assert.equal((await createTelemetryDelivery({ directory, configuration: ordered, exporters, now: clock })(root())).route, 'honeycomb');
+  assert.throws(() => createTelemetryDelivery({ directory, configuration: {
+    ...ordered, sinks: { ...ordered.sinks, unexpected: ordered.sinks.honeycomb },
+  }, exporters, now: clock }), /configuration/);
+  assert.throws(() => createTelemetryDelivery({ directory, configuration: {
+    ...ordered, sinks: { ...ordered.sinks, honeycomb: { ...ordered.sinks.honeycomb, unexpected: 1 } },
+  }, exporters, now: clock }), /capacity|exporter/);
+});
+
 test('readonly queue accounting distinguishes admitted traces from capacity-blocked traces', async t => {
   const directory = await directoryFor(t), { exporters } = fixtures();
   const delivery = createTelemetryDelivery({ directory, configuration: config('mirror', 0, 0), exporters, now: clock });
@@ -125,6 +188,16 @@ test('independent acknowledgements retry only known rejection and retain counter
   assert.equal(readTelemetryUsage({ directory }).sinks.logfire[0].accepted, 1);
   assert.equal(createTelemetryDelivery({ directory, configuration: config(), exporters, now: () => time }).getUsage().honeycomb.accepted, 1);
   assert.equal((await createTelemetryDelivery({ directory, configuration: config(), exporters, now: () => time })(root())).delivery_status, 'accepted');
+});
+
+test('aggregate delivery preserves an authentication denial', async t => {
+  const directory = await directoryFor(t), { exporters } = fixtures();
+  exporters.honeycomb = async () => ({
+    delivery_status: 'denied', retryable: false, reason_code: 'HTTP_403', accepted_records: [],
+  });
+  const receipt = await createTelemetryDelivery({ directory, configuration: config(), exporters, now: clock })(root());
+  assert.equal(receipt.destinations.honeycomb.delivery_status, 'denied');
+  assert.equal(receipt.delivery_status, 'denied');
 });
 
 test('unknown quota fails closed, bounded pending buffer rejects explicitly, and delivery schema accepts a single configured sink', async t => {
@@ -415,6 +488,19 @@ test('completing root bundle does not erase a related operation staged during sl
   assert.equal(delivery.getAdmission(late.event_id).state, 'ready');
   assert.equal((await delivery.drain())[0].delivery_status, 'accepted');
   assert.equal(delivery.getAdmission(late.event_id).state, 'done');
+});
+
+test('replaying one late event dispatches its own ready bundle when another is also ready', async t => {
+  const directory = await directoryFor(t), { sent, exporters } = fixtures();
+  const delivery = createTelemetryDelivery({ directory, configuration: config(), exporters, now: clock });
+  await delivery(root());
+  const first = operation(traceId, started + 300), second = operation(traceId, started + 400);
+  await delivery.admit(first);
+  await delivery.admit(second);
+  assert.equal((await delivery(second)).event_id, second.event_id);
+  assert.deepEqual(sent.slice(2).map(item => item.record.event_id), [second.event_id, second.event_id]);
+  assert.equal(delivery.getAdmission(first.event_id).state, 'ready');
+  assert.equal(delivery.getAdmission(second.event_id).state, 'done');
 });
 
 test('bounded drain rotates beyond an oversized blocked trace to deliver a later fitting trace', async t => {

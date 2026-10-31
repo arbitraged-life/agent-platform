@@ -192,7 +192,11 @@
           "additionalProperties": false,
           "required": ["preview", "byte_count", "sha256", "truncated", "omitted", "redacted"],
           "properties": {
-            "preview": { "type": ["string", "null"], "maxLength": 4096 },
+            "preview": {
+              "type": ["string", "null"],
+              "maxLength": 4096,
+              "description": "Runtime validation additionally enforces a 4096-byte UTF-8 limit; JSON Schema maxLength counts characters, not bytes."
+            },
             "byte_count": { "type": ["integer", "null"], "minimum": 0 },
             "sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
             "truncated": { "type": "boolean" },

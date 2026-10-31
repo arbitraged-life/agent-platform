@@ -213,13 +213,15 @@ discovered by the public runtime. Honeycomb uses `x-honeycomb-team`; Logfire use
 its project token in `Authorization`, per the destination recipe. Redirects use
 manual mode and non-2xx responses are rejected without forwarding credentials;
 this also supports workerd, which rejects Fetch's `error` redirect mode.
+This workerd support applies to the OTLP exporters; the legacy Node Opik/PostHog
+exporters still use `redirect: "error"` and are not the Worker transport.
 Payload/response sizes and time are bounded, and raw response bodies are not
 receipts. HTTP success with OTLP partial rejection is not full acceptance.
 Partial/uncertain requests are not replayed; only known nonacceptance is eligible
 for the existing bounded retry policy. Independent resource acknowledgements
 prevent resending an accepted signal or destination because another failed.
 
-The proposed mapping produces one Honeycomb event and one Logfire combined
+The implemented mapping produces one Honeycomb event and one Logfire combined
 record per emitted span/log. It emits no attached span events or links,
 automatic metrics, Logfire pending placeholders, or recursive delivery exports.
 Consumers must nevertheless measure their real vendor usage; local unit counts
@@ -253,8 +255,9 @@ Those are illustrative allocated budgets, not vendor account configuration.
 `allowance` is a gross allocation, not an already-net remaining-usage number.
 Subtract the external baseline and durable reservations exactly once. Allocations
 across independent local, Apps Script and Worker state owners must be disjoint.
-An expired/unknown period or insufficient capacity blocks delivery visibly;
-there is no paid, sampling or alternate-destination fallback.
+An expired/unknown period makes that destination unavailable. Mirror requires both
+periods; split can use an active peer for a new trace, never move an assigned trace.
+Insufficient capacity blocks visibly; there is no paid or sampling fallback.
 
 Mirror sends the same logical trace/log evidence to both sinks. Split selects a
 destination only when the complete trace fits, persists that assignment, and
@@ -262,6 +265,10 @@ keeps later related logs on it. Traces are not divided by span hash or silently
 rerouted after partial acceptance. Source demand and network attempts are distinct:
 quota-blocked demand must remain visible, and retries must not inflate logical
 observations. Monthly counters survive delivered-outbox eviction.
+Per-sink `shortfall` reports missing usable units. `combined_shortfall` expresses
+the normalized additional capacity at the limiting mirror sink, the best single
+split destination, or the already assigned route. It does not pool partial
+capacity across destinations to divide one trace.
 
 Call `send(record)` in producer order without waiting for earlier network receipts.
 `flushPersistence()` waits durable admission independently of slow network work.
@@ -272,10 +279,16 @@ operator reconciliation, not blind replay. `getUsage()` and read-only
 `readTelemetryUsage()` expose local counters without claiming remote visibility
 or vendor billing. Attempt counters cover dispatched signals, not unsent peers.
 Each sink acknowledgement is checkpointed before advancing to the next request.
+An abandoned file claim is recovered only with matching host/boot/PID-namespace
+identity and proof that its owning PID no longer exists. Legacy PID-only, foreign,
+active, or ambiguous claims require operator reconciliation. Interrupted rows
+remain non-replayable and non-evictable, without starving later drain candidates.
+Recovery callbacks must be idempotent; routing's durable uncertain markers provide
+that accounting barrier.
 The read-only queue view counts unfinished or admitted-but-not-yet-routed traces
-as pending. A trace is blocked only after a capacity check records a block;
-initial admission alone is not evidence of exhausted capacity. These queue
-counts are distinct traces, not billable records or in-flight HTTP requests.
+as pending, excluding capacity-blocked traces. A trace is blocked only after a
+capacity check records a block; initial admission is not quota exhaustion.
+These are distinct trace counts, not billable records or in-flight HTTP requests.
 
 ### Other runtime hosts
 
@@ -285,6 +298,10 @@ canonical mapper/exporters but does not import Node filesystem or SQLite APIs.
 The callable has `drain({limit})`, `nextAttemptAt()`, and `usage()` methods. Only
 confirmed deliveries release payload storage; route/receipt tombstones and
 period counters remain. The private host owns bindings, alarms, and credentials.
+The Node pending-byte limit and Worker payload-entry limit do not bound total
+SQLite size. Completed payloads are compacted, but terminal metadata, reservations,
+and replay identities intentionally remain. Do not delete them as a shortcut to
+reclaim storage or replenish capacity.
 
 `apps-script.mjs` exposes `createAppsScriptObservability()` with injected native
 `Utilities`, `PropertiesService`, `LockService`, and `UrlFetchApp`. It offers
@@ -297,9 +314,10 @@ Apps Script stores sanitized unresolved evidence before quota selection and
 keys independent destination periods by both exact endpoints. Its journal
 recovers interrupted demand-counter updates. Admission stops visibly at 64
 unresolved receipts, 300 KiB pending payload, or 380 KiB total telemetry properties.
-Compact accepted receipt tombstones are not automatically deleted: an operator
-must archive/reconcile them before the total property bound is reached, preserving
-the replay barrier and counters. This is a bounded store, not a monthly archive.
+Compact accepted receipt tombstones are not automatically deleted. There is no
+archive/compaction API that preserves deduplication outside this store; reaching
+the total property bound stops new admission visibly. Do not delete receipts to
+reclaim capacity: doing so removes the replay barrier. This is not a monthly archive.
 Private consumers must install this portable source from a reviewed release
 artifact, not a mutable sibling checkout.
 
@@ -313,6 +331,9 @@ SHA-256, plus truncation/redaction/omission markers. Sensitive keys and recogniz
 credentials/raw-error forms are removed. This is not permission to capture
 arbitrary prompts, medical/employer content, or secrets that a source policy
 forbids. Handcrafted evidence still passes validation before export.
+Capture traversal is also limited to 64 Ki UTF-16 source units, 2,048 values, and
+32 nesting levels before serialization. Oversized or accessor-bearing content is
+explicitly omitted with unknown byte count/digest; the operation remains captured.
 
 Destination acceptance requires real producer hooks, successful and failing
 canaries, destination readback of IDs/hierarchy/timing/sanitized fields, and actual

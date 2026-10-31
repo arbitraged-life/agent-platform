@@ -23,13 +23,15 @@ function bufferFull() {
 
 function validateConfiguration(configuration, exporters, now) {
   if (!configuration || configuration.schema_version !== 1 || !['mirror', 'split'].includes(configuration.mode) ||
-      !configuration.sinks || Object.keys(configuration.sinks).sort().join(',') !== SINKS.slice().sort().join(',') ||
+      !configuration.sinks || Object.keys(configuration.sinks).length !== SINKS.length ||
+      !SINKS.every(name => Object.hasOwn(configuration.sinks, name)) ||
       Object.keys(configuration).some(key => !['schema_version', 'mode', 'sinks', 'max_pending_bytes'].includes(key)) ||
       (configuration.max_pending_bytes !== undefined && (!isCount(configuration.max_pending_bytes) || configuration.max_pending_bytes < 1)))
     throw new Error('Invalid telemetry routing configuration');
   for (const name of SINKS) {
     const sink = configuration.sinks[name];
-    if (!sink || Object.keys(sink).sort().join(',') !== PERIOD.slice().sort().join(',') ||
+    if (!sink || Object.keys(sink).length !== PERIOD.length ||
+        !PERIOD.every(key => Object.hasOwn(sink, key)) ||
         !exactTime(sink.period_start) || !exactTime(sink.period_end) ||
         Date.parse(sink.period_start) >= Date.parse(sink.period_end) ||
         !isCount(sink.allowance) || !isCount(sink.other_usage) ||
@@ -103,11 +105,8 @@ export function createTelemetryDelivery({ directory, configuration, exporters, n
   const enqueue = fn => { const task = serial.then(fn); serial = task.catch(() => { admissionFailures++; }); return task; };
   const schedule = fn => { const task = deliveryQueue.then(fn); deliveryQueue = task.catch(() => undefined); return task; };
   const period = sink => configuration.sinks[sink];
-  const current = () => {
-    const ms = now();
-    if (!Number.isFinite(ms) || SINKS.some(s => ms < Date.parse(period(s).period_start) || ms >= Date.parse(period(s).period_end)))
-      throw new Error('Telemetry billing period unavailable; evidence retained');
-  };
+  const active = (sink, ms) => Number.isFinite(ms) &&
+    ms >= Date.parse(period(sink).period_start) && ms < Date.parse(period(sink).period_end);
   const units = record => mapOtlpRecord(record).units;
   const recordDemand = (record, id) => {
     const needs = units(record);
@@ -126,10 +125,10 @@ export function createTelemetryDelivery({ directory, configuration, exporters, n
     return baseline.allowance - baseline.other_usage - reservations;
   };
   const routeFor = (record, requested) => transaction(db, () => {
-    const needs = units(record);
-    current();
+    const needs = units(record), ms = now();
+    if (!Number.isFinite(ms)) throw new Error('Telemetry billing period unavailable; evidence retained');
     const trace = db.prepare('SELECT route FROM traces WHERE trace_id=?').get(record.trace_id);
-    const available = Object.fromEntries(SINKS.map(s => [s, remaining(s)]));
+    const available = Object.fromEntries(SINKS.map(s => [s, active(s, ms) ? remaining(s) : 0]));
     let selected;
     if (trace) selected = trace.route.split(',');
     else if (configuration.mode === 'mirror') selected = SINKS;
@@ -137,10 +136,14 @@ export function createTelemetryDelivery({ directory, configuration, exporters, n
       selected = SINKS.filter(s => available[s] >= needs[s]);
       if (selected.length > 1) selected = [selected.sort((a, b) => (available[b] - needs[b]) - (available[a] - needs[a]))[0]];
     }
-    const shortfall = Object.fromEntries(SINKS.map(s => [s, Math.max(0, needs[s] - available[s])]));
     const reserved = Object.fromEntries(SINKS.map(s => [s, db.prepare('SELECT units FROM reservations WHERE bundle_id=? AND sink=? AND period_start=? AND period_end=?').get(requested, s, period(s).period_start, period(s).period_end)?.units ?? 0]));
-    if (!selected.length || selected.some(s => needs[s] > available[s] + reserved[s])) {
-      const combinedFraction = Math.max(0, 1 - SINKS.reduce((sum, s) => sum + Math.max(0, available[s]) / Math.max(1, needs[s]), 0));
+    const shortfall = Object.fromEntries(SINKS.map(s => [s, Math.max(0, needs[s] -
+      (active(s, ms) ? available[s] + reserved[s] : 0))]));
+    if (!selected.length || selected.some(s => !active(s, ms) || needs[s] > available[s] + reserved[s])) {
+      const candidates = trace ? trace.route.split(',') : SINKS;
+      const deficits = candidates.map(s => Math.min(1, shortfall[s] / Math.max(1, needs[s])));
+      const combinedFraction = !trace && configuration.mode === 'split' ?
+        Math.min(...deficits) : Math.max(...deficits);
       for (const sink of SINKS)
         db.prepare('UPDATE demand SET state=? WHERE bundle_id=? AND sink=?').run('blocked', requested, sink);
       return { blocked: true, delivery_status: 'capacity_blocked', trace_id: record.trace_id, required: needs, available, shortfall,
@@ -166,7 +169,8 @@ export function createTelemetryDelivery({ directory, configuration, exporters, n
     route: Object.keys(results).join(','),
     delivery_status: Object.values(results).every(r => r.delivery_status === 'accepted') ? 'accepted' :
       Object.values(results).some(r => r.delivery_status === 'uncertain') ? 'uncertain' :
-      Object.values(results).some(r => r.delivery_status === 'capacity_blocked') ? 'capacity_blocked' : 'failed',
+      Object.values(results).some(r => r.delivery_status === 'capacity_blocked') ? 'capacity_blocked' :
+      Object.values(results).some(r => r.delivery_status === 'denied') ? 'denied' : 'failed',
     destinations: results,
   });
   const count = (sink, receipt, planned) => {
@@ -365,7 +369,8 @@ export function createTelemetryDelivery({ directory, configuration, exporters, n
           { event_id: record.event_id, trace_id: traceId, delivery_status: 'recorded', route: db.prepare('SELECT route FROM traces WHERE trace_id=?').get(traceId)?.route ?? null };
       }
       if (existing.state === 'ready') {
-        const bundle = db.prepare('SELECT * FROM bundles WHERE trace_id=? AND state=?').get(traceId, 'ready');
+        const bundle = db.prepare('SELECT * FROM bundles WHERE bundle_id=? AND state=?').get(record.event_id, 'ready') ??
+          db.prepare('SELECT * FROM bundles WHERE bundle_id=? AND state=?').get(traceId, 'ready');
         if (bundle) return { dispatch: () => dispatchReady(bundle.bundle_id) };
       }
     }

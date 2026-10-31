@@ -12,10 +12,13 @@ const KEYS = ["schema_version", "record_type", "event_id", "event_name", "trace_
 const OPTIONAL = ["server_name", "task_id", "conversation_id", "parent_event_id", "tool_arguments", "tool_result"];
 const CAPTURE_KEYS = ["preview", "byte_count", "sha256", "truncated", "omitted", "redacted"];
 const PREVIEW_BYTES = 4096;
+const CAPTURE_SOURCE_UNITS = 64 * 1024;
+const CAPTURE_SOURCE_NODES = 2048;
+const ERROR_VALUE = /(?:^|["'\s])(?:[a-z]*error|exception)\s*:/i;
 const BUNDLE_BYTES = 512 * 1024;
 const SENSITIVE_KEY = /(?:password|passwd|secret|token|api[_-]?key|authorization|credential|private[_-]?key|cookie|prompt|system[_-]?message|response[_-]?body|exception|stack|stderr|error|message)/i;
 const PRIVATE_KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/gi;
-const SENSITIVE_VALUE = /(?:bearer\s+\S+|(?:sk|ghp|gho|github_pat|xox[baprs])[-_][a-z0-9_-]{12,}|AKIA[0-9A-Z]{16}|eyJ[a-z0-9_-]{8,}\.eyJ[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}|(?:api[_-]?key|password|secret|token)\s*[:=]\s*\S+)/gi;
+const SENSITIVE_VALUE = /(?:bearer\s+\S+|(?:sk|ghp|gho|github_pat|xox[baprs])[-_][a-z0-9_-]{12,}|AKIA[0-9A-Z]{16}|eyJ[a-z0-9_-]{8,}\.eyJ[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}|(?:api[_-]?key|password|secret|token)\s*[:=]\s*\S+|\b[a-z][a-z0-9+.-]*:\/\/[^\s/@:]+(?::[^\s/@]*)?@[^\s]+)/gi;
 
 function token(value) {
   if (value == null) return null;
@@ -29,34 +32,49 @@ function time(value) {
   return new Date(value).toISOString();
 }
 export function sanitizeTelemetryString(value) {
-  return /^(?:[a-z]*error|exception)\s*:/i.test(value) ?
+  return ERROR_VALUE.test(value) ?
     "[ERROR_REDACTED]" : String(value).replace(PRIVATE_KEY_BLOCK, "[REDACTED]").replace(SENSITIVE_VALUE, "[REDACTED]");
 }
-function safeValue(value, key, state) {
+function safeValue(value, key, state, depth = 0) {
+  if (++state.nodes > CAPTURE_SOURCE_NODES || depth > 32)
+    throw new Error("Telemetry capture source exceeds work limit");
   if (SENSITIVE_KEY.test(key)) { state.redacted = true; return "[REDACTED]"; }
   if (typeof value === "string") {
+    state.remaining -= value.length;
+    if (state.remaining < 0) throw new Error("Telemetry capture source exceeds work limit");
     const sanitized = sanitizeTelemetryString(value);
     if (sanitized !== value) state.redacted = true;
     return sanitized;
   }
-  if (Array.isArray(value)) return value.map((item) => safeValue(item, "", state));
+  if (Array.isArray(value)) {
+    if (value.length > CAPTURE_SOURCE_NODES - state.nodes)
+      throw new Error("Telemetry capture source exceeds work limit");
+    return value.map((item) => safeValue(item, "", state, depth + 1));
+  }
   if (value instanceof Error) { state.redacted = true; return "[ERROR_REDACTED]"; }
   if (value && typeof value === "object") {
     const result = Object.create(null);
-    for (const [name, item] of Object.entries(value)) {
+    for (const name in value) {
+      if (!Object.hasOwn(value, name)) continue;
+      state.remaining -= name.length;
+      if (state.remaining < 0) throw new Error("Telemetry capture source exceeds work limit");
+      const descriptor = Object.getOwnPropertyDescriptor(value, name);
+      if (!descriptor || !Object.hasOwn(descriptor, "value"))
+        throw new Error("Telemetry capture cannot inspect accessor");
       const safeKey = SENSITIVE_KEY.test(name) ? "[REDACTED]" : sanitizeTelemetryString(name);
       if (safeKey !== name) state.redacted = true;
-      result[safeKey] = safeValue(item, name, state);
+      result[safeKey] = safeValue(descriptor.value, name, state, depth + 1);
     }
     return result;
   }
+  if (typeof value === "function" || typeof value === "symbol") return undefined;
   return value;
 }
 function capture(value, enabled) {
   if (value === undefined) return null;
   const omitted = { preview: null, byte_count: null, sha256: null, truncated: false, omitted: true, redacted: false };
   if (!enabled) return omitted;
-  const state = { redacted: false };
+  const state = { redacted: false, remaining: CAPTURE_SOURCE_UNITS, nodes: 0 };
   let serialized;
   try { serialized = JSON.stringify(safeValue(value, "", state)); }
   catch { return omitted; }
@@ -87,7 +105,7 @@ function validateCapture(value) {
       typeof value.truncated !== "boolean" || typeof value.redacted !== "boolean" ||
       value.truncated !== (value.byte_count > PREVIEW_BYTES) ||
       /"(?:password|passwd|secret|token|api[_-]?key|authorization|credential|private[_-]?key|cookie|prompt|system[_-]?message|response[_-]?body|exception|stack|stderr|error|message)[^"]*"\s*:/i.test(value.preview) ||
-      /(?:^|["'\s])(?:[a-z]*error|exception)\s*:/i.test(value.preview) ||
+      ERROR_VALUE.test(value.preview) ||
       hasSensitiveValue(value.preview))
     throw new Error("Invalid or sensitive evidence capture");
   if (!value.truncated && (value.byte_count !== Buffer.byteLength(value.preview) ||

@@ -3,6 +3,7 @@ import { validateObservabilityRecord } from './evidence.mjs';
 import { mapOtlpRecord } from './otlp.mjs';
 import { failedReceipt } from './delivery.mjs';
 
+const PERIOD = ['period_start', 'period_end', 'allowance', 'other_usage'];
 const SINKS = ['honeycomb', 'logfire'];
 const exactTime = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 const count = value => Number.isSafeInteger(value) && value >= 0;
@@ -14,11 +15,13 @@ const all = (storage, sql, ...args) => storage.sql.exec(sql, ...args).toArray();
 function validateConfig(configuration, exporters) {
   if (!configuration || configuration.schema_version !== 1 || !['mirror', 'split'].includes(configuration.mode) ||
       Object.keys(configuration).some(key => !['schema_version', 'mode', 'sinks'].includes(key)) ||
-      Object.keys(configuration.sinks ?? {}).sort().join(',') !== 'honeycomb,logfire')
+      !configuration.sinks || Object.keys(configuration.sinks).length !== SINKS.length ||
+      !SINKS.every(name => Object.hasOwn(configuration.sinks, name)))
     throw new Error('Invalid Worker telemetry configuration');
   for (const name of SINKS) {
     const sink = configuration.sinks[name];
-    if (!sink || Object.keys(sink).sort().join(',') !== 'allowance,other_usage,period_end,period_start' ||
+    if (!sink || Object.keys(sink).length !== PERIOD.length ||
+        !PERIOD.every(key => Object.hasOwn(sink, key)) ||
         !exactTime(sink.period_start) || !exactTime(sink.period_end) ||
         sink.period_start >= sink.period_end || !count(sink.allowance) ||
         !count(sink.other_usage) || sink.other_usage > sink.allowance || typeof exporters?.[name] !== 'function')
@@ -73,11 +76,12 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
     }
   });
   const rowFor = id => one(storage, 'SELECT * FROM telemetry_events WHERE event_id=?', id);
-  const current = () => SINKS.every(name => {
+  const periodActive = (name, time) => {
     const period = configuration.sinks[name];
-    const time = now();
-    return Number.isFinite(time) && time >= Date.parse(period.period_start) && time < Date.parse(period.period_end);
-  });
+    return time >= Date.parse(period.period_start) && time < Date.parse(period.period_end);
+  };
+  const current = (names = SINKS, time = now()) => Number.isFinite(time) &&
+    names.every(name => periodActive(name, time));
   const available = name => {
     const period = configuration.sinks[name];
     const budget = one(storage, `SELECT allowance,other_usage FROM telemetry_budgets
@@ -120,12 +124,13 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
       }
       return row;
     };
-    if (!current()) return blocked();
-    const capacity = Object.fromEntries(SINKS.map(name => [name, available(name)]));
-    let selected = configuration.mode === 'mirror' ? SINKS : SINKS.filter(name => capacity[name] >= units[name]);
+    const time = now();
+    if (!Number.isFinite(time)) return blocked();
+    const capacity = Object.fromEntries(SINKS.map(name => [name, periodActive(name, time) ? available(name) : 0]));
+    let selected = configuration.mode === 'mirror' ? SINKS : SINKS.filter(name => periodActive(name, time) && capacity[name] >= units[name]);
     if (configuration.mode === 'split' && selected.length > 1)
       selected = [selected.sort((a, b) => (capacity[b] - units[b]) - (capacity[a] - units[a]))[0]];
-    if (!selected.length || selected.some(name => units[name] > capacity[name])) return blocked();
+    if (!selected.length || selected.some(name => !periodActive(name, time) || units[name] > capacity[name])) return blocked();
     row.route = selected.join(',');
     row.periods = encode(Object.fromEntries(selected.map(name => [name, configuration.sinks[name].period_start])));
     for (const name of selected) storage.sql.exec('INSERT INTO telemetry_reservations VALUES(?,?,?,?)',
@@ -212,15 +217,18 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
         bill.accepted_spans + bill.accepted_logs : receipt.delivery_status === 'accepted' ? planned : 0;
       const rejected = checkpointed ? 0 : count(bill?.rejected_spans) && count(bill?.rejected_logs) ?
         bill.rejected_spans + bill.rejected_logs : 0;
-      const attempted = checkpointed ? 0 : count(bill?.attempted_spans) && count(bill?.attempted_logs) ?
-        bill.attempted_spans + bill.attempted_logs : accepted + rejected;
-      const remaining = Math.max(0, attempted - accepted - rejected);
       const previouslyUncertain = checkpointed ? ['spans', 'logs'].reduce((sum, signal) => {
         if (previous?.signal_outcomes?.[signal]?.status !== 'uncertain') return sum;
         const counts = previous.billable_counts ?? {};
         return sum + Math.max(0, (counts[`attempted_${signal}`] ?? 0) -
           (counts[`accepted_${signal}`] ?? 0) - (counts[`rejected_${signal}`] ?? 0));
       }, 0) : 0;
+      const attempted = checkpointed ? (receipt.delivery_status === 'uncertain' && !interrupted ?
+        Math.max(0, planned - previouslyUncertain) : 0) :
+        count(bill?.attempted_spans) && count(bill?.attempted_logs) ?
+          bill.attempted_spans + bill.attempted_logs :
+          receipt.delivery_status === 'uncertain' ? planned : accepted + rejected;
+      const remaining = Math.max(0, attempted - accepted - rejected);
       const uncertain = receipt.delivery_status === 'uncertain' ?
         Math.max(0, planned - accepted - rejected - previouslyUncertain) : 0;
       const failed = ['failed', 'denied'].includes(receipt.delivery_status) ? remaining : 0;
@@ -247,7 +255,7 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
     if (receipts[name] && !receipts[name].retryable) return { row };
     if (receipts[name] && (receipts[name].reason_code !== 'HTTP_429' ||
         now() < (decode(row.next_attempt_at)[name] ?? Infinity) || (attempts[name] ?? 0) >= 3)) return { row };
-    if (!current()) return { row, capacityBlocked: true };
+    if (!current([name])) return { row, capacityBlocked: true };
     const planned = remainingUnits(record, name, receipts[name]);
     const periods = decode(row.periods);
     const nextPeriod = configuration.sinks[name].period_start;
@@ -323,9 +331,10 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
     return capacityBlocked ? { ...result(row), delivery_status: 'capacity_blocked' } : result(row);
   };
   const canAdmit = record => {
-    if (!current()) return false;
+    const time = now();
+    if (!Number.isFinite(time)) return false;
     const units = mapOtlpRecord(record).units;
-    const fits = name => available(name) >= units[name];
+    const fits = name => periodActive(name, time) && available(name) >= units[name];
     return configuration.mode === 'mirror' ? SINKS.every(fits) : SINKS.some(fits);
   };
   const send = async value => {
@@ -355,7 +364,7 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
     const rows = all(storage, 'SELECT payload,route,periods,receipts,in_flight,next_attempt_at FROM telemetry_events WHERE payload IS NOT NULL');
     const times = [];
     for (const row of rows) if (Object.keys(decode(row.in_flight)).length) times.push(now() + 60_000);
-    if (!current()) return times.length ? Math.min(...times) : null;
+    if (!Number.isFinite(now())) return times.length ? Math.min(...times) : null;
     for (const row of rows) {
       if (!row.route) {
         if (canAdmit(decode(row.payload))) times.push(now() + 1);
@@ -365,6 +374,7 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
       const record = decode(row.payload), mapped = mapOtlpRecord(record);
       for (const name of row.route.split(',')) {
         const previous = receipts[name];
+        if (!current([name])) continue;
         if (previous && (!previous.retryable || previous.reason_code !== 'HTTP_429')) continue;
         if (available(name) < (periods[name] === configuration.sinks[name].period_start ?
           0 : remainingUnits(record, name, previous, mapped))) continue;
