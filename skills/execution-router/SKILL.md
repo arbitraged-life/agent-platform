@@ -44,6 +44,41 @@ and verify the pushed revision. Preserve unrelated dirty files. Batch these
 safe checks into bounded invocations where possible, while treating an
 ambiguous mutation result as requiring readback before any retry.
 
+### Connected coding-agent MCPs
+
+A connected MCP can expose a coding-agent service as a peer executor. Select it
+when its environment, harness, or independent/resumable lifecycle materially
+helps complete the task and the current host permits that route. Discover its
+actual tools and schemas; do not infer capability or authorization from the
+provider name or the existence of a connection.
+
+Before launch, inspect the selected account, project/repository, revision,
+execution environment, relevant limits, and existing work. Reuse a matching
+in-progress task when appropriate. Prepare a bounded handoff with the objective,
+acceptance criteria, permitted actions, relevant context, and stop conditions.
+Keep provider identifiers and private deployment choices in the consuming
+repository.
+
+When the originating request or an approved profile already authorizes this
+execution, call the discovered creation/start operation and retain its actual
+task identifier. Do not stop at a copy-paste prompt or request approval already
+provided. Surface only unresolved authority, material cost, or consequential
+choices. A connector grant does not expand the task's scope or authorize
+answering a separate permission request.
+
+Use the provider's supported inspection, continuation, and stop operations with
+the recorded identifier. After an ambiguous launch result, inspect existing
+tasks before retrying; do not create duplicate runs blindly. A submitted or
+idle task is not verified completion: inspect its result and independently
+verify the acceptance criteria in the owning system.
+
+For BB, read [the MCP procedure](references/bb-mcp.md) and confirm commands
+against the connected instance. This is a connected-provider procedure, not an
+adapter for the configured local launcher. Do not fabricate local-launcher
+approval records or claim a local machine is available because a remote provider
+is reachable. Preserve the host boundary below and the verification and
+supervision limits in this skill.
+
 ### Host execution boundary
 
 For a dot coordinating work in the cloud, use a host-supported delegated task
