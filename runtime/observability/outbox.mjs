@@ -16,6 +16,8 @@ export function createDurableExporter({
   retryDelayMs = 60000,
   maxAgeMs = 604800000,
   now = Date.now,
+  onInterrupted = async () => {},
+  beforeAttempt = async () => null,
 }) {
   if (
     !path.isAbsolute(directory) ||
@@ -48,8 +50,7 @@ export function createDurableExporter({
     try {
       const info = await handle.stat();
       if (
-        !info.isFile() ||
-        info.size > 32768 ||
+        info.size > 1048576 ||
         info.mode & 0o077 ||
         (process.getuid && info.uid !== process.getuid())
       )
@@ -89,8 +90,10 @@ export function createDurableExporter({
     }
     try {
       row = await read(`${id}.json`);
-      if (row.state === "in_flight")
+      if (row.state === "in_flight") {
+        await onInterrupted(row.event, { receipts: row.receipt?.destinations, attempts: row.attempts });
         return { ...row.receipt, event_id: id, outbox_status: "interrupted", delivery_status: "uncertain" };
+      }
       if (
         row.receipt &&
         (!Object.values(row.receipt.destinations).some((r) => r.retryable) ||
@@ -98,10 +101,12 @@ export function createDurableExporter({
           now() < row.next_attempt_at)
       )
         return { ...row.receipt, outbox_status: "retained" };
+      const blocked = await beforeAttempt(row.event, { receipts: row.receipt?.destinations });
+      if (blocked) return { ...row.receipt, ...blocked, event_id: id, outbox_status: "capacity_blocked" };
       row.state = "in_flight";
       row.attempts++;
       await save(row);
-      const receipt = await exporter(row.event, { receipts: row.receipt?.destinations });
+      const receipt = await exporter(row.event, { receipts: row.receipt?.destinations, attempt: row.attempts });
       row.receipt = receipt;
       row.state = "recorded";
       row.next_attempt_at = now() + retryDelayMs * Math.pow(2, row.attempts - 1);
@@ -195,6 +200,19 @@ export function createDurableExporter({
       }
       return outcomes;
     });
+  send.retry = (eventId) => {
+    if (typeof eventId !== "string" || !UUID.test(eventId)) throw new Error("Invalid outbox event ID");
+    return schedule(async () => {
+      await prepare();
+      let row;
+      try { row = await read(`${eventId}.json`); }
+      catch (error) {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      }
+      return deliver(row);
+    });
+  };
   send.flushPersistence = () => queue;
   return send;
 }

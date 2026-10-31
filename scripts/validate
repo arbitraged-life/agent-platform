@@ -186,7 +186,9 @@ def main():
         tests = sorted(str(p.relative_to(ROOT)) for p in ROOT.glob('tests/unit/*.test.mjs'))
         subprocess.run(['node', '--test', *tests], check=True, cwd=ROOT)
         github_scripts = ROOT / '.github/scripts'
-        if github_scripts.is_dir():
+        # Python 3.14 reports an empty discovery scope as failure; a scripts
+        # directory alone is not evidence that this optional test suite exists.
+        if any(github_scripts.rglob('test_*.py')):
             subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', '.github/scripts', '-p', 'test_*.py'], check=True, cwd=ROOT)
         subprocess.run([sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-p', 'test_*.py'], check=True, cwd=ROOT)
         for task in ['test', 'typecheck']:
