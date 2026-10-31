@@ -288,6 +288,12 @@ that accounting barrier.
 Claim release verifies ownership and closes the descriptor even after delivery
 failure. If delivery and cleanup both fail, an `AggregateError` preserves every
 cause instead of replacing the original error; a replacement claim is not removed.
+`drain({limit})` limits actionable outcomes so an active/ambiguous claim cannot
+starve later records. It returns one claimed outcome only when no actionable
+outcome was produced; otherwise claimed rows are omitted from that return list,
+not deleted or treated as accepted. Their durable evidence remains for inspection.
+URI credential redaction starts at `://`, avoiding repeated scheme-prefix scans
+without excluding long valid schemes from sanitization.
 The read-only queue view counts unfinished or admitted-but-not-yet-routed traces
 as pending, excluding capacity-blocked traces. A trace is blocked only after a
 capacity check records a block; initial admission is not quota exhaustion.

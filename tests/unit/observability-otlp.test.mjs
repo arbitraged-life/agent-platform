@@ -198,9 +198,11 @@ test("credential URIs and embedded error bodies are sanitized without losing ope
   const credentialUri = new URL("postgres://example.test/db");
   credentialUri.username = "reader";
   credentialUri.password = "fake-password";
-  const uri = operation({ captureContent: true, toolResult: { detail: credentialUri.href } });
-  assert.equal(uri.tool_result.redacted, true);
-  assert.doesNotMatch(uri.tool_result.preview, /reader|fake-password/);
+  for (const prefix of ["", "+", "a".repeat(256)]) {
+    const uri = operation({ captureContent: true, toolResult: { detail: prefix + credentialUri.href } });
+    assert.equal(uri.tool_result.redacted, true);
+    assert.doesNotMatch(uri.tool_result.preview, /reader|fake-password/);
+  }
   const error = operation({ captureContent: true, toolResult: "compile error: PRIVATE_DETAIL" });
   assert.equal(error.tool_result.redacted, true);
   assert.doesNotMatch(error.tool_result.preview, /PRIVATE_DETAIL/);

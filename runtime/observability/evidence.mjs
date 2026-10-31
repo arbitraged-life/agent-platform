@@ -18,7 +18,9 @@ const ERROR_VALUE = /(?:^|["'\s])(?:[a-z]*error|exception)\s*:/i;
 const BUNDLE_BYTES = 512 * 1024;
 const SENSITIVE_KEY = /(?:password|passwd|secret|token|api[_-]?key|authorization|credential|private[_-]?key|cookie|prompt|system[_-]?message|response[_-]?body|exception|stack|stderr|error|message)/i;
 const PRIVATE_KEY_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/gi;
-const SENSITIVE_VALUE = /(?:bearer\s+\S+|(?:sk|ghp|gho|github_pat|xox[baprs])[-_][a-z0-9_-]{12,}|AKIA[0-9A-Z]{16}|eyJ[a-z0-9_-]{8,}\.eyJ[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}|(?:api[_-]?key|password|secret|token)\s*[:=]\s*\S+|\b[a-z][a-z0-9+.-]*:\/\/[^\s/@:]+(?::[^\s/@]*)?@[^\s]+)/gi;
+// Start URI credential matching at the literal delimiter: scanning arbitrary
+// scheme prefixes can backtrack quadratically, and capping them can leak credentials.
+const SENSITIVE_VALUE = /(?:bearer\s+\S+|(?:sk|ghp|gho|github_pat|xox[baprs])[-_][a-z0-9_-]{12,}|AKIA[0-9A-Z]{16}|eyJ[a-z0-9_-]{8,}\.eyJ[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}|(?:api[_-]?key|password|secret|token)\s*[:=]\s*\S+|:\/\/[^\s/@:]+(?::[^\s/@]*)?@[^\s]+)/gi;
 
 function token(value) {
   if (value == null) return null;
