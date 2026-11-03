@@ -117,7 +117,7 @@ def main():
             print('TruffleHog passed: one exact historical synthetic Postgres test fixture disposition.')
         else:
             print('TruffleHog passed: no findings.')
-    except (KeyError, OSError, json.JSONDecodeError, ValueError) as exc:
+    except (KeyError, OSError, ValueError) as exc:
         print(f'TruffleHog gate failed: {exc}', file=sys.stderr)
         return 1
     return 0

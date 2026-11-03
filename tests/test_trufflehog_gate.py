@@ -89,6 +89,34 @@ class TruffleHogGateTests(unittest.TestCase):
             (None, None),
         )
 
+    def test_manual_scan_uses_selected_parent_and_head(self):
+        self.assertEqual(
+            trufflehog_gate.scan_range('workflow_dispatch', {}, 'a' * 40, 'b' * 40),
+            ('a' * 40, 'b' * 40),
+        )
+
+    def test_manual_root_commit_scans_without_a_parent(self):
+        self.assertEqual(
+            trufflehog_gate.scan_range('workflow_dispatch', {}, '', 'b' * 40),
+            ('', 'b' * 40),
+        )
+
+    def test_unsupported_event_does_not_silently_skip_scanning(self):
+        with self.assertRaises(ValueError):
+            trufflehog_gate.scan_range('schedule', {}, '', 'a' * 40)
+
+    def test_non_object_event_fails_closed(self):
+        for payload in (None, [], 'event'):
+            with self.subTest(payload=payload):
+                with self.assertRaises(ValueError):
+                    trufflehog_gate.scan_range('push', payload, '', 'a' * 40)
+
+    def test_invalid_commit_list_is_not_an_empty_push(self):
+        for commits in (None, {}, 'commits'):
+            with self.subTest(commits=commits):
+                with self.assertRaises(ValueError):
+                    trufflehog_gate.scan_range('push', {'commits': commits}, '', 'a' * 40)
+
 
 if __name__ == '__main__':
     unittest.main()
