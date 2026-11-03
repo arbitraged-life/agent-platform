@@ -11,7 +11,7 @@ domain-level view.
 ```mermaid
 flowchart LR
     n3b3bd3ff01d6["execution-router · 2 modules"]
-    n6691ff7ae175["observability · 7 modules"]
+    n6691ff7ae175["observability · 11 modules"]
     n6b46c59d409d["purity · 1 module"]
     nbd9463690bd1["review · 5 modules"]
     nd8c919fe5f7d["review-remediation · 8 modules"]
@@ -35,13 +35,17 @@ flowchart LR
 flowchart LR
     nc6119b3e11ec["execution-router/dispatch.mjs"]
     n7d83f63c67ca["execution-router/policy.mjs"]
+    ne6f1fc7d5ee6["observability/apps-script.mjs"]
     n6d7798d3734d["observability/delivery.mjs"]
     n9f2a6560098a["observability/efficiency.mjs"]
     n0de2f3f4ce1a["observability/evidence.mjs"]
     n4d8b77f09fbd["observability/opik.mjs"]
+    nd4a41462a65e["observability/otlp.mjs"]
     ne68346c600cb["observability/outbox.mjs"]
     n2e277b9cdbe2["observability/posthog.mjs"]
     naf8e142b8748["observability/records.mjs"]
+    n7bb1ccf57095["observability/routing.mjs"]
+    ncd828bd82cd9["observability/worker-delivery.mjs"]
     n2c96340cda5e["purity/purity_checker.py"]
     n1dd1d7c7d1fc["review-remediation/controller.mjs"]
     ndc2ef34d7308["review-remediation/executor.mjs"]
@@ -64,10 +68,19 @@ flowchart LR
     n4d8b77f09fbd --> n6d7798d3734d
     n4d8b77f09fbd --> n0de2f3f4ce1a
     n4d8b77f09fbd --> naf8e142b8748
+    nd4a41462a65e --> n6d7798d3734d
+    nd4a41462a65e --> n0de2f3f4ce1a
     ne68346c600cb --> n0de2f3f4ce1a
     n2e277b9cdbe2 --> n6d7798d3734d
     n2e277b9cdbe2 --> n0de2f3f4ce1a
     n2e277b9cdbe2 --> naf8e142b8748
+    n7bb1ccf57095 --> n6d7798d3734d
+    n7bb1ccf57095 --> n0de2f3f4ce1a
+    n7bb1ccf57095 --> nd4a41462a65e
+    n7bb1ccf57095 --> ne68346c600cb
+    ncd828bd82cd9 --> n6d7798d3734d
+    ncd828bd82cd9 --> n0de2f3f4ce1a
+    ncd828bd82cd9 --> nd4a41462a65e
     n1dd1d7c7d1fc --> nd1f7354a8562
     n1dd1d7c7d1fc --> n1c84274e6b0d
     ndc2ef34d7308 --> n7b23a7f6c181

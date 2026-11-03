@@ -122,5 +122,5 @@ class MergePolicyTests(unittest.TestCase):
 
     def test_existing_required_security_and_ci_results_remain(self):
         gate = next(r for r in self.mergify["merge_protections"] if r["name"] == "main branch validation")
-        for condition in ["#changes-requested-reviews-by = 0", "check-success = @github-actions/validate (ubuntu-24.04)", "check-success = @github-actions/validate (macos-14)", "check-success = @github-actions/secrets", "check-success = qlty check", "check-success = @gitguardian/GitGuardian Security Checks", "check-success = @socket-security/Socket Security: Pull Request Alerts"]:
+        for condition in ["#changes-requested-reviews-by = 0", "check-success = @github-actions/validate (ubuntu-24.04)", "check-success = @github-actions/validate (macos-15)", "check-success = @github-actions/secrets", "check-success = qlty check", "check-success = @gitguardian/GitGuardian Security Checks", "check-success = @socket-security/Socket Security: Pull Request Alerts"]:
             self.assertIn(condition, gate["success_conditions"])
