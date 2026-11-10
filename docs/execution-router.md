@@ -60,10 +60,15 @@ can be remote even when `local_available` is false; local tool availability
 does not imply delegated executor availability. A host-required task boundary
 is itself a concrete reason to delegate when that executor is available.
 Otherwise the router returns `needs-user`, never an owning tool or direct call.
-V1 refuses both v2-only fields even
-when false, preventing a host-boundary fact from being ignored by a legacy
-consumer. The routing contract does not itself authorize a launch or bypass
-task, policy, or approval checks.
+This implementation refuses both v2-only fields under contract v1, even when
+false. Older installed implementations can ignore unknown fields, so callers
+must verify the exact installed executable before using v2. A non-executing
+route probe with `contract_version:2`, `host_delegation_required:true`,
+`delegate_available:true`, `native_available:true` and `local_available:true`
+must return `delegated-agent`. Reject errors, legacy labels and other outcomes;
+never dispatch host-bound work from an unverified result. Source publication
+does not establish this installed capability. The routing contract does not
+itself authorize a launch or bypass task, policy, or approval checks.
 
 ## Ownership
 

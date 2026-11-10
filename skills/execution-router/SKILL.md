@@ -32,6 +32,14 @@ request the neutral vocabulary explicitly with `facts.contract_version=2`.
 Omitted/1 remains legacy compatibility, not a second policy. Never reinterpret
 an unavailable route as permission to use another one.
 
+Before sending v2 facts to an installed router, verify that exact executable
+supports v2 with a non-executing route probe: `contract_version:2`,
+`host_delegation_required:true`, `delegate_available:true`,
+`native_available:true`, `local_available:true` must return `delegated-agent`.
+An error, a legacy label, or any different outcome blocks v2 use. Earlier
+installed routers can ignore unknown fields; source publication alone is not
+this capability check. Never dispatch host-bound work from an unverified result.
+
 A host-required task boundary is decisive: when direct operation on a user's
 computer, registered remote, or saved environment is prohibited by the host,
 use its supported delegated task workflow if available and authorized. A direct

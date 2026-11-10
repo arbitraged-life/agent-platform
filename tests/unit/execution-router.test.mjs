@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, rmdir, writeFile, readFile, chmod, symlink, unlink, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { routeTask, validateTask, loadPolicy, resolveProfile, cleanEnvironment, digest, executableIdentity, VERSION } from '../../runtime/execution-router/policy.mjs';
@@ -36,7 +37,7 @@ test('route capability flags require actual booleans rather than truthy values',
  assert.equal(routeTask({authority_blocked:false,native_available:false,local_available:true}).route,'chatgpt-local');
 });
 test('route CLI refuses string flags instead of granting a false capability',async()=>{
- const f=await fixture(),facts=path.join(f.root,'facts.json'),cli=new URL('../../scripts/execution/router.mjs',import.meta.url).pathname;
+ const f=await fixture(),facts=path.join(f.root,'facts.json'),cli=fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url));
  await writeFile(facts,JSON.stringify({native_available:false,local_available:true}));
  assert.equal(JSON.parse((await exec(process.execPath,[cli,'route','--facts',facts])).stdout).route,'chatgpt-local');
  await writeFile(facts,JSON.stringify({native_available:'false',local_available:true}));
@@ -91,7 +92,7 @@ test('routing contract versions and capabilities fail closed before route select
  assert.throws(()=>routeTask({contract_version:2,authority_blocked:true,native_available:'false'}),/native_available must be boolean/);
 });
 test('route CLI emits versioned labels and refuses legacy host-boundary facts',async()=>{
- const f=await fixture(),facts=path.join(f.root,'facts.json'),cli=new URL('../../scripts/execution/router.mjs',import.meta.url).pathname;
+ const f=await fixture(),facts=path.join(f.root,'facts.json'),cli=fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url));
  await writeFile(facts,JSON.stringify({native_available:true}));
  assert.equal(JSON.parse((await exec(process.execPath,[cli,'route','--facts',facts])).stdout).route,'chatgpt-native');
  await writeFile(facts,JSON.stringify({contract_version:2,delegate_available:true,local_available:false,delegate_reason:'execution-lifecycle',delegate_detail:'Remote executor available'}));
@@ -340,9 +341,9 @@ process.exit(0);
 test('source test actions require write authority because tests execute code',()=>assert.throws(()=>validateTask(packet('/tmp/repo',{actions:['test']})),/write authorization/));
 test('detached process-group descendants cannot outlive release of a workspace',async()=>{const f=await fixture('orphan');const p=await prepare(f.policy,packet(f.workspace));const r=await runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'});assert.equal(r.status,'needs-review');await new Promise(resolve=>setTimeout(resolve,1200));await assert.rejects(()=>readFile(path.join(f.root,'orphan-marker')),{code:'ENOENT'});});
 test('manual profiles produce handoff but do not launch an unvalidated adapter',async()=>{const f=await fixture();f.data.profiles.manual={adapter:'manual',sandbox:'read-only',actions:['read'],max_seconds:60};await writeFile(f.policyPath,JSON.stringify(f.data));const policy=await loadPolicy(f.policyPath);const p=await prepare(policy,packet(f.workspace,{profile:'manual'}));assert.equal(p.handoff_only,true);await assert.rejects(()=>runPrepared(policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/Handoff-only/);});
-test('CLI help is available without machine policy',async()=>{const r=await exec(process.execPath,[new URL('../../scripts/execution/router.mjs',import.meta.url).pathname,'--help']);assert.match(r.stdout,/prepare/);assert.match(r.stdout,/approved-digest/);});
-test('CLI refuses unrecognized flags',async()=>{await assert.rejects(()=>exec(process.execPath,[new URL('../../scripts/execution/router.mjs',import.meta.url).pathname,'route','--unsafe','yes']),/Unknown option/);});
-test('CLI doctor serializes a configured __proto__ profile rather than losing its result',async()=>{const f=await fixture();f.data.profiles=JSON.parse('{"__proto__":{"adapter":"manual","sandbox":"read-only","actions":["read"],"max_seconds":60}}');await writeFile(f.policyPath,JSON.stringify(f.data));const {stdout}=await exec(process.execPath,[new URL('../../scripts/execution/router.mjs',import.meta.url).pathname,'doctor','--policy',f.policyPath,'--profile','__proto__']);const result=JSON.parse(stdout);assert.deepEqual(result.profiles['__proto__'],{status:'handoff-only'});});
+test('CLI help is available without machine policy',async()=>{const r=await exec(process.execPath,[fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url)),'--help']);assert.match(r.stdout,/prepare/);assert.match(r.stdout,/approved-digest/);});
+test('CLI refuses unrecognized flags',async()=>{await assert.rejects(()=>exec(process.execPath,[fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url)),'route','--unsafe','yes']),/Unknown option/);});
+test('CLI doctor serializes a configured __proto__ profile rather than losing its result',async()=>{const f=await fixture();f.data.profiles=JSON.parse('{"__proto__":{"adapter":"manual","sandbox":"read-only","actions":["read"],"max_seconds":60}}');await writeFile(f.policyPath,JSON.stringify(f.data));const {stdout}=await exec(process.execPath,[fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url)),'doctor','--policy',f.policyPath,'--profile','__proto__']);const result=JSON.parse(stdout);assert.deepEqual(result.profiles['__proto__'],{status:'handoff-only'});});
 test('verification accepts artifacts through a symlinked state path',async()=>{const f=await fixture();const p=await prepare(f.policy,packet(f.workspace));await runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'});const alias=path.join(f.root,'state-alias');await symlink(f.policy.state_dir,alias);const linked={...f.policy,state_dir:alias};const artifact=path.join(alias,'runs','router-test','agent-final.txt');const result=await acceptResult(linked,'router-test',{verifier:'controller',summary:'Read the expected fixture output through its canonical path.',criteria:[{criterion:'Report the fixture result.',passed:true,evidence:'Expected fixture response inspected.'}],artifacts:[artifact]});assert.equal(result.status,'verified-complete');});
 test('Codex requires a usable executable while manual handoffs do not',async()=>{const f=await fixture();f.data.profiles['codex-readonly'].executable='';f.data.profiles.manual={adapter:'manual',sandbox:'read-only',actions:['read'],max_seconds:60};await writeFile(f.policyPath,JSON.stringify(f.data));await assert.rejects(()=>loadPolicy(f.policyPath),/executable for Codex/);delete f.data.profiles['codex-readonly'];await writeFile(f.policyPath,JSON.stringify(f.data));assert.equal((await loadPolicy(f.policyPath)).profiles.manual.executable,undefined);});
 test('moving relative executable policy invalidates an already prepared approval',async()=>{const f=await fixture();f.data.profiles['codex-readonly'].executable='./codex';await writeFile(f.policyPath,JSON.stringify(f.data));const policy=await loadPolicy(f.policyPath),p=await prepare(policy,packet(f.workspace));const other=path.join(f.root,'other');await mkdir(other);const relocated=path.join(other,'policy.json');await writeFile(relocated,JSON.stringify(f.data));const changed=await loadPolicy(relocated);assert.notEqual(changed.config_digest,policy.config_digest);await assert.rejects(()=>runPrepared(changed,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/policy changed/);});
@@ -516,7 +517,7 @@ test('Unicode whitespace in protected branch names is preserved',async()=>{
 });
 
 test('CLI rejects irrelevant command options and fails stale status queries',async()=>{
- const f=await fixture(),cli=new URL('../../scripts/execution/router.mjs',import.meta.url).pathname;
+ const f=await fixture(),cli=fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url));
  await assert.rejects(()=>exec(process.execPath,[cli,'doctor','--policy',f.policyPath,'--facts','ignored']),/Unknown option/);
  await prepare(f.policy,packet(f.workspace));
  const stateFile=path.join(f.policy.state_dir,'runs','router-test','status.json');
