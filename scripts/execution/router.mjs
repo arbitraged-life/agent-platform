@@ -6,7 +6,8 @@ import { prepare, runPrepared, inspect, requestCancel, acceptResult } from '../.
 const HELP = `Execution Router ${VERSION}
 Usage: node scripts/execution/router.mjs COMMAND [options]
 
-  route   --facts FILE
+  route   --facts FILE  (contract_version 2 selects neutral route labels;
+                         omitted/1 retains legacy labels)
   doctor  --policy FILE [--profile NAME]
   prepare --policy FILE --task FILE
   run     --policy FILE --task-id ID --approved-digest HASH --approval-ref TEXT

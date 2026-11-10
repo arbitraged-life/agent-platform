@@ -20,7 +20,7 @@ Task packets are JSON. Unknown top-level fields are rejected.
 | delegation_detail | Concrete reason direct execution is insufficient or inferior |
 | acceptance_criteria | Nonempty unique strings, each requiring evidence |
 | references | Relevant source/artifact references; no credentials |
-| parent_run_id | Optional originating observability ID |
+| parent_run_id | Optional originating run ID, when one exists |
 
 Tests run repository code and may write caches or perform other side effects;
 `test` is not equivalent to read-only inspection. Scope and inspect the test path.
@@ -62,7 +62,7 @@ Verification JSON:
 
 ```json
 {
-  "verifier": "chatgpt-controller",
+  "verifier": "originating-controller",
   "summary": "Checks actually performed and their result.",
   "criteria": [{"criterion": "Exact criterion from packet", "passed": true,
                 "evidence": "Observed command, exit code, or inspected state"}],

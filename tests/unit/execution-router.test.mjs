@@ -53,6 +53,52 @@ test('mocked surface capability and authorization outcomes do not bypass denied 
   ];
   for(const {label,facts,route} of cases)assert.equal(routeTask(facts).route,route,label);
 });
+test('routing contract v1 remains the default and accepts explicit version 1',()=>{
+ const facts={native_available:true,local_available:true,delegate_reason:'execution-lifecycle',delegate_detail:'Independent bounded loop'};
+ assert.equal(routeTask(facts).route,'local-agent');
+ assert.deepEqual(routeTask({...facts,contract_version:1}),routeTask(facts));
+ assert.equal(routeTask({contract_version:1,native_available:true}).route,'chatgpt-native');
+});
+test('routing contract v2 uses neutral direct and delegated labels',()=>{
+ assert.equal(routeTask({contract_version:2,native_available:true,local_available:true}).route,'owner-tool');
+ assert.equal(routeTask({contract_version:2,local_available:true}).route,'direct-local');
+ assert.equal(routeTask({contract_version:2,delegate_available:true,local_available:false,delegate_reason:'execution-lifecycle',delegate_detail:'Independent remote loop'}).route,'delegated-agent');
+ assert.equal(routeTask({contract_version:2,delegate_available:false,local_available:true,delegate_reason:'local-harness',delegate_detail:'Local tooling'}).route,'direct-local');
+});
+test('routing contract v2 host-required handoff cannot downgrade to direct execution',()=>{
+ const facts={contract_version:2,host_delegation_required:true,native_available:true,local_available:true,delegate_reason:'execution-lifecycle',delegate_detail:'Host must perform the task'};
+ assert.equal(routeTask({...facts,delegate_available:false}).route,'needs-user');
+ assert.equal(routeTask({...facts,delegate_available:true}).route,'delegated-agent');
+ assert.equal(routeTask({contract_version:2,host_delegation_required:true,delegate_available:true}).route,'delegated-agent');
+ assert.equal(routeTask({...facts,delegate_available:true,authority_blocked:true}).route,'needs-user');
+});
+test('routing contract v2 refuses delegation without a real executor and concrete reason',()=>{
+ const facts={contract_version:2,native_available:true,local_available:false,delegate_reason:'execution-lifecycle',delegate_detail:'Independent remote loop'};
+ assert.equal(routeTask(facts).route,'owner-tool');
+ assert.equal(routeTask({...facts,delegate_available:false}).route,'owner-tool');
+ assert.equal(routeTask({...facts,delegate_available:true,delegate_detail:' '}).route,'owner-tool');
+ assert.equal(routeTask({...facts,delegate_available:true,delegate_reason:'code-is-hard'}).route,'owner-tool');
+ assert.equal(routeTask({...facts,delegate_available:true,authority_blocked:true}).route,'needs-user');
+});
+test('routing contract versions and capabilities fail closed before route selection',()=>{
+ for(const version of [null,0,3,'1','2',true,1.5])assert.throws(()=>routeTask({contract_version:version,native_available:true}),/contract_version/);
+ assert.throws(()=>routeTask({contract_version:undefined,native_available:true}),/contract_version/);
+ for(const key of ['delegate_available','host_delegation_required']) {
+  assert.throws(()=>routeTask({[key]:false,native_available:true}),/contract_version 2/);
+  assert.throws(()=>routeTask({contract_version:1,[key]:false,authority_blocked:true}),/contract_version 2/);
+  for(const value of ['false',1,null])assert.throws(()=>routeTask({contract_version:2,[key]:value,authority_blocked:true}),new RegExp(`${key} must be boolean`));
+ }
+ assert.throws(()=>routeTask({contract_version:2,authority_blocked:true,native_available:'false'}),/native_available must be boolean/);
+});
+test('route CLI emits versioned labels and refuses legacy host-boundary facts',async()=>{
+ const f=await fixture(),facts=path.join(f.root,'facts.json'),cli=new URL('../../scripts/execution/router.mjs',import.meta.url).pathname;
+ await writeFile(facts,JSON.stringify({native_available:true}));
+ assert.equal(JSON.parse((await exec(process.execPath,[cli,'route','--facts',facts])).stdout).route,'chatgpt-native');
+ await writeFile(facts,JSON.stringify({contract_version:2,delegate_available:true,local_available:false,delegate_reason:'execution-lifecycle',delegate_detail:'Remote executor available'}));
+ assert.equal(JSON.parse((await exec(process.execPath,[cli,'route','--facts',facts])).stdout).route,'delegated-agent');
+ await writeFile(facts,JSON.stringify({contract_version:1,host_delegation_required:true,native_available:true}));
+ await assert.rejects(()=>exec(process.execPath,[cli,'route','--facts',facts]),/contract_version 2/);
+});
 
 test('unknown future projects keep write authorization required',()=>assert.throws(()=>validateTask(packet('/tmp/repo',{project:'NEW',actions:['edit']})),/write authorization/));
 test('SEARCH research cannot silently mutate source',()=>assert.throws(()=>validateTask(packet('/tmp/repo',{project:'SEARCH',actions:['edit']})),/write authorization/));
@@ -554,4 +600,23 @@ test('retargeting a tracked link through Git metadata invalidates approval',asyn
  await unlink(metadataLink);await symlink('../second.txt',metadataLink);
  await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/workspace changed/);
  await assert.rejects(()=>readFile(path.join(f.policy.state_dir,'runs','router-test','agent-final.txt')),{code:'ENOENT'});
+});
+
+test('Codex launch adapter retains fixed sandbox, network and configuration restrictions',async()=>{
+ const f=await fixture(),prepared=await prepare(f.policy,packet(f.workspace));
+ const result=await runPrepared(f.policy,'router-test',{approved_digest:prepared.approval_digest,approval_ref:'user approved fixture'});
+ assert.equal(result.status,'returned');
+ const record=JSON.parse((await readFile(path.join(f.policy.state_dir,'runs','router-test','stdout.jsonl'),'utf8')).trim().split('\n')[0]);
+ assert.deepEqual(record.args,['exec','--ignore-user-config','--sandbox','read-only','--ephemeral','--json','--color','never','-c','approval_policy="never"','-c','sandbox_workspace_write.network_access=false','--cd',f.policy.workspace_roots[0],'--output-last-message',path.join(f.policy.state_dir,'runs','router-test','agent-final.txt'),'-']);
+});
+test('Codex subscription guard cannot be disabled while manual profile stays handoff-only',async()=>{
+ const f=await fixture();
+ f.data.profiles['codex-readonly'].requires_chatgpt_login=false;
+ await writeFile(f.policyPath,JSON.stringify(f.data));
+ await assert.rejects(()=>loadPolicy(f.policyPath),/subscription login/);
+ delete f.data.profiles['codex-readonly'];
+ f.data.profiles.manual={adapter:'manual',sandbox:'read-only',actions:['read'],max_seconds:60};
+ await writeFile(f.policyPath,JSON.stringify(f.data));
+ const policy=await loadPolicy(f.policyPath);
+ assert.equal((await prepare(policy,packet(f.workspace,{profile:'manual'}))).handoff_only,true);
 });
