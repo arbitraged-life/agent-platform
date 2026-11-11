@@ -1,4 +1,4 @@
-# Execution Router v1.0.6
+# Execution Router v1.0.7
 
 A shared decision skill and small, dependency-free local handoff supervisor for a
 multi-brain execution mesh. ChatGPT, CLI coding agents, and other local agents can
@@ -60,14 +60,46 @@ workspace roots, and state directory, not just literal policy JSON. Moving
 a relative policy path to a different executable invalidates prior approval.
 An optional per-profile `max_output_bytes` can lower the default 10 MiB output
 ceiling; unsupported/unknown policy settings fail closed.
+PR review tasks also require `review_tools` with absolute executable paths for
+`python` and `gh`. Both binaries are resolved, hashed in the policy approval,
+and rechecked before every Q snapshot. The launcher invokes the bundled helper
+through pinned Python with an isolated import path and constructs a child-only
+`PATH` starting at the pinned GitHub CLI directory; the helper runs only the
+fixed `gh` command, not a CLI-supplied executable. It does not trust the ambient
+`PATH` for either tool and bounds the total pagination read to 55 seconds.
 
 Profile names are own JSON keys, including `__proto__`; inherited names are
 not profiles. The canonical policy digest covers every configured profile.
 The router's internal `router_version` is distinct from the operator-managed
 `policy_version`. Prepared approval digests bind the internal router version;
 approvals prepared by an older router must be prepared and approved again
-before launch. Existing returned runs remain available for inspection and
-controller verification.
+before launch. Authenticated `returned` runs with an unchanged historical v1
+packet digest may still receive controller verification using the same profile,
+workspace, policy, artifact and acceptance checks. Their persisted packet is
+not rewritten. New v1 preparation, any v1 launch, and unfinished/uncertain
+v1 results remain denied; this historical read path grants no dispatch access.
+
+Task packets require `schema_version:2` and every task declares
+`review_context`: `{"schema_version":1,"kind":"general"}`
+for non-PR work, or `kind:"pr-review"` with `repository` (`owner/name`),
+positive integer `pr`, exact 40-hex `head_sha`, and an `acceptance` record.
+That record has a nonempty independent controller `verifier` and `summary`,
+plus `findings` entries (`thread_id`, `disposition` of `fixed`,
+`not-actionable` or `escalate`, and concrete `evidence`) for every active Q
+thread. Each nonempty top-level Q review body requires an indexed
+`review_bodies` evidence entry. A PR review/remediation dispatch with unknown,
+truncated, unreviewed, stale or changed Q evidence is denied before executor
+launch, rather than routed to another provider. The canonical bundled
+`q-first-pr-review` helper performs only read-only GitHub GraphQL calls; it
+does not invoke inference, request a review or post comments. Its snapshot
+digest (including complete Q review body/thread hashes and the bundled helper
+bytes) joins the prepared approval and is rechecked before launch. A failed
+prelaunch read does not consume approval or launch the executor. The task
+kind is an explicit typed operator assertion, not an inference from prose:
+misclassifying PR work as `general`, direct use of other executors and
+controller identity authentication remain outside this cooperative boundary.
+The recorded verifier is an attestation, not cryptographic evidence of
+independent human review. This source version does not activate consumers.
 
 `prepare` never calls a model. `run` requires an approval reference and exact
 prepared digest. `doctor` checks CLI flags and subscription authentication but

@@ -1,14 +1,14 @@
-# Handoff contract v1
+# Handoff contract v2
 
 This contract applies to the configured local launcher. Host-supported delegated
 tasks use the host's task schema and authorization flow; do not fabricate a local
 launcher approval reference or translate a host task into this packet by default.
 
-Task packets are JSON. Unknown top-level fields are rejected.
+Task packets are JSON. Unknown top-level fields and legacy schema v1 are rejected.
 
 | Field | Meaning |
 |---|---|
-| schema_version | Integer 1 |
+| schema_version | Integer 2 |
 | task_id | Unique lowercase letters, digits, underscore/hyphen; at most 80 characters |
 | project | Originating project/agent, not the execution surface |
 | objective | Remaining bounded work, including already resolved decisions |
@@ -20,10 +20,24 @@ Task packets are JSON. Unknown top-level fields are rejected.
 | delegation_detail | Concrete reason direct execution is insufficient or inferior |
 | acceptance_criteria | Nonempty unique strings, each requiring evidence |
 | references | Relevant source/artifact references; no credentials |
+| review_context | Required typed `{"schema_version":1,"kind":"general"}` or `kind:"pr-review"` with repository, PR number, exact head SHA, and independent acceptance evidence; see below |
 | parent_run_id | Optional originating observability ID |
 
 Tests run repository code and may write caches or perform other side effects;
 `test` is not equivalent to read-only inspection. Scope and inspect the test path.
+
+The private Beads launcher takes `--review-context FILE` separately and binds
+it into the prepared packet after checking claim readiness; do not include
+`review_context` in an input packet submitted to that launcher. Direct canonical
+launcher packets must include it themselves. This declares the task kind; the
+router cannot infer PR-review intent from objective text or govern executors
+outside this boundary.
+
+For declared PR-review work, preparation requires the Q-first snapshot to cover
+the exact PR head and independent acceptance evidence for every active finding
+and nonempty review body. A missing, truncated, stale or changed snapshot denies
+dispatch. The snapshot and bundled helper bytes join the prepared approval and
+are rechecked before launch; passive skill text alone grants no dispatch.
 
 The supervisor generates packet.json, HANDOFF.md, status.json, events.jsonl,
 stdout.jsonl, stderr.log, and agent-final.txt where applicable. Local raw logs are
@@ -32,17 +46,18 @@ before sharing. Do not place runtime state in a public repository.
 
 Preparation does not launch a model. A launch requires the prepared approval
 hash and an actual user approval reference. The packet, rendered handoff, policy,
-tracked/untracked/ignored workspace bytes, tracked symlink scope, and 24-hour
-preparation expiry are checked before launch. Submodule worktrees are unsupported;
-unreadable or oversized files and more than 512 untracked/ignored files block
-preparation rather than weakening drift checks. The ignored private router state
-is excluded from the fingerprint; writable profiles must keep it outside the
+Q-first snapshot when applicable, tracked/untracked/ignored workspace bytes,
+tracked symlink scope, and 24-hour preparation expiry are checked before launch.
+Submodule worktrees remain unsupported; unreadable or oversized files and more
+than 512 untracked/ignored files block preparation rather than weakening drift
+checks. The ignored private router state is excluded from the fingerprint;
+writable profiles must keep it outside the
 writable worktree. A live concurrent filesystem mutation is not prevented by
 these snapshots. Any material change requires a new task ID/preparation/approval.
 One workspace run is allowed at a time. A stale heartbeat or lock requires
 inspection, not an automatic restart or lock deletion.
 
-Supported v1 automatic adapter: Codex, with ChatGPT subscription login, explicit
+The supported automatic adapter is Codex, with ChatGPT subscription login, explicit
 read-only or workspace-write sandbox, no inherited user config, no API-key env,
 no automatic approval escalation, and no task network access in workspace-write.
 A write profile additionally requires an edit/test action, explicit source write
@@ -52,7 +67,7 @@ packets cannot use a writable profile.
 Claude/OpenCode/other profiles may be handoff-only until a safe adapter is verified.
 No general shell command or arbitrary extra argv is accepted from the task packet.
 No push, commit, deployment, dependency installation, or recursive delegation is
-part of v1 profiles. Model-provider requests still use subscription allowance;
+part of the configured profiles. Model-provider requests still use subscription allowance;
 there is no verified hard dollar/token cap. Runtime/output/concurrency are bounded
 (the private profile may lower output using `max_output_bytes`). On Unix, the
 supervisor terminates remaining processes in its owned group before unlocking;
