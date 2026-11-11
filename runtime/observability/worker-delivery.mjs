@@ -380,7 +380,7 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
       const task = dispatch(row);
       active.set(row.event_id, task);
       try { results.push(await task); }
-      finally { if (active.get(row.event_id) === task) active.delete(row.event_id); }
+      finally { active.delete(row.event_id); }
     }
     return results;
   };
