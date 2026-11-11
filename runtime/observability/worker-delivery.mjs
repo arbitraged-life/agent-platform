@@ -31,10 +31,11 @@ function validateConfig(configuration, exporters) {
 
 /** SQLite-backed Durable Object storage is the coordination atom; all SQL writes commit before network I/O. */
 export function createWorkerTelemetryDelivery({ storage, configuration, exporters, now = Date.now,
-  maxEntries = 512, retryDelayMs = 60_000 } = {}) {
+  maxEntries = 512, retryDelayMs = 60_000, keepAlive = null } = {}) {
   validateConfig(configuration, exporters);
   if (!storage?.sql?.exec || typeof storage.transactionSync !== 'function' || typeof now !== 'function' ||
-      !Number.isSafeInteger(maxEntries) || maxEntries < 1 || !count(retryDelayMs))
+      !Number.isSafeInteger(maxEntries) || maxEntries < 1 || !count(retryDelayMs) ||
+      (keepAlive !== null && typeof keepAlive !== 'function'))
     throw new Error('Invalid Worker telemetry storage configuration');
   storage.sql.exec(`CREATE TABLE IF NOT EXISTS telemetry_events (
     event_id TEXT PRIMARY KEY, digest TEXT NOT NULL, trace_id TEXT NOT NULL, payload TEXT,
@@ -361,11 +362,16 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
       const attempted = new Set();
       for (let attempts = 0; attempts < maxEntries && performance.now() < deadline; attempts++) {
         let timer;
+        const operation = send.drain({ limit: 1, excludedEventIds: attempted });
         const outcomes = await Promise.race([
-          send.drain({ limit: 1, excludedEventIds: attempted }),
+          operation,
           new Promise(resolve => { timer = setTimeout(() => resolve(null), Math.max(0, deadline - performance.now())); }),
         ]).finally(() => clearTimeout(timer));
-        if (outcomes === null || !outcomes.length) break;
+        if (outcomes === null) {
+          keepAlive?.(operation);
+          break;
+        }
+        if (!outcomes.length) break;
         attempted.add(outcomes[0].event_id);
         if (one(storage,
           'SELECT COUNT(*) AS count FROM telemetry_events WHERE payload IS NOT NULL').count < maxEntries) break;

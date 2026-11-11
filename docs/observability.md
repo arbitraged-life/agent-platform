@@ -313,9 +313,11 @@ period counters remain. The private host owns bindings, alarms, and credentials.
 If admission finds the payload buffer full and a persisted attempt is due, the
 callable tries distinct eligible rows within a four-second admission wait before
 retrying admission. A timed-out export retains its live claim and completes its
-durable receipt asynchronously; neither timeout nor a quota-blocked peer permits
-replay or evicts unresolved, uncertain or not-yet-due evidence. Admission still
-fails explicitly if no payload slot becomes available.
+durable receipt asynchronously; the Worker host must pass `keepAlive(promise)`
+through `DurableObjectState.waitUntil` so the request can return without evicting
+that still-active claim. Neither timeout nor a quota-blocked peer permits replay
+or evicts unresolved, uncertain or not-yet-due evidence. Admission still fails
+explicitly if no payload slot becomes available.
 The Node pending-byte limit and Worker payload-entry limit do not bound total
 SQLite size. Completed payloads are compacted, but terminal metadata, reservations,
 and replay identities intentionally remain. Do not delete them as a shortcut to

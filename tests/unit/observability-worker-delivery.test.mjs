@@ -229,13 +229,13 @@ test('full split queue reaches eligible Logfire work past a quota-blocked Honeyc
 
 test('full-buffer admission stops waiting at deadline without abandoning live export claim', async () => {
   const store = storage(), first = bundle('d'), next = bundle('e');
-  let clock = now, calls = 0, release, begun, finished;
+  let clock = now, calls = 0, release, begun, finished, retained;
   const started = new Promise(resolve => { begun = resolve; });
   const held = new Promise(resolve => { release = resolve; });
   const settled = new Promise(resolve => { finished = resolve; });
   const delivery = createWorkerTelemetryDelivery({
     storage: store, configuration: config('mirror', 4), now: () => clock,
-    maxEntries: 1, retryDelayMs: 1000,
+    maxEntries: 1, retryDelayMs: 1000, keepAlive: task => { retained = task; },
     exporters: {
       honeycomb: async record => {
         if (++calls === 1) throw new DeliveryError({ code: 'HTTP_429', httpStatus: 429, retryable: true });
@@ -251,9 +251,11 @@ test('full-buffer admission stops waiting at deadline without abandoning live ex
   await started;
   await assert.rejects(admission, { code: 'BUFFER_FULL' });
   assert.ok(performance.now() - since < 4700);
+  assert.ok(retained instanceof Promise, 'the host must retain a timed-out export until its receipt settles');
   assert.equal(delivery.usage().honeycomb.uncertain, 0);
   release();
   await settled;
+  await retained;
   assert.equal((await delivery(next)).delivery_status, 'accepted');
   assert.equal(delivery.usage().honeycomb.uncertain, 0);
 });
