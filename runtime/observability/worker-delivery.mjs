@@ -33,9 +33,10 @@ function validateConfig(configuration, exporters) {
 export function createWorkerTelemetryDelivery({ storage, configuration, exporters, now = Date.now,
   maxEntries = 512, retryDelayMs = 60_000, keepAlive = null } = {}) {
   validateConfig(configuration, exporters);
+  if (keepAlive !== null && typeof keepAlive !== 'function')
+    throw new Error('Invalid Worker telemetry lifetime callback');
   if (!storage?.sql?.exec || typeof storage.transactionSync !== 'function' || typeof now !== 'function' ||
-      !Number.isSafeInteger(maxEntries) || maxEntries < 1 || !count(retryDelayMs) ||
-      (keepAlive !== null && typeof keepAlive !== 'function'))
+      !Number.isSafeInteger(maxEntries) || maxEntries < 1 || !count(retryDelayMs))
     throw new Error('Invalid Worker telemetry storage configuration');
   storage.sql.exec(`CREATE TABLE IF NOT EXISTS telemetry_events (
     event_id TEXT PRIMARY KEY, digest TEXT NOT NULL, trace_id TEXT NOT NULL, payload TEXT,
