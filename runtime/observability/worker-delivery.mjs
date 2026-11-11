@@ -338,6 +338,14 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
     const fits = name => periodActive(name, time) && available(name) >= units[name];
     return configuration.mode === 'mirror' ? SINKS.every(fits) : SINKS.some(fits);
   };
+  const due = row => {
+    if (!row.route) return canAdmit(decode(row.payload));
+    if (Object.keys(decode(row.in_flight)).length) return true;
+    const receipts = decode(row.receipts), delays = decode(row.next_attempt_at);
+    return row.route.split(',').some(name => !receipts[name] ||
+      (receipts[name].retryable && receipts[name].reason_code === 'HTTP_429' &&
+        now() >= (delays[name] ?? Infinity)));
+  };
   const send = async value => {
     const record = snapshot(value);
     if (active.has(record.event_id)) return active.get(record.event_id);
@@ -368,17 +376,11 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
     const results = [];
     for (const row of rows) {
       if (results.length >= limit) break;
-      if (active.has(row.event_id)) continue;
-      const receipts = decode(row.receipts), inFlight = decode(row.in_flight), delays = decode(row.next_attempt_at);
-      if ((!row.route && canAdmit(decode(row.payload))) || (row.route &&
-          (Object.keys(inFlight).length || row.route.split(',').some(name => !receipts[name] ||
-            (receipts[name].retryable && receipts[name].reason_code === 'HTTP_429' &&
-              now() >= (delays[name] ?? Infinity)))))) {
-        const task = dispatch(row);
-        active.set(row.event_id, task);
-        try { results.push(await task); }
-        finally { if (active.get(row.event_id) === task) active.delete(row.event_id); }
-      }
+      if (active.has(row.event_id) || !due(row)) continue;
+      const task = dispatch(row);
+      active.set(row.event_id, task);
+      try { results.push(await task); }
+      finally { if (active.get(row.event_id) === task) active.delete(row.event_id); }
     }
     return results;
   };
