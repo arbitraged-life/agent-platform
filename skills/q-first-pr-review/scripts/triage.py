@@ -50,14 +50,14 @@ def is_q(login):
     return isinstance(login, str) and login.lower() in Q_AUTHORS
 
 
-def _read_pr_page(owner, name, number, cursor, gh_bin="gh", timeout=45):
+def _read_pr_page(owner, name, number, cursor, timeout=45):
     # All caller input remains an argv VALUE after a fixed key; no shell interpretation.
-    command = [gh_bin, "api", "graphql", "-f", "query=" + QUERY,
+    command = ["gh", "api", "graphql", "-f", "query=" + QUERY,
                "-f", "owner=" + owner, "-f", "name=" + name,
                "-F", "number=" + str(number)]
     if cursor:
         command.extend(["-f", "after=" + cursor])
-    # qlty-ignore(bandit:B603): Caller supplies the reviewed executable as argv; no shell expansion.
+    # qlty-ignore(bandit:B603): A fixed gh executable, explicit argv, and shell=False prevent shell injection.
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
     response = subprocess.run(command, shell=False, text=True,
                               capture_output=True, check=True, timeout=timeout)
@@ -78,7 +78,7 @@ def _append_bounded_threads(connection, collected):
         collected.append(thread)
 
 
-def review_snapshot(repo, number, gh_bin="gh"):
+def review_snapshot(repo, number):
     if not REPO_PATTERN.fullmatch(repo):
         raise ValueError("Repository must be owner/name")
     if number < 1:
@@ -91,8 +91,8 @@ def review_snapshot(repo, number, gh_bin="gh"):
     for _ in range(PAGE_LIMIT):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise subprocess.TimeoutExpired(gh_bin, TOTAL_TIMEOUT)
-        pr = _read_pr_page(owner, name, number, cursor, gh_bin, min(45, remaining))
+            raise subprocess.TimeoutExpired("gh", TOTAL_TIMEOUT)
+        pr = _read_pr_page(owner, name, number, cursor, min(45, remaining))
         if head is not None and pr["headRefOid"] != head:
             raise ValueError("PR head moved during paginated review read; retry once")
         head = pr["headRefOid"]
@@ -209,10 +209,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, help="GitHub owner/repo")
     parser.add_argument("--pr", type=int, required=True)
-    parser.add_argument("--gh-bin", default="gh", help="Pinned GitHub CLI path for a guarded launcher")
     args = parser.parse_args(argv)
     try:
-        pr, threads = review_snapshot(args.repo, args.pr, args.gh_bin)
+        pr, threads = review_snapshot(args.repo, args.pr)
         print(json.dumps(classify(pr, threads, args.repo), separators=(",", ":")))
     except (ValueError, OSError, subprocess.CalledProcessError,
             subprocess.TimeoutExpired):

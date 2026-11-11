@@ -63,9 +63,10 @@ ceiling; unsupported/unknown policy settings fail closed.
 PR review tasks also require `review_tools` with absolute executable paths for
 `python` and `gh`. Both binaries are resolved, hashed in the policy approval,
 and rechecked before every Q snapshot. The launcher invokes the bundled helper
-through pinned Python with an isolated import path and passes the pinned GitHub
-CLI path directly; it does not trust the ambient `PATH` for these tools. The
-helper bounds its total pagination read to 55 seconds.
+through pinned Python with an isolated import path and constructs a child-only
+`PATH` starting at the pinned GitHub CLI directory; the helper runs only the
+fixed `gh` command, not a CLI-supplied executable. It does not trust the ambient
+`PATH` for either tool and bounds the total pagination read to 55 seconds.
 
 Profile names are own JSON keys, including `__proto__`; inherited names are
 not profiles. The canonical policy digest covers every configured profile.

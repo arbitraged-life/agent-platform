@@ -158,6 +158,7 @@ export async function loadPolicy(filename) {
  }
  const review_tools=raw.review_tools?Object.fromEntries(await Promise.all(
   Object.entries(raw.review_tools).map(async ([name,executable])=>[name,await executableIdentity({adapter:'codex',executable})]))):undefined;
+ if(review_tools)check(path.basename(review_tools.gh.path)==='gh','review_tools gh executable must be named gh');
  const resolved={...raw,source_path:path.resolve(filename),state_dir:await canonicalPath(expand(raw.state_dir,base)),workspace_roots:roots,profiles,review_tools};
  return {...resolved,config_digest:digest({schema_version:resolved.schema_version,policy_version:resolved.policy_version,state_dir:resolved.state_dir,workspace_roots:roots,profiles,protected_branches:resolved.protected_branches,review_tools})};
 }

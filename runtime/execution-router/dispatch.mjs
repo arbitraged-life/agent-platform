@@ -49,13 +49,13 @@ async function reviewSnapshot(policy,task) {
   executableIdentity({adapter:'codex',executable:tool.path})));
  if([tools.python,tools.gh].some((tool,index)=>digest(identities[index])!==digest(tool)))
   throw new Error('Pinned Q-first review executable changed; prepare a new handoff');
- const env={PATH:'/usr/bin:/bin',LANG:process.env.LANG??'C',HOME:process.env.HOME??''};
+ const env={PATH:`${path.dirname(tools.gh.path)}:/usr/bin:/bin`,LANG:process.env.LANG??'C',HOME:process.env.HOME??''};
  for(const key of ['GH_TOKEN','GITHUB_TOKEN','GH_ENTERPRISE_TOKEN','GH_HOST','GH_CONFIG_DIR','XDG_CONFIG_HOME'])
   if(process.env[key])env[key]=process.env[key];
  let stdout;
  try {
   ({stdout}=await exec(tools.python.path,['-I',qHelper,'--repo',task.review_context.repository,
-   '--pr',String(task.review_context.pr),'--gh-bin',tools.gh.path],
+   '--pr',String(task.review_context.pr)],
    {timeout:65000,maxBuffer:2_000_000,env}));
  } catch {
   throw new Error('Q-first review snapshot unavailable; do not dispatch another reviewer');
