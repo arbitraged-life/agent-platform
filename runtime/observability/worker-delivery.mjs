@@ -358,9 +358,16 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
       // A due, persisted delivery may release the only buffer slot. Bound work
       // per request; the host alarm continues remaining retries if none settle.
       const deadline = performance.now() + 4000;
+      const attempted = new Set();
       for (let attempts = 0; attempts < maxEntries && performance.now() < deadline; attempts++) {
-        const outcomes = await send.drain({ limit: 1 });
-        if (!outcomes.length || one(storage,
+        let timer;
+        const outcomes = await Promise.race([
+          send.drain({ limit: 1, excludedEventIds: attempted }),
+          new Promise(resolve => { timer = setTimeout(() => resolve(null), Math.max(0, deadline - performance.now())); }),
+        ]).finally(() => clearTimeout(timer));
+        if (outcomes === null || !outcomes.length) break;
+        attempted.add(outcomes[0].event_id);
+        if (one(storage,
           'SELECT COUNT(*) AS count FROM telemetry_events WHERE payload IS NOT NULL').count < maxEntries) break;
       }
       row = submit(record);
@@ -370,13 +377,13 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
     active.set(record.event_id, task);
     return task.finally(() => active.delete(record.event_id));
   };
-  send.drain = async ({ limit = 20 } = {}) => {
+  send.drain = async ({ limit = 20, excludedEventIds = null } = {}) => {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('Invalid Worker drain limit');
     const rows = all(storage, 'SELECT * FROM telemetry_events WHERE payload IS NOT NULL ORDER BY event_id');
     const results = [];
     for (const row of rows) {
       if (results.length >= limit) break;
-      if (active.has(row.event_id) || !due(row)) continue;
+      if (excludedEventIds?.has(row.event_id) || active.has(row.event_id) || !due(row)) continue;
       const task = dispatch(row);
       active.set(row.event_id, task);
       try { results.push(await task); }

@@ -154,13 +154,9 @@ test('simultaneous full-buffer recovery shares the due export claim', async () =
   clock += 1000;
   const recover = delivery(second);
   await begun;
-  const competing = delivery(third);
+  await assert.rejects(delivery(third), { code: 'BUFFER_FULL' });
   release();
-  const [admitted, rejected] = await Promise.allSettled([recover, competing]);
-  assert.equal(admitted.status, 'fulfilled');
-  assert.equal(admitted.value.delivery_status, 'accepted');
-  assert.equal(rejected.status, 'rejected');
-  assert.equal(rejected.reason.code, 'BUFFER_FULL');
+  assert.equal((await recover).delivery_status, 'accepted');
   assert.equal(honeycombCalls, 3); // Initial 429, shared retry, newly admitted second trace.
   assert.equal(delivery.usage().honeycomb.uncertain, 0);
   assert.equal(delivery.usage().logfire.uncertain, 0);
@@ -200,6 +196,65 @@ test('full queue reaches a later due trace when earlier retries remain buffered'
   clock += 1000;
   ready = true;
   assert.equal((await delivery(trace(size))).delivery_status, 'accepted');
+  assert.equal(delivery.usage().honeycomb.uncertain, 0);
+});
+
+test('full split queue reaches eligible Logfire work past a quota-blocked Honeycomb retry', async () => {
+  const store = storage(), first = bundle('a'), second = bundle('b'), third = bundle('c');
+  let clock = now, logfireCalls = 0;
+  const exporters = {
+    honeycomb: async () => { throw new DeliveryError({ code: 'HTTP_429', httpStatus: 429, retryable: true }); },
+    logfire: async record => {
+      if (++logfireCalls === 1) throw new DeliveryError({ code: 'HTTP_429', httpStatus: 429, retryable: true });
+      return receipt(record);
+    },
+  };
+  const original = createWorkerTelemetryDelivery({
+    storage: store, configuration: config('split', 4), now: () => clock,
+    maxEntries: 2, retryDelayMs: 1000, exporters,
+  });
+  assert.equal((await original(first)).route, 'honeycomb');
+  assert.equal((await original(second)).route, 'logfire');
+  clock += 1000;
+  const constrained = config('split', 4);
+  constrained.sinks.honeycomb.other_usage = 3;
+  const restarted = createWorkerTelemetryDelivery({
+    storage: store, configuration: constrained, now: () => clock,
+    maxEntries: 2, retryDelayMs: 1000, exporters,
+  });
+  assert.equal((await restarted(third)).delivery_status, 'accepted');
+  assert.equal(logfireCalls, 3); // Initial 429, recovered second trace, newly admitted third trace.
+  assert.equal(restarted.usage().honeycomb.uncertain, 0);
+});
+
+test('full-buffer admission stops waiting at deadline without abandoning live export claim', async () => {
+  const store = storage(), first = bundle('d'), next = bundle('e');
+  let clock = now, calls = 0, release, begun, finished;
+  const started = new Promise(resolve => { begun = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const settled = new Promise(resolve => { finished = resolve; });
+  const delivery = createWorkerTelemetryDelivery({
+    storage: store, configuration: config('mirror', 4), now: () => clock,
+    maxEntries: 1, retryDelayMs: 1000,
+    exporters: {
+      honeycomb: async record => {
+        if (++calls === 1) throw new DeliveryError({ code: 'HTTP_429', httpStatus: 429, retryable: true });
+        if (record.event_id === first.event_id) { begun(); await held; finished(); }
+        return receipt(record);
+      },
+      logfire: async record => receipt(record),
+    },
+  });
+  await delivery(first);
+  clock += 1000;
+  const since = performance.now(), admission = delivery(next);
+  await started;
+  await assert.rejects(admission, { code: 'BUFFER_FULL' });
+  assert.ok(performance.now() - since < 4700);
+  assert.equal(delivery.usage().honeycomb.uncertain, 0);
+  release();
+  await settled;
+  assert.equal((await delivery(next)).delivery_status, 'accepted');
   assert.equal(delivery.usage().honeycomb.uncertain, 0);
 });
 
