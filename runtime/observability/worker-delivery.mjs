@@ -154,7 +154,8 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
       return prior;
     }
     if (one(storage, 'SELECT COUNT(*) AS count FROM telemetry_events WHERE payload IS NOT NULL').count >= maxEntries)
-      throw new Error('Worker telemetry queue capacity exhausted; evidence was not admitted');
+      throw Object.assign(new Error('Worker telemetry queue capacity exhausted; evidence was not admitted'),
+        { code: 'BUFFER_FULL' });
     const units = mapOtlpRecord(record).units;
     const periods = Object.fromEntries(SINKS.map(name => [name, configuration.sinks[name].period_start]));
     storage.sql.exec('INSERT INTO telemetry_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
@@ -340,7 +341,19 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
   const send = async value => {
     const record = snapshot(value);
     if (active.has(record.event_id)) return active.get(record.event_id);
-    const task = dispatch(submit(record));
+    let row;
+    try { row = submit(record); }
+    catch (error) {
+      if (error.code !== 'BUFFER_FULL') throw error;
+      const next = send.nextAttemptAt();
+      if (next === null || next > now() + 1) throw error;
+      // A due, persisted delivery may release the only buffer slot. Never evict
+      // unresolved evidence or replay a signal whose acceptance is uncertain.
+      await send.drain({ limit: 100 });
+      row = submit(record);
+    }
+    if (active.has(record.event_id)) return active.get(record.event_id);
+    const task = dispatch(row);
     active.set(record.event_id, task);
     return task.finally(() => active.delete(record.event_id));
   };

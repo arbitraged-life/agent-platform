@@ -204,6 +204,9 @@ tool observation, not two spans duplicating one measurement.
 `gen_ai.conversation.id`, `gen_ai.agent.name`, `gen_ai.operation.name`,
 tool/server/call identity, task/run identity, outcome and controlled failure
 metadata are shared across destinations. Missing source fields stay unknown.
+Both root and tool span/log attributes retain the canonical evidence origin,
+verification status, production eligibility, reason availability/provenance and
+handling outcome; absence is not silently reclassified as verified capture.
 An `agent.trace` bundle contains one trace's canonical events and exactly one
 terminal event; the bundle preserves stable event IDs and parent references.
 
@@ -307,6 +310,10 @@ canonical mapper/exporters but does not import Node filesystem or SQLite APIs.
 The callable has `drain({limit})`, `nextAttemptAt()`, and `usage()` methods. Only
 confirmed deliveries release payload storage; route/receipt tombstones and
 period counters remain. The private host owns bindings, alarms, and credentials.
+If admission finds the payload buffer full and a persisted attempt is due, the
+callable drains eligible work before retrying admission. Unresolved, uncertain or
+not-yet-due evidence is never evicted to make room; admission still fails
+explicitly if no payload slot becomes available.
 The Node pending-byte limit and Worker payload-entry limit do not bound total
 SQLite size. Completed payloads are compacted, but terminal metadata, reservations,
 and replay identities intentionally remain. Do not delete them as a shortcut to

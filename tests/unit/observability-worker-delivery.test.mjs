@@ -109,6 +109,29 @@ test('unresolved delivery retains buffer capacity rather than discarding its onl
   await assert.rejects(() => deliver(bundle('r')), /full|capacity/i);
 });
 
+test('full durable queue drains due retry before rejecting a new whole trace', async () => {
+  const store = storage(), first = bundle('j'), second = bundle('k');
+  let clock = now, honeycombCalls = 0;
+  const delivery = createWorkerTelemetryDelivery({
+    storage: store, configuration: config('mirror', 4), now: () => clock,
+    maxEntries: 1, retryDelayMs: 1000,
+    exporters: {
+      honeycomb: async record => {
+        if (++honeycombCalls === 1) throw new DeliveryError({ code: 'HTTP_429', httpStatus: 429, retryable: true });
+        return receipt(record);
+      },
+      logfire: async record => receipt(record),
+    },
+  });
+  assert.equal((await delivery(first)).destinations.honeycomb.reason_code, 'HTTP_429');
+  assert.equal(delivery.nextAttemptAt(), now + 1000);
+  clock += 1000;
+  assert.equal((await delivery(second)).delivery_status, 'accepted');
+  assert.equal(honeycombCalls, 3);
+  assert.equal(delivery.usage().honeycomb.accepted, 4);
+  assert.equal(delivery.usage().logfire.accepted, 4);
+});
+
 test('explicit 429 is retryable without repeating the already-accepted peer', async () => {
   const store = storage(), event = bundle('c');
   let calls = 0, clock = now;
