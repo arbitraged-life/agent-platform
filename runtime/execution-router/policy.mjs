@@ -6,11 +6,11 @@ import { createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
-export const VERSION = '1.0.6';
+export const VERSION = '1.0.7';
 export const exec = promisify(execFile);
 const REASONS = new Set(['missing-capability','execution-lifecycle','local-harness','explicit-user-choice']);
 const ACTIONS = new Set(['read','edit','test']);
-const TASK_FIELDS = new Set(['schema_version','task_id','project','objective','workspace','profile','actions','source_write_authorized','delegation_reason','delegation_detail','acceptance_criteria','references','parent_run_id']);
+const TASK_FIELDS = new Set(['schema_version','task_id','project','objective','workspace','profile','actions','source_write_authorized','delegation_reason','delegation_detail','acceptance_criteria','references','parent_run_id','review_context']);
 function check(ok, message) { if (!ok) throw new Error(message); }
 function canonical(value) {
  if (Array.isArray(value)) return value.map(canonical);
@@ -88,6 +88,23 @@ export function routeTask(facts={}) {
  if (facts.local_available) return {route:'chatgpt-local',reason:'Use Desktop Commander directly; code and complexity alone do not require another agent.'};
  return {route:'needs-user',reason:'Discover supported tools, complete independent work, then surface only the remaining capability gap.'};
 }
+function validateReviewContext(review) {
+ check(review && typeof review==='object' && !Array.isArray(review) && review.schema_version===1,'Typed review_context is required');
+ if(review.kind==='general') {
+  check(Object.keys(review).length===2 && Object.hasOwn(review,'kind'),'Invalid general review_context');
+  return;
+ }
+ check(review.kind==='pr-review' && Object.keys(review).length===6 && ['repository','pr','head_sha','acceptance'].every(key=>Object.hasOwn(review,key)),'Invalid PR review_context');
+ check(typeof review.repository==='string' && /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(review.repository)
+  && Number.isSafeInteger(review.pr) && review.pr>0
+  && typeof review.head_sha==='string' && /^[0-9a-f]{40}$/.test(review.head_sha),'Invalid PR review identity');
+ const a=review.acceptance;
+ check(a && typeof a==='object' && !Array.isArray(a) && Object.keys(a).length===4
+  && ['verifier','summary','findings','review_bodies'].every(key=>Object.hasOwn(a,key))
+  && ['verifier','summary'].every(key=>typeof a[key]==='string' && a[key].trim() && a[key].length<=2000)
+  && Array.isArray(a.findings) && a.findings.length<=100 && Array.isArray(a.review_bodies) && a.review_bodies.length<=20,
+  'Independent PR review acceptance evidence required');
+}
 export function validateTask(task) {
  check(task && typeof task==='object' && !Array.isArray(task),'Task must be an object');
  for (const key of Object.keys(task)) check(TASK_FIELDS.has(key),`Unknown task field: ${key}`);
@@ -102,6 +119,7 @@ export function validateTask(task) {
  task.acceptance_criteria.forEach(c=>text(c,'acceptance criterion',2000));
  check(new Set(task.acceptance_criteria).size===task.acceptance_criteria.length,'Duplicate acceptance criteria');
  check(Array.isArray(task.references) && task.references.length<=30 && task.references.every(r=>typeof r==='string' && r.length<4000),'Invalid references');
+ validateReviewContext(task.review_context);
  if (task.parent_run_id!==undefined) text(task.parent_run_id,'parent_run_id',200);
  const serialized=JSON.stringify(task);
  check(serialized.length<50000,'Task packet is too large; provide bounded context');

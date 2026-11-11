@@ -2,6 +2,7 @@ import { mkdir, rmdir, writeFile, readFile, rename, appendFile, rm, stat, realpa
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { validateTask, taskId, digest, contained, resolveProfile, workspaceFingerprint, doctorProfile, cleanEnvironment, exec, executableIdentity, VERSION } from './policy.mjs';
 const now=()=>new Date().toISOString();
 const runDir=(policy,id)=>path.join(policy.state_dir,'runs',taskId(id));
@@ -9,15 +10,59 @@ async function json(filename,value) { const temp=filename+'.'+randomUUID()+'.tmp
 const readJson=async filename=>JSON.parse(await readFile(filename,'utf8'));
 async function event(dir,type,metadata={}) { await appendFile(path.join(dir,'events.jsonl'),JSON.stringify({at:now(),type,...metadata})+'\n',{mode:0o600}); }
 function renderHandoff(task) { const id=task.task_id,workspace=task.workspace; return `# Handoff: ${id}\n\nProject: ${task.project}\nProfile: ${task.profile}\nWorkspace: ${workspace}\nActions: ${task.actions.join(', ')}\nReason: ${task.delegation_reason}: ${task.delegation_detail}\n\n## Objective\n${task.objective}\n\n## Acceptance criteria\n${task.acceptance_criteria.map(c=>'- '+c).join('\n')}\n\n## References\n${task.references.map(r=>'- '+r).join('\n')}\n\n## Boundaries\nWork only on this task. Do not launch another agent, install dependencies, commit, push, deploy, send messages, access unrelated personal files, change permissions, or spend additional API money. Stop and report a blocker when broader authority is needed. Read the applicable repository instructions. Return a factual summary, changed paths, commands and outcomes, and unresolved issues. Do not claim independent acceptance.\n\nThe launch adapter does not inherit ChatGPT connectors or hidden conversation context. Model-provider access is separate from task network permissions.\n`; }
+const qHelper=fileURLToPath(new URL('../../skills/q-first-pr-review/scripts/triage.py',import.meta.url));
+export function validateReviewSnapshot(review,snapshot) {
+ if(!snapshot || typeof snapshot!=='object' || snapshot.repository!==review.repository || snapshot.pr!==review.pr
+  || snapshot.head_sha!==review.head_sha || snapshot.q_review_covers_head!==true)
+  throw new Error('Q-first review does not cover the exact PR head');
+ if(snapshot.state!=='OPEN' || snapshot.q_review_observed!==true || snapshot.review_history_truncated!==false
+  || snapshot.q_review_body_list_truncated===true)
+  throw new Error('Q-first review coverage is incomplete');
+ const findings=snapshot.findings,bodies=snapshot.q_review_bodies_unverified;
+ if(!Array.isArray(findings) || !Array.isArray(bodies) || findings.length>100 || bodies.length>20
+  || snapshot.q_review_body_count!==bodies.length)
+  throw new Error('Q-first review findings are incomplete');
+ const accepted=review.acceptance.findings;
+ if(accepted.length!==findings.length || findings.some(f=>!f || typeof f.thread_id!=='string' || !f.thread_id)
+  || new Set(findings.map(f=>f.thread_id)).size!==findings.length
+  || accepted.some(f=>!f || typeof f!=='object' || Array.isArray(f)
+   || Object.keys(f).sort().join(',')!=='disposition,evidence,thread_id'
+   || typeof f.thread_id!=='string' || !['fixed','not-actionable','escalate'].includes(f.disposition)
+   || typeof f.evidence!=='string' || !f.evidence.trim() || f.evidence.length>2000)
+  || new Set(accepted.map(f=>f.thread_id)).size!==accepted.length
+  || findings.some(f=>!accepted.some(a=>a.thread_id===f.thread_id)))
+  throw new Error('Each active Q finding requires independent acceptance evidence');
+ const bodyEvidence=review.acceptance.review_bodies;
+ if(bodyEvidence.length!==bodies.length || bodyEvidence.some((entry,index)=>!entry
+  || typeof entry!=='object' || Array.isArray(entry)
+  || Object.keys(entry).sort().join(',')!=='evidence,index'
+  || entry.index!==index || typeof entry.evidence!=='string'
+  || !entry.evidence.trim() || entry.evidence.length>2000))
+  throw new Error('Each Q review body requires independent acceptance evidence');
+ return digest(snapshot);
+}
+async function reviewSnapshot(task) {
+ if(task.review_context.kind==='general')return null;
+ let response;
+ try {
+  const {stdout}=await exec('python3',[qHelper,'--repo',task.review_context.repository,'--pr',String(task.review_context.pr)],
+   {timeout:35000,maxBuffer:2_000_000});
+  response=JSON.parse(stdout);
+ } catch {
+  throw new Error('Q-first review snapshot unavailable; do not dispatch another reviewer');
+ }
+ return validateReviewSnapshot(task.review_context,response);
+}
 export async function prepare(policy,input) {
  const task=validateTask(input);const {workspace,profile}=await resolveProfile(policy,task); task.workspace=workspace;
+ const reviewSnapshotDigest=await reviewSnapshot(task);
  if(contained(workspace,policy.state_dir)) await mkdir(path.dirname(policy.state_dir),{recursive:true,mode:0o700});
  const fingerprint=await workspaceFingerprint(workspace,policy.state_dir),executable=await executableIdentity(profile),id=task.task_id;
  await mkdir(path.join(policy.state_dir,'runs'),{recursive:true,mode:0o700});
  const dir=runDir(policy,id);
  try{await mkdir(dir,{mode:0o700});}catch(e){if(e.code==='EEXIST')throw new Error('Task already exists; inspect it or use a new task_id');throw e;}
- const prepared={router_version:VERSION,status:'prepared',task_id:id,project:task.project,created_at:now(),expires_at:new Date(Date.now()+86400000).toISOString(),policy_digest:policy.config_digest,workspace_fingerprint:fingerprint,packet_digest:digest(task),executable_identity:executable,profile:task.profile,verified:false};
- prepared.approval_digest=digest({router_version:VERSION,packet:task,policy:policy.config_digest,workspace:fingerprint,executable,expires_at:prepared.expires_at});
+ const prepared={router_version:VERSION,status:'prepared',task_id:id,project:task.project,created_at:now(),expires_at:new Date(Date.now()+86400000).toISOString(),policy_digest:policy.config_digest,workspace_fingerprint:fingerprint,packet_digest:digest(task),review_snapshot_digest:reviewSnapshotDigest,executable_identity:executable,profile:task.profile,verified:false};
+ prepared.approval_digest=digest({router_version:VERSION,packet:task,policy:policy.config_digest,workspace:fingerprint,executable,review_snapshot_digest:reviewSnapshotDigest,expires_at:prepared.expires_at});
  await json(path.join(dir,'packet.json'),task);await json(path.join(dir,'status.json'),prepared);
  const handoff=renderHandoff(task);
  await writeFile(path.join(dir,'HANDOFF.md'),handoff,{mode:0o600});
@@ -59,7 +104,7 @@ export async function runPrepared(policy,id,approval={}) {
  if(state.policy_digest!==policy.config_digest)throw new Error('Prepared policy changed; prepare a new handoff');
  const task=await readJson(path.join(dir,'packet.json'));
  if(digest(task)!==state.packet_digest)throw new Error('Packet digest changed; approval invalid');
- if(state.router_version!==VERSION || state.approval_digest!==digest({router_version:VERSION,packet:task,policy:state.policy_digest,workspace:state.workspace_fingerprint,executable:state.executable_identity,expires_at:state.expires_at}))throw new Error('Prepared router version or approval changed; prepare a new handoff');
+ if(state.router_version!==VERSION || state.approval_digest!==digest({router_version:VERSION,packet:task,policy:state.policy_digest,workspace:state.workspace_fingerprint,executable:state.executable_identity,review_snapshot_digest:state.review_snapshot_digest,expires_at:state.expires_at}))throw new Error('Prepared router version or approval changed; prepare a new handoff');
  const {profile,workspace}=await resolveProfile(policy,task);
  const executable=await executableIdentity(profile);
  if(digest(executable)!==digest(state.executable_identity))throw new Error('Prepared executable changed; prepare a new handoff');
@@ -67,6 +112,7 @@ export async function runPrepared(policy,id,approval={}) {
  if(input!==renderHandoff(task))throw new Error('Rendered handoff changed; prepare a new handoff');
  if(profile.adapter!=='codex')throw new Error('Handoff-only profile: launch in the selected agent after approval');
  if((await workspaceFingerprint(workspace,policy.state_dir)).digest!==state.workspace_fingerprint.digest)throw new Error('Prepared workspace changed; prepare a new handoff');
+ if((await reviewSnapshot(task))!==state.review_snapshot_digest)throw new Error('Q-first review changed before dispatch; prepare a new handoff');
  await doctorProfile(profile);
  await mkdir(path.join(policy.state_dir,'locks'),{recursive:true,mode:0o700});
  const lock=path.join(policy.state_dir,'locks',digest(workspace));
@@ -87,6 +133,7 @@ export async function runPrepared(policy,id,approval={}) {
   // Doctor can take seconds: bind the exact branch and workspace bytes again under the lock before spawn.
   await resolveProfile(policy,task);
   if((await workspaceFingerprint(workspace,policy.state_dir)).digest!==state.workspace_fingerprint.digest)throw new Error('Prepared workspace changed before launch; prepare a new handoff');
+  if((await reviewSnapshot(task))!==state.review_snapshot_digest)throw new Error('Q-first review changed before launch; prepare a new handoff');
   if(Date.parse(state.expires_at)<=Date.now())throw new Error('Prepared approval expired before launch');
   let childError;
   const latestExecutable=await executableIdentity(profile);

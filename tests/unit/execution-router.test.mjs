@@ -10,7 +10,7 @@ import { prepare, runPrepared, inspect, requestCancel, acceptResult } from '../.
 const exec = promisify(execFile);
 const fixtureRoots=new Set();
 after(async()=>Promise.all([...fixtureRoots].map(root=>rm(root,{recursive:true,force:true}))));
-const packet = (workspace, overrides={}) => ({ schema_version:1, task_id:'router-test', project:'AGENT', objective:'Inspect the fixture without changes.', workspace, profile:'codex-readonly', actions:['read'], source_write_authorized:false, delegation_reason:'execution-lifecycle', delegation_detail:'Independent bounded repository loop is needed.', acceptance_criteria:['Report the fixture result.'], references:[], ...overrides });
+const packet = (workspace, overrides={}) => ({ schema_version:1, task_id:'router-test', project:'AGENT', objective:'Inspect the fixture without changes.', workspace, profile:'codex-readonly', actions:['read'], source_write_authorized:false, delegation_reason:'execution-lifecycle', delegation_detail:'Independent bounded repository loop is needed.', acceptance_criteria:['Report the fixture result.'], references:[], review_context:{schema_version:1,kind:'general'}, ...overrides });
 async function fixture(mode='success') {
  const root=await mkdtemp(path.join(tmpdir(),'execution-router-'));
  fixtureRoots.add(root);
@@ -54,6 +54,61 @@ test('mocked surface capability and authorization outcomes do not bypass denied 
   for(const {label,facts,route} of cases)assert.equal(routeTask(facts).route,route,label);
 });
 
+test('dispatch requires typed review intent rather than relying on skill prose',()=>{
+ const task=packet('/tmp/repo');
+ delete task.review_context;
+ assert.throws(()=>validateTask(task),/review_context/);
+ assert.throws(()=>validateTask(packet('/tmp/repo',{review_context:{schema_version:1,kind:'pr-review'}})),/PR review/);
+});
+test('pre-dispatch review gate denies missing Q coverage, stale heads and untriaged findings',async()=>{
+ const f=await fixture();
+ const context={schema_version:1,kind:'pr-review',repository:'owner/repo',pr:42,head_sha:'a'.repeat(40),
+   acceptance:{verifier:'independent-controller',summary:'Reviewed current diff and Q findings',findings:[],review_bodies:[]}};
+ const task=packet(f.workspace,{review_context:context});
+ const q={repository:'owner/repo',pr:42,head_sha:'a'.repeat(40),state:'OPEN',q_review_observed:false,
+   q_review_covers_head:null,review_history_truncated:false,q_review_body_list_truncated:false,
+   q_review_body_count:0,findings:[],q_review_bodies_unverified:[]};
+ const {validateReviewSnapshot}=await import('../../runtime/execution-router/dispatch.mjs');
+ assert.throws(()=>validateReviewSnapshot(context,q),/Q-first review/);
+ q.q_review_observed=true;q.q_review_covers_head=true;q.head_sha='b'.repeat(40);
+ assert.throws(()=>validateReviewSnapshot(context,q),/exact PR head/);
+ q.head_sha='a'.repeat(40);q.findings=[{thread_id:'thread-1'}];
+ assert.throws(()=>validateReviewSnapshot(context,q),/finding/);
+ context.acceptance.findings=[{thread_id:'thread-1',disposition:'escalate',evidence:'Current code needs repair.'}];
+ assert.doesNotThrow(()=>validateTask(task));
+ assert.doesNotThrow(()=>validateReviewSnapshot(context,q));
+});
+test('real Q helper and CLI deny unreviewed dispatch and stale Q head before Codex',async()=>{
+ const f=await fixture(),cli=new URL('../../scripts/execution/router.mjs',import.meta.url).pathname;
+ const binDir=path.join(f.root,'bin');await mkdir(binDir);
+ const responseFile=path.join(f.root,'q-response.json'),gh=path.join(binDir,'gh');
+ await writeFile(gh,`#!/bin/sh\nexec /bin/cat '${responseFile}'\n`);await chmod(gh,0o700);
+ const head='a'.repeat(40),review={schema_version:1,kind:'pr-review',repository:'owner/repo',pr:42,head_sha:head,
+  acceptance:{verifier:'independent-controller',summary:'Examined current Q findings and diff',findings:[],review_bodies:[]}};
+ const data={number:42,state:'OPEN',isDraft:false,url:'https://github.com/owner/repo/pull/42',headRefOid:head,
+  reviews:{nodes:[],pageInfo:{hasPreviousPage:false}},reviewThreads:{nodes:[],pageInfo:{hasNextPage:false,endCursor:null}}};
+ const response=()=>writeFile(responseFile,JSON.stringify({data:{repository:{pullRequest:data}}}));
+ const taskFile=path.join(f.root,'task.json');await writeFile(taskFile,JSON.stringify(packet(f.workspace,{review_context:review})));
+ const originalPath=process.env.PATH;process.env.PATH=`${binDir}:${originalPath}`;
+ try {
+  await response();
+  await assert.rejects(()=>exec(process.execPath,[cli,'prepare','--policy',f.policyPath,'--task',taskFile]),/Q-first review/);
+  assert.equal((await readFile(gh,'utf8')).startsWith('#!/bin/sh'),true);
+  data.reviews.nodes=[{author:{login:'amazon-q-developer'},submittedAt:'2026-11-10T00:00:00Z',commit:{oid:head},body:''}];
+  await response();
+  const prepared=JSON.parse((await exec(process.execPath,[cli,'prepare','--policy',f.policyPath,'--task',taskFile])).stdout);
+  assert.equal(prepared.status,'prepared');
+  data.headRefOid='b'.repeat(40);await response();
+  await assert.rejects(()=>exec(process.execPath,[cli,'run','--policy',f.policyPath,'--task-id','router-test',
+   '--approved-digest',prepared.approval_digest,'--approval-ref','fixture reviewed current head']),/exact PR head/);
+  assert.equal((await inspect(f.policy,'router-test')).status,'prepared');
+  data.headRefOid=head;await response();
+  const returned=JSON.parse((await exec(process.execPath,[cli,'run','--policy',f.policyPath,'--task-id','router-test',
+   '--approved-digest',prepared.approval_digest,'--approval-ref','fixture reviewed current head'])).stdout);
+  assert.equal(returned.status,'returned');
+  assert.equal(returned.verified,false);
+ } finally {process.env.PATH=originalPath;}
+});
 test('unknown future projects keep write authorization required',()=>assert.throws(()=>validateTask(packet('/tmp/repo',{project:'NEW',actions:['edit']})),/write authorization/));
 test('SEARCH research cannot silently mutate source',()=>assert.throws(()=>validateTask(packet('/tmp/repo',{project:'SEARCH',actions:['edit']})),/write authorization/));
 test('explicit SEARCH action may be scoped',()=>assert.equal(validateTask(packet('/tmp/repo',{project:'SEARCH',actions:['edit'],source_write_authorized:true})).project,'SEARCH'));
@@ -242,7 +297,7 @@ test('doctor-time handoff edits cannot alter launched instructions',async()=>{
  const statePath=path.join(f.policy.state_dir,'runs','router-test','status.json'),packetPath=path.join(f.policy.state_dir,'runs','router-test','packet.json');
  const state=JSON.parse(await readFile(statePath,'utf8')),savedPacket=JSON.parse(await readFile(packetPath,'utf8'));
  state.executable_identity=await executableIdentity(f.policy.profiles['codex-readonly']);
- state.approval_digest=digest({router_version:VERSION,packet:savedPacket,policy:state.policy_digest,workspace:state.workspace_fingerprint,executable:state.executable_identity,expires_at:state.expires_at});
+ state.approval_digest=digest({router_version:VERSION,packet:savedPacket,policy:state.policy_digest,workspace:state.workspace_fingerprint,executable:state.executable_identity,review_snapshot_digest:state.review_snapshot_digest,expires_at:state.expires_at});
  await writeFile(statePath,JSON.stringify(state));
  const result=await runPrepared(f.policy,'router-test',{approved_digest:state.approval_digest,approval_ref:'user approved fixture'});
  assert.equal(result.status,'returned');assert.equal(await readFile(handOff,'utf8'),'MUTATED AFTER APPROVAL');
@@ -367,7 +422,7 @@ test('approval expiry is rechecked after slow doctor work and before launch',asy
  const f=await fixture('slow-doctor'),p=await prepare(f.policy,packet(f.workspace));
  const statePath=path.join(f.policy.state_dir,'runs','router-test','status.json'),packetPath=path.join(f.policy.state_dir,'runs','router-test','packet.json'),state=JSON.parse(await readFile(path.join(f.policy.state_dir,'runs','router-test','status.json'),'utf8'));
  state.expires_at=new Date(Date.now()+700).toISOString();
- state.approval_digest=digest({router_version:VERSION,packet:JSON.parse(await readFile(packetPath,'utf8')),policy:f.policy.config_digest,workspace:p.workspace_fingerprint,executable:p.executable_identity,expires_at:state.expires_at});
+ state.approval_digest=digest({router_version:VERSION,packet:JSON.parse(await readFile(packetPath,'utf8')),policy:f.policy.config_digest,workspace:p.workspace_fingerprint,executable:p.executable_identity,review_snapshot_digest:state.review_snapshot_digest,expires_at:state.expires_at});
  await writeFile(statePath,JSON.stringify(state));
  await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:state.approval_digest,approval_ref:'user approved fixture'}),/approval expired before launch/i);
 });
