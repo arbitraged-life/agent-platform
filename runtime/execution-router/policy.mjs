@@ -106,8 +106,9 @@ function validateReviewContext(review) {
   && Array.isArray(a.findings) && a.findings.length<=100 && Array.isArray(a.review_bodies) && a.review_bodies.length<=20,
   'Independent PR review acceptance evidence required');
 }
-function validateTaskShape(task,historicalReturned=false) {
+function validateTaskShape(task,allowHistoricalReturned=false) {
  check(task && typeof task==='object' && !Array.isArray(task),'Task must be an object');
+ const historicalReturned=allowHistoricalReturned && task.schema_version===1;
  for (const key of Object.keys(task)) check(TASK_FIELDS.has(key),`Unknown task field: ${key}`);
  check(task.schema_version===(historicalReturned?1:2),'Unsupported task schema_version'); taskId(task.task_id);
  for (const key of ['project','objective','workspace','profile','delegation_detail']) text(task[key],key);
@@ -166,7 +167,7 @@ export async function loadPolicy(filename) {
  return {...resolved,config_digest:digest({schema_version:resolved.schema_version,policy_version:resolved.policy_version,state_dir:resolved.state_dir,workspace_roots:roots,profiles,protected_branches:resolved.protected_branches,review_tools})};
 }
 export async function resolveProfile(policy, task, {historicalReturned=false}={}) {
- if(historicalReturned && task?.schema_version===1)validateTaskShape(task,true);else validateTask(task);
+ validateTaskShape(task,historicalReturned);
  const profile=Object.hasOwn(policy.profiles,task.profile)?policy.profiles[task.profile]:undefined; check(profile,`Unknown profile: ${task.profile}`);
  const workspace=await realpath(task.workspace);
  check(policy.workspace_roots.some(root=>contained(root,workspace)),'workspace is outside allowed roots');
