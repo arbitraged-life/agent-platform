@@ -41,23 +41,36 @@ export function validateReviewSnapshot(review,snapshot) {
   throw new Error('Each Q review body requires independent acceptance evidence');
  return digest(snapshot);
 }
-async function reviewSnapshot(task) {
+async function reviewSnapshot(policy,task) {
  if(task.review_context.kind==='general')return null;
- let response;
+ const tools=policy.review_tools;
+ if(!tools)throw new Error('PR review requires pinned review_tools executables');
+ for(const tool of [tools.python,tools.gh]) {
+  const current=await executableIdentity({adapter:'codex',executable:tool.path});
+  if(digest(current)!==digest(tool))throw new Error('Pinned Q-first review executable changed; prepare a new handoff');
+ }
+ const env={PATH:'/usr/bin:/bin',LANG:process.env.LANG??'C',HOME:process.env.HOME??''};
+ for(const key of ['GH_TOKEN','GITHUB_TOKEN','GH_ENTERPRISE_TOKEN','GH_HOST','GH_CONFIG_DIR','XDG_CONFIG_HOME'])
+  if(process.env[key])env[key]=process.env[key];
+ let stdout;
  try {
-  const {stdout}=await exec('python3',[qHelper,'--repo',task.review_context.repository,'--pr',String(task.review_context.pr)],
-   {timeout:35000,maxBuffer:2_000_000});
-  response=JSON.parse(stdout);
+  ({stdout}=await exec(tools.python.path,['-I',qHelper,'--repo',task.review_context.repository,
+   '--pr',String(task.review_context.pr),'--gh-bin',tools.gh.path],
+   {timeout:65000,maxBuffer:2_000_000,env}));
  } catch {
   throw new Error('Q-first review snapshot unavailable; do not dispatch another reviewer');
  }
- return validateReviewSnapshot(task.review_context,response);
+ let response;
+ try{response=JSON.parse(stdout);}catch{throw new Error('Q-first review snapshot malformed; do not dispatch another reviewer');}
+ return digest({snapshot:validateReviewSnapshot(task.review_context,response),helper:digest(await readFile(qHelper))});
 }
 export async function prepare(policy,input) {
  const task=validateTask(input);const {workspace,profile}=await resolveProfile(policy,task); task.workspace=workspace;
- const reviewSnapshotDigest=await reviewSnapshot(task);
+ const reviewSnapshotDigest=await reviewSnapshot(policy,task);
  if(contained(workspace,policy.state_dir)) await mkdir(path.dirname(policy.state_dir),{recursive:true,mode:0o700});
  const fingerprint=await workspaceFingerprint(workspace,policy.state_dir),executable=await executableIdentity(profile),id=task.task_id;
+ if(task.review_context.kind==='pr-review' && fingerprint.head!==task.review_context.head_sha)
+  throw new Error('PR review head differs from workspace HEAD; do not dispatch unreviewed code');
  await mkdir(path.join(policy.state_dir,'runs'),{recursive:true,mode:0o700});
  const dir=runDir(policy,id);
  try{await mkdir(dir,{mode:0o700});}catch(e){if(e.code==='EEXIST')throw new Error('Task already exists; inspect it or use a new task_id');throw e;}
@@ -112,7 +125,9 @@ export async function runPrepared(policy,id,approval={}) {
  if(input!==renderHandoff(task))throw new Error('Rendered handoff changed; prepare a new handoff');
  if(profile.adapter!=='codex')throw new Error('Handoff-only profile: launch in the selected agent after approval');
  if((await workspaceFingerprint(workspace,policy.state_dir)).digest!==state.workspace_fingerprint.digest)throw new Error('Prepared workspace changed; prepare a new handoff');
- if((await reviewSnapshot(task))!==state.review_snapshot_digest)throw new Error('Q-first review changed before dispatch; prepare a new handoff');
+ if(task.review_context.kind==='pr-review' && state.workspace_fingerprint.head!==task.review_context.head_sha)
+  throw new Error('PR review head differs from workspace HEAD; prepare a new handoff');
+ if((await reviewSnapshot(policy,task))!==state.review_snapshot_digest)throw new Error('Q-first review changed before dispatch; prepare a new handoff');
  await doctorProfile(profile);
  await mkdir(path.join(policy.state_dir,'locks'),{recursive:true,mode:0o700});
  const lock=path.join(policy.state_dir,'locks',digest(workspace));
@@ -127,18 +142,18 @@ export async function runPrepared(policy,id,approval={}) {
   if((await readJson(path.join(dir,'status.json'))).status!=='prepared')throw new Error('Run is not prepared');
   const finalPath=path.join(dir,'agent-final.txt'),outputLimit=profile.max_output_bytes??10*1024*1024;
   const args=['exec','--ignore-user-config','--sandbox',profile.sandbox,'--ephemeral','--json','--color','never','-c','approval_policy="never"','-c','sandbox_workspace_write.network_access=false','--cd',workspace,'--output-last-message',finalPath,'-'];
-  const running={...state,status:'running',started_at:now(),heartbeat_at:now(),approval_ref:approval.approval_ref,supervisor_pid:process.pid,verified:false};
-  await json(path.join(dir,'status.json'),running);started=true;
-  await event(dir,'started',{task_id:id,profile:task.profile,approval_ref:approval.approval_ref});
-  // Doctor can take seconds: bind the exact branch and workspace bytes again under the lock before spawn.
+  // Recheck the approved branch, workspace and Q evidence under the exclusive lock before recording a launch.
   await resolveProfile(policy,task);
   if((await workspaceFingerprint(workspace,policy.state_dir)).digest!==state.workspace_fingerprint.digest)throw new Error('Prepared workspace changed before launch; prepare a new handoff');
-  if((await reviewSnapshot(task))!==state.review_snapshot_digest)throw new Error('Q-first review changed before launch; prepare a new handoff');
+  if((await reviewSnapshot(policy,task))!==state.review_snapshot_digest)throw new Error('Q-first review changed before launch; prepare a new handoff');
   if(Date.parse(state.expires_at)<=Date.now())throw new Error('Prepared approval expired before launch');
   let childError;
   const latestExecutable=await executableIdentity(profile);
   if(digest(latestExecutable)!==digest(state.executable_identity))throw new Error('Prepared executable changed; prepare a new handoff');
   if(pendingSignal)throw new Error('Launch cancelled before child creation');
+  const running={...state,status:'running',started_at:now(),heartbeat_at:now(),approval_ref:approval.approval_ref,supervisor_pid:process.pid,verified:false};
+  await json(path.join(dir,'status.json'),running);started=true;
+  await event(dir,'started',{task_id:id,profile:task.profile,approval_ref:approval.approval_ref});
   child=spawn(latestExecutable.path,args,{cwd:workspace,env:cleanEnvironment(),shell:false,detached:process.platform!=='win32',stdio:['pipe','pipe','pipe']});
   const finished=new Promise(resolve=>{child.on('error',err=>{closed=true;childError=err;resolve({code:null,signal:null});});child.on('close',(code,signal)=>{closed=true;resolve({code,signal});});});
   const terminate=reason=>{if(closed||finalized||stopReason)return;stopReason=reason;try{stopChild(child);}catch(error){ioError??=error;}hardKill=setTimeout(()=>{try{killChild(child);}catch(error){ioError??=error;}},2000);};

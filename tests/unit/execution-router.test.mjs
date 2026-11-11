@@ -10,7 +10,7 @@ import { prepare, runPrepared, inspect, requestCancel, acceptResult } from '../.
 const exec = promisify(execFile);
 const fixtureRoots=new Set();
 after(async()=>Promise.all([...fixtureRoots].map(root=>rm(root,{recursive:true,force:true}))));
-const packet = (workspace, overrides={}) => ({ schema_version:1, task_id:'router-test', project:'AGENT', objective:'Inspect the fixture without changes.', workspace, profile:'codex-readonly', actions:['read'], source_write_authorized:false, delegation_reason:'execution-lifecycle', delegation_detail:'Independent bounded repository loop is needed.', acceptance_criteria:['Report the fixture result.'], references:[], review_context:{schema_version:1,kind:'general'}, ...overrides });
+const packet = (workspace, overrides={}) => ({ schema_version:2, task_id:'router-test', project:'AGENT', objective:'Inspect the fixture without changes.', workspace, profile:'codex-readonly', actions:['read'], source_write_authorized:false, delegation_reason:'execution-lifecycle', delegation_detail:'Independent bounded repository loop is needed.', acceptance_criteria:['Report the fixture result.'], references:[], review_context:{schema_version:1,kind:'general'}, ...overrides });
 async function fixture(mode='success') {
  const root=await mkdtemp(path.join(tmpdir(),'execution-router-'));
  fixtureRoots.add(root);
@@ -54,6 +54,9 @@ test('mocked surface capability and authorization outcomes do not bypass denied 
   for(const {label,facts,route} of cases)assert.equal(routeTask(facts).route,route,label);
 });
 
+test('legacy task schema cannot omit the mandatory typed review contract',()=>{
+ assert.throws(()=>validateTask(packet('/tmp/repo',{schema_version:1})),/schema_version/);
+});
 test('dispatch requires typed review intent rather than relying on skill prose',()=>{
  const task=packet('/tmp/repo');
  delete task.review_context;
@@ -78,12 +81,24 @@ test('pre-dispatch review gate denies missing Q coverage, stale heads and untria
  assert.doesNotThrow(()=>validateTask(task));
  assert.doesNotThrow(()=>validateReviewSnapshot(context,q));
 });
+test('PR review dispatch refuses a policy without pinned Q executables',async()=>{
+ const f=await fixture(),task=packet(f.workspace,{review_context:{schema_version:1,kind:'pr-review',
+  repository:'owner/repo',pr:42,head_sha:(await exec('git',['-C',f.workspace,'rev-parse','HEAD'])).stdout.trim(),
+  acceptance:{verifier:'controller',summary:'Inspected review',findings:[],review_bodies:[]}}});
+ await assert.rejects(()=>prepare(f.policy,task),/review_tools/);
+});
 test('real Q helper and CLI deny unreviewed dispatch and stale Q head before Codex',async()=>{
  const f=await fixture(),cli=new URL('../../scripts/execution/router.mjs',import.meta.url).pathname;
  const binDir=path.join(f.root,'bin');await mkdir(binDir);
  const responseFile=path.join(f.root,'q-response.json'),gh=path.join(binDir,'gh');
  await writeFile(gh,`#!/bin/sh\nexec /bin/cat '${responseFile}'\n`);await chmod(gh,0o700);
- const head='a'.repeat(40),review={schema_version:1,kind:'pr-review',repository:'owner/repo',pr:42,head_sha:head,
+ const python=(await exec('which',['python3'])).stdout.trim();
+ f.data.review_tools={python,gh};await writeFile(f.policyPath,JSON.stringify(f.data));f.policy=await loadPolicy(f.policyPath);
+ const marker=path.join(f.root,'codex-dispatched');
+ const codex=f.data.profiles['codex-readonly'].executable;
+ await writeFile(codex,(await readFile(codex,'utf8')).replace("let prompt='';",
+  `require('node:fs').writeFileSync(${JSON.stringify(marker)},'dispatched');let prompt='';`));
+ const head=(await exec('git',['-C',f.workspace,'rev-parse','HEAD'])).stdout.trim(),review={schema_version:1,kind:'pr-review',repository:'owner/repo',pr:42,head_sha:head,
   acceptance:{verifier:'independent-controller',summary:'Examined current Q findings and diff',findings:[],review_bodies:[]}};
  const data={number:42,state:'OPEN',isDraft:false,url:'https://github.com/owner/repo/pull/42',headRefOid:head,
   reviews:{nodes:[],pageInfo:{hasPreviousPage:false}},reviewThreads:{nodes:[],pageInfo:{hasNextPage:false,endCursor:null}}};
@@ -93,8 +108,16 @@ test('real Q helper and CLI deny unreviewed dispatch and stale Q head before Cod
  try {
   await response();
   await assert.rejects(()=>exec(process.execPath,[cli,'prepare','--policy',f.policyPath,'--task',taskFile]),/Q-first review/);
-  assert.equal((await readFile(gh,'utf8')).startsWith('#!/bin/sh'),true);
+  await writeFile(responseFile,'not-json');
+  await assert.rejects(()=>exec(process.execPath,[cli,'prepare','--policy',f.policyPath,'--task',taskFile]),/Q-first review snapshot unavailable/);
+  await assert.rejects(()=>readFile(marker),/ENOENT/);
   data.reviews.nodes=[{author:{login:'amazon-q-developer'},submittedAt:'2026-11-10T00:00:00Z',commit:{oid:head},body:''}];
+  const otherHead='b'.repeat(40);data.headRefOid=otherHead;data.reviews.nodes[0].commit.oid=otherHead;
+  review.head_sha=otherHead;await writeFile(taskFile,JSON.stringify(packet(f.workspace,{review_context:review})));await response();
+  await assert.rejects(()=>exec(process.execPath,[cli,'prepare','--policy',f.policyPath,'--task',taskFile]),/workspace HEAD/);
+  await assert.rejects(()=>readFile(marker),/ENOENT/);
+  data.headRefOid=head;data.reviews.nodes[0].commit.oid=head;review.head_sha=head;
+  await writeFile(taskFile,JSON.stringify(packet(f.workspace,{review_context:review})));
   await response();
   const prepared=JSON.parse((await exec(process.execPath,[cli,'prepare','--policy',f.policyPath,'--task',taskFile])).stdout);
   assert.equal(prepared.status,'prepared');
@@ -102,11 +125,13 @@ test('real Q helper and CLI deny unreviewed dispatch and stale Q head before Cod
   await assert.rejects(()=>exec(process.execPath,[cli,'run','--policy',f.policyPath,'--task-id','router-test',
    '--approved-digest',prepared.approval_digest,'--approval-ref','fixture reviewed current head']),/exact PR head/);
   assert.equal((await inspect(f.policy,'router-test')).status,'prepared');
+  await assert.rejects(()=>readFile(marker),/ENOENT/);
   data.headRefOid=head;await response();
   const returned=JSON.parse((await exec(process.execPath,[cli,'run','--policy',f.policyPath,'--task-id','router-test',
    '--approved-digest',prepared.approval_digest,'--approval-ref','fixture reviewed current head'])).stdout);
   assert.equal(returned.status,'returned');
   assert.equal(returned.verified,false);
+  assert.equal(await readFile(marker,'utf8'),'dispatched');
  } finally {process.env.PATH=originalPath;}
 });
 test('unknown future projects keep write authorization required',()=>assert.throws(()=>validateTask(packet('/tmp/repo',{project:'NEW',actions:['edit']})),/write authorization/));
