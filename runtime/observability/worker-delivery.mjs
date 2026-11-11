@@ -347,9 +347,14 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
       if (error.code !== 'BUFFER_FULL') throw error;
       const next = send.nextAttemptAt();
       if (next === null || next > now() + 1) throw error;
-      // A due, persisted delivery may release the only buffer slot. Never evict
-      // unresolved evidence or replay a signal whose acceptance is uncertain.
-      await send.drain({ limit: 100 });
+      // A due, persisted delivery may release the only buffer slot. Bound work
+      // per request; the host alarm continues remaining retries if none settle.
+      const deadline = performance.now() + 4000;
+      for (let attempts = 0; attempts < maxEntries && performance.now() < deadline; attempts++) {
+        const outcomes = await send.drain({ limit: 1 });
+        if (!outcomes.length || one(storage,
+          'SELECT COUNT(*) AS count FROM telemetry_events WHERE payload IS NOT NULL').count < maxEntries) break;
+      }
       row = submit(record);
     }
     if (active.has(record.event_id)) return active.get(record.event_id);
@@ -368,8 +373,12 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
       if ((!row.route && canAdmit(decode(row.payload))) || (row.route &&
           (Object.keys(inFlight).length || row.route.split(',').some(name => !receipts[name] ||
             (receipts[name].retryable && receipts[name].reason_code === 'HTTP_429' &&
-              now() >= (delays[name] ?? Infinity))))))
-        results.push(await dispatch(row));
+              now() >= (delays[name] ?? Infinity)))))) {
+        const task = dispatch(row);
+        active.set(row.event_id, task);
+        try { results.push(await task); }
+        finally { if (active.get(row.event_id) === task) active.delete(row.event_id); }
+      }
     }
     return results;
   };

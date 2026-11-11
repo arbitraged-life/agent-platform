@@ -132,6 +132,74 @@ test('full durable queue drains due retry before rejecting a new whole trace', a
   assert.equal(delivery.usage().logfire.accepted, 4);
 });
 
+test('simultaneous full-buffer recovery shares the due export claim', async () => {
+  const store = storage(), first = bundle('l'), second = bundle('m'), third = bundle('o');
+  let clock = now, honeycombCalls = 0, release, started;
+  const begun = new Promise(resolve => { started = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const delivery = createWorkerTelemetryDelivery({
+    storage: store, configuration: config('mirror', 6), now: () => clock,
+    maxEntries: 1, retryDelayMs: 1000,
+    exporters: {
+      honeycomb: async record => {
+        honeycombCalls++;
+        if (honeycombCalls === 1) throw new DeliveryError({ code: 'HTTP_429', httpStatus: 429, retryable: true });
+        if (record.event_id === first.event_id) { started(); await held; }
+        return receipt(record);
+      },
+      logfire: async record => receipt(record),
+    },
+  });
+  await delivery(first);
+  clock += 1000;
+  const recover = delivery(second);
+  await begun;
+  const competing = delivery(third);
+  release();
+  const results = await Promise.allSettled([recover, competing]);
+  assert.ok(results.some(result => result.status === 'fulfilled' && result.value.delivery_status === 'accepted'));
+  assert.equal(honeycombCalls, results.filter(result => result.status === 'fulfilled').length + 2);
+  assert.equal(delivery.usage().honeycomb.uncertain, 0);
+  assert.equal(delivery.usage().logfire.uncertain, 0);
+});
+
+test('full queue reaches a later due trace when earlier retries remain buffered', async () => {
+  const store = storage(), size = 102, last = size - 1;
+  let clock = now, ready = false;
+  const delivery = createWorkerTelemetryDelivery({
+    storage: store, configuration: config('mirror', size * 2 + 2), now: () => clock,
+    maxEntries: size, retryDelayMs: 1000,
+    exporters: {
+      honeycomb: async record => {
+        if ((record.records[0].run_id !== `run${last}` || !ready) &&
+            record.records[0].run_id !== `run${size}`)
+          throw new DeliveryError({ code: 'HTTP_429', httpStatus: 429, retryable: true });
+        return receipt(record);
+      },
+      logfire: async record => receipt(record),
+    },
+  });
+  const trace = index => {
+    const id = createUuidV7(start + 1000 + index);
+    const records = [
+      evidenceRecord({ eventName: 'agent.operation.observed', traceId: id,
+        eventId: stableEvidenceId(id, 'operation'), runtime: 'ai-gateway', runId: `run${index}`,
+        toolName: 'email.decision', observedMs: start + 1024, recordedMs: start + 1024,
+        startedMs: start, endedMs: start + 1024, outcome: 'succeeded' }),
+      evidenceRecord({ eventName: 'agent.turn.finished', traceId: id,
+        eventId: stableEvidenceId(id, 'finished'), runtime: 'ai-gateway', runId: `run${index}`,
+        observedMs: start + 1024, recordedMs: start + 1024,
+        startedMs: start, endedMs: start + 1024, outcome: 'succeeded' }),
+    ];
+    return { schema_version: 1, record_type: 'agent.trace', event_id: id, trace_id: id, records };
+  };
+  for (let index = 0; index < size; index++) await delivery(trace(index));
+  clock += 1000;
+  ready = true;
+  assert.equal((await delivery(trace(size))).delivery_status, 'accepted');
+  assert.equal(delivery.usage().honeycomb.uncertain, 0);
+});
+
 test('explicit 429 is retryable without repeating the already-accepted peer', async () => {
   const store = storage(), event = bundle('c');
   let calls = 0, clock = now;

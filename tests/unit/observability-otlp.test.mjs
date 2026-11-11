@@ -84,6 +84,9 @@ test("OTLP roots and tool signals retain captured provenance and verification bo
   terminal.evidence_origin = "historical_summary";
   terminal.verification_status = "not_verified";
   terminal.production_eligible = false;
+  terminal.reason_availability = "withheld";
+  terminal.reason_provenance = "summary_only";
+  terminal.handling_outcome = "unresolved";
   const mapped = mapOtlpRecord(bundle([tool, terminal]));
   const fields = {
     "agent.evidence.origin": "reported_observation",
@@ -99,14 +102,21 @@ test("OTLP roots and tool signals retain captured provenance and verification bo
   assert.equal(root["agent.evidence.origin"], "historical_summary");
   assert.equal(root["agent.verification.status"], "not_verified");
   assert.equal(root["agent.production.eligible"], false);
+  assert.equal(root["agent.reason.availability"], "withheld");
+  assert.equal(root["agent.reason.provenance"], "summary_only");
+  assert.equal(root["agent.handling.outcome"], "unresolved");
   const log = mapOtlpRecord(operation({
     startedMs: null, endedMs: null, evidenceOrigin: "reported_observation",
     verificationStatus: "uncertain", productionEligible: false,
+    reasonAvailability: "withheld", reasonProvenance: "summary_only", handlingOutcome: "unresolved",
   })).logs[0];
   const logAttrs = Object.fromEntries(log.attributes.map(({ key, value }) => [key, Object.values(value)[0]]));
   assert.equal(logAttrs["agent.evidence.origin"], "reported_observation");
   assert.equal(logAttrs["agent.verification.status"], "uncertain");
   assert.equal(logAttrs["agent.production.eligible"], false);
+  assert.equal(logAttrs["agent.reason.availability"], "withheld");
+  assert.equal(logAttrs["agent.reason.provenance"], "summary_only");
+  assert.equal(logAttrs["agent.handling.outcome"], "unresolved");
 });
 
 test("operation sharing the trace UUID remains a distinct child span", () => {
