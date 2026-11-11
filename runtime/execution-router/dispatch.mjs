@@ -26,7 +26,7 @@ export function validateReviewSnapshot(review,snapshot) {
  if(accepted.length!==findings.length || findings.some(f=>!f || typeof f.thread_id!=='string' || !f.thread_id)
   || new Set(findings.map(f=>f.thread_id)).size!==findings.length
   || accepted.some(f=>!f || typeof f!=='object' || Array.isArray(f)
-   || Object.keys(f).sort().join(',')!=='disposition,evidence,thread_id'
+   || Object.keys(f).sort((a,b)=>a.localeCompare(b)).join(',')!=='disposition,evidence,thread_id'
    || typeof f.thread_id!=='string' || !['fixed','not-actionable','escalate'].includes(f.disposition)
    || typeof f.evidence!=='string' || !f.evidence.trim() || f.evidence.length>2000)
   || new Set(accepted.map(f=>f.thread_id)).size!==accepted.length
@@ -35,7 +35,7 @@ export function validateReviewSnapshot(review,snapshot) {
  const bodyEvidence=review.acceptance.review_bodies;
  if(bodyEvidence.length!==bodies.length || bodyEvidence.some((entry,index)=>!entry
   || typeof entry!=='object' || Array.isArray(entry)
-  || Object.keys(entry).sort().join(',')!=='evidence,index'
+  || Object.keys(entry).sort((a,b)=>a.localeCompare(b)).join(',')!=='evidence,index'
   || entry.index!==index || typeof entry.evidence!=='string'
   || !entry.evidence.trim() || entry.evidence.length>2000))
   throw new Error('Each Q review body requires independent acceptance evidence');
@@ -45,10 +45,10 @@ async function reviewSnapshot(policy,task) {
  if(task.review_context.kind==='general')return null;
  const tools=policy.review_tools;
  if(!tools)throw new Error('PR review requires pinned review_tools executables');
- for(const tool of [tools.python,tools.gh]) {
-  const current=await executableIdentity({adapter:'codex',executable:tool.path});
-  if(digest(current)!==digest(tool))throw new Error('Pinned Q-first review executable changed; prepare a new handoff');
- }
+ const identities=await Promise.all([tools.python,tools.gh].map(tool=>
+  executableIdentity({adapter:'codex',executable:tool.path})));
+ if([tools.python,tools.gh].some((tool,index)=>digest(identities[index])!==digest(tool)))
+  throw new Error('Pinned Q-first review executable changed; prepare a new handoff');
  const env={PATH:'/usr/bin:/bin',LANG:process.env.LANG??'C',HOME:process.env.HOME??''};
  for(const key of ['GH_TOKEN','GITHUB_TOKEN','GH_ENTERPRISE_TOKEN','GH_HOST','GH_CONFIG_DIR','XDG_CONFIG_HOME'])
   if(process.env[key])env[key]=process.env[key];

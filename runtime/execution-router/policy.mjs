@@ -138,7 +138,7 @@ export async function loadPolicy(filename) {
  if(Object.values(raw.profiles).some(p=>p?.sandbox==='workspace-write'))check(Array.isArray(raw.protected_branches)&&raw.protected_branches.length>0&&raw.protected_branches.every(b=>typeof b==='string'&&b.length>0),'Writable profiles require protected_branches');
  if(raw.protected_branches!==undefined)check(Array.isArray(raw.protected_branches)&&raw.protected_branches.every(b=>typeof b==='string'&&b.length>0),'Invalid protected_branches');
  if(raw.review_tools!==undefined)check(raw.review_tools && typeof raw.review_tools==='object' && !Array.isArray(raw.review_tools)
-  && Object.keys(raw.review_tools).sort().join(',')==='gh,python'
+  && Object.keys(raw.review_tools).sort((a,b)=>a.localeCompare(b)).join(',')==='gh,python'
   && Object.values(raw.review_tools).every(v=>typeof v==='string' && path.isAbsolute(v)),
   'review_tools require absolute python and gh executables');
  const roots=await Promise.all(raw.workspace_roots.map(v=>realpath(expand(v,base))));
