@@ -89,7 +89,8 @@ export function routeTask(facts={}) {
  return {route:'needs-user',reason:'Discover supported tools, complete independent work, then surface only the remaining capability gap.'};
 }
 function validateReviewContext(review) {
- check(review && typeof review==='object' && !Array.isArray(review) && review.schema_version===1,'Typed review_context is required');
+ if(!review || typeof review!=='object' || Array.isArray(review) || review.schema_version!==1)
+  throw new Error('Typed review_context is required');
  if(review.kind==='general') {
   check(Object.keys(review).length===2 && Object.hasOwn(review,'kind'),'Invalid general review_context');
   return;
