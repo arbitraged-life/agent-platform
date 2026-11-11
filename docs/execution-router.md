@@ -73,8 +73,11 @@ not profiles. The canonical policy digest covers every configured profile.
 The router's internal `router_version` is distinct from the operator-managed
 `policy_version`. Prepared approval digests bind the internal router version;
 approvals prepared by an older router must be prepared and approved again
-before launch. Existing returned runs remain available for inspection and
-controller verification.
+before launch. Authenticated `returned` runs with an unchanged historical v1
+packet digest may still receive controller verification using the same profile,
+workspace, policy, artifact and acceptance checks. Their persisted packet is
+not rewritten. New v1 preparation, any v1 launch, and unfinished/uncertain
+v1 results remain denied; this historical read path grants no dispatch access.
 
 Task packets require `schema_version:2` and every task declares
 `review_context`: `{"schema_version":1,"kind":"general"}`

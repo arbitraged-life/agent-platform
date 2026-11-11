@@ -106,10 +106,10 @@ function validateReviewContext(review) {
   && Array.isArray(a.findings) && a.findings.length<=100 && Array.isArray(a.review_bodies) && a.review_bodies.length<=20,
   'Independent PR review acceptance evidence required');
 }
-export function validateTask(task) {
+function validateTaskShape(task,historicalReturned=false) {
  check(task && typeof task==='object' && !Array.isArray(task),'Task must be an object');
  for (const key of Object.keys(task)) check(TASK_FIELDS.has(key),`Unknown task field: ${key}`);
- check(task.schema_version===2,'Unsupported task schema_version'); taskId(task.task_id);
+ check(task.schema_version===(historicalReturned?1:2),'Unsupported task schema_version'); taskId(task.task_id);
  for (const key of ['project','objective','workspace','profile','delegation_detail']) text(task[key],key);
  check(path.isAbsolute(task.workspace),'workspace must be absolute');
  check(REASONS.has(task.delegation_reason),'Invalid delegation_reason');
@@ -120,13 +120,15 @@ export function validateTask(task) {
  task.acceptance_criteria.forEach(c=>text(c,'acceptance criterion',2000));
  check(new Set(task.acceptance_criteria).size===task.acceptance_criteria.length,'Duplicate acceptance criteria');
  check(Array.isArray(task.references) && task.references.length<=30 && task.references.every(r=>typeof r==='string' && r.length<4000),'Invalid references');
- validateReviewContext(task.review_context);
+ if(historicalReturned)check(!Object.hasOwn(task,'review_context'),'Historical returned task cannot carry review_context');
+ else validateReviewContext(task.review_context);
  if (task.parent_run_id!==undefined) text(task.parent_run_id,'parent_run_id',200);
  const serialized=JSON.stringify(task);
  check(serialized.length<50000,'Task packet is too large; provide bounded context');
  check(!/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\bsk-(?:proj-|ant-)[A-Za-z0-9_-]{24,}|\bgh[pousr]_[A-Za-z0-9]{30,}|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\bBearer\s+[A-Za-z0-9_.=-]{20,}/.test(serialized),'Potential credential in task packet; remove it');
  return structuredClone(task);
 }
+export function validateTask(task) { return validateTaskShape(task); }
 export function cleanEnvironment(env=process.env) {
  return Object.fromEntries(['HOME','PATH','LANG','LC_ALL','TMPDIR','TMP','TEMP','SYSTEMROOT','COMSPEC'].filter(k=>env[k]!==undefined).map(k=>[k,env[k]]));
 }
@@ -163,8 +165,9 @@ export async function loadPolicy(filename) {
  const resolved={...raw,source_path:path.resolve(filename),state_dir:await canonicalPath(expand(raw.state_dir,base)),workspace_roots:roots,profiles,review_tools};
  return {...resolved,config_digest:digest({schema_version:resolved.schema_version,policy_version:resolved.policy_version,state_dir:resolved.state_dir,workspace_roots:roots,profiles,protected_branches:resolved.protected_branches,review_tools})};
 }
-export async function resolveProfile(policy, task) {
- validateTask(task); const profile=Object.hasOwn(policy.profiles,task.profile)?policy.profiles[task.profile]:undefined; check(profile,`Unknown profile: ${task.profile}`);
+export async function resolveProfile(policy, task, {historicalReturned=false}={}) {
+ if(historicalReturned && task?.schema_version===1)validateTaskShape(task,true);else validateTask(task);
+ const profile=Object.hasOwn(policy.profiles,task.profile)?policy.profiles[task.profile]:undefined; check(profile,`Unknown profile: ${task.profile}`);
  const workspace=await realpath(task.workspace);
  check(policy.workspace_roots.some(root=>contained(root,workspace)),'workspace is outside allowed roots');
  if(profile.sandbox==='workspace-write')check(!contained(workspace,await canonicalPath(policy.state_dir)),'State directory must be outside a writable worktree');
