@@ -31,8 +31,10 @@ function validateConfig(configuration, exporters) {
 
 /** SQLite-backed Durable Object storage is the coordination atom; all SQL writes commit before network I/O. */
 export function createWorkerTelemetryDelivery({ storage, configuration, exporters, now = Date.now,
-  maxEntries = 512, retryDelayMs = 60_000 } = {}) {
+  maxEntries = 512, retryDelayMs = 60_000, keepAlive = null } = {}) {
   validateConfig(configuration, exporters);
+  if (keepAlive !== null && typeof keepAlive !== 'function')
+    throw new Error('Invalid Worker telemetry lifetime callback');
   if (!storage?.sql?.exec || typeof storage.transactionSync !== 'function' || typeof now !== 'function' ||
       !Number.isSafeInteger(maxEntries) || maxEntries < 1 || !count(retryDelayMs))
     throw new Error('Invalid Worker telemetry storage configuration');
@@ -154,7 +156,8 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
       return prior;
     }
     if (one(storage, 'SELECT COUNT(*) AS count FROM telemetry_events WHERE payload IS NOT NULL').count >= maxEntries)
-      throw new Error('Worker telemetry queue capacity exhausted; evidence was not admitted');
+      throw Object.assign(new Error('Worker telemetry queue capacity exhausted; evidence was not admitted'),
+        { code: 'BUFFER_FULL' });
     const units = mapOtlpRecord(record).units;
     const periods = Object.fromEntries(SINKS.map(name => [name, configuration.sinks[name].period_start]));
     storage.sql.exec('INSERT INTO telemetry_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
@@ -337,26 +340,61 @@ export function createWorkerTelemetryDelivery({ storage, configuration, exporter
     const fits = name => periodActive(name, time) && available(name) >= units[name];
     return configuration.mode === 'mirror' ? SINKS.every(fits) : SINKS.some(fits);
   };
+  const due = row => {
+    if (!row.route) return canAdmit(decode(row.payload));
+    if (Object.keys(decode(row.in_flight)).length) return true;
+    const receipts = decode(row.receipts), delays = decode(row.next_attempt_at);
+    return row.route.split(',').some(name => !receipts[name] ||
+      (receipts[name].retryable && receipts[name].reason_code === 'HTTP_429' &&
+        now() >= (delays[name] ?? Infinity)));
+  };
   const send = async value => {
     const record = snapshot(value);
     if (active.has(record.event_id)) return active.get(record.event_id);
-    const task = dispatch(submit(record));
+    let row;
+    try { row = submit(record); }
+    catch (error) {
+      if (error.code !== 'BUFFER_FULL') throw error;
+      const next = send.nextAttemptAt();
+      if (next === null || next > now() + 1) throw error;
+      // A due, persisted delivery may release the only buffer slot. Bound work
+      // per request; the host alarm continues remaining retries if none settle.
+      const deadline = performance.now() + 4000;
+      const attempted = new Set();
+      for (let attempts = 0; attempts < maxEntries && performance.now() < deadline; attempts++) {
+        let timer;
+        const operation = send.drain({ limit: 1, excludedEventIds: attempted });
+        const outcomes = await Promise.race([
+          operation,
+          new Promise(resolve => { timer = setTimeout(() => resolve(null), Math.max(0, deadline - performance.now())); }),
+        ]).finally(() => clearTimeout(timer));
+        if (outcomes === null) {
+          keepAlive?.(operation);
+          break;
+        }
+        if (!outcomes.length) break;
+        attempted.add(outcomes[0].event_id);
+        if (one(storage,
+          'SELECT COUNT(*) AS count FROM telemetry_events WHERE payload IS NOT NULL').count < maxEntries) break;
+      }
+      row = submit(record);
+    }
+    if (active.has(record.event_id)) return active.get(record.event_id);
+    const task = dispatch(row);
     active.set(record.event_id, task);
     return task.finally(() => active.delete(record.event_id));
   };
-  send.drain = async ({ limit = 20 } = {}) => {
+  send.drain = async ({ limit = 20, excludedEventIds = null } = {}) => {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error('Invalid Worker drain limit');
     const rows = all(storage, 'SELECT * FROM telemetry_events WHERE payload IS NOT NULL ORDER BY event_id');
     const results = [];
     for (const row of rows) {
       if (results.length >= limit) break;
-      if (active.has(row.event_id)) continue;
-      const receipts = decode(row.receipts), inFlight = decode(row.in_flight), delays = decode(row.next_attempt_at);
-      if ((!row.route && canAdmit(decode(row.payload))) || (row.route &&
-          (Object.keys(inFlight).length || row.route.split(',').some(name => !receipts[name] ||
-            (receipts[name].retryable && receipts[name].reason_code === 'HTTP_429' &&
-              now() >= (delays[name] ?? Infinity))))))
-        results.push(await dispatch(row));
+      if (excludedEventIds?.has(row.event_id) || active.has(row.event_id) || !due(row)) continue;
+      const task = dispatch(row);
+      active.set(row.event_id, task);
+      try { results.push(await task); }
+      finally { active.delete(row.event_id); }
     }
     return results;
   };
