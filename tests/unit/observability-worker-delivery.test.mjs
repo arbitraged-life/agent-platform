@@ -156,9 +156,12 @@ test('simultaneous full-buffer recovery shares the due export claim', async () =
   await begun;
   const competing = delivery(third);
   release();
-  const results = await Promise.allSettled([recover, competing]);
-  assert.ok(results.some(result => result.status === 'fulfilled' && result.value.delivery_status === 'accepted'));
-  assert.equal(honeycombCalls, results.filter(result => result.status === 'fulfilled').length + 2);
+  const [admitted, rejected] = await Promise.allSettled([recover, competing]);
+  assert.equal(admitted.status, 'fulfilled');
+  assert.equal(admitted.value.delivery_status, 'accepted');
+  assert.equal(rejected.status, 'rejected');
+  assert.equal(rejected.reason.code, 'BUFFER_FULL');
+  assert.equal(honeycombCalls, 3); // Initial 429, shared retry, newly admitted second trace.
   assert.equal(delivery.usage().honeycomb.uncertain, 0);
   assert.equal(delivery.usage().logfire.uncertain, 0);
 });
