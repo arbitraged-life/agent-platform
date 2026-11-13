@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14]
+        os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -81,9 +81,7 @@ jobs:
           if base=$(git rev-parse --verify "$GITHUB_SHA^" 2>/dev/null); then
             printf 'base=%s\n' "$base" >> "$GITHUB_OUTPUT"
           fi
-      - uses: trufflesecurity/trufflehog@f15cb8b37b9b70056bc82a8eb7151f75fad27a71
-        with:
-          # A root commit has no parent; scan its complete (one-commit) history.
-          base: ${{ steps.manual-scan.outputs.base || '' }}
-          head: ${{ github.event_name == 'workflow_dispatch' && github.sha || '' }}
-          extra_args: --no-verification
+      - name: Run finding-specific TruffleHog gate
+        env:
+          TRUFFLEHOG_MANUAL_BASE: ${{ steps.manual-scan.outputs.base || '' }}
+        run: python3 -I scripts/trufflehog_gate.py

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OTLP destination v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "destination", "endpoint", "credential_env", "service_name"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "destination": { "enum": ["honeycomb", "logfire"] },
+    "endpoint": {
+      "type": "string",
+      "enum": [
+        "https://api.honeycomb.io",
+        "https://api.eu1.honeycomb.io",
+        "https://logfire-us.pydantic.dev",
+        "https://logfire-eu.pydantic.dev"
+      ]
+    },
+    "credential_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+    "service_name": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_.:-]+$" }
+  },
+  "allOf": [{
+    "if": { "properties": { "destination": { "const": "honeycomb" } } },
+    "then": { "properties": { "endpoint": { "enum": [
+      "https://api.honeycomb.io",
+      "https://api.eu1.honeycomb.io"
+    ] } } },
+    "else": { "properties": { "endpoint": { "enum": [
+      "https://logfire-us.pydantic.dev",
+      "https://logfire-eu.pydantic.dev"
+    ] } } }
+  }]
+}

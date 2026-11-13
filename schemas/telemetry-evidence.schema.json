@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Agent operation evidence v1",
-  "description": "Strict metadata-only lifecycle and operation evidence; runtime validation also enforces identifiers, time ordering and enums. No raw arguments, responses, paths or exception text.",
+  "description": "Strict lifecycle and operation evidence with optional bounded sanitized tool metadata; runtime validation enforces identifiers, timing, capture redaction and size.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -72,10 +72,7 @@
       ]
     },
     "started_at": {
-      "type": [
-        "string",
-        "null"
-      ]
+      "type": ["string", "null"]
     },
     "ended_at": {
       "type": [
@@ -166,6 +163,15 @@
     "production_eligible": {
       "type": "boolean"
     },
+    "server_name": { "type": ["string", "null"], "pattern": "^[a-zA-Z0-9_.:-]{1,128}$" },
+    "task_id": { "type": ["string", "null"], "pattern": "^[a-zA-Z0-9_.:-]{1,128}$" },
+    "conversation_id": { "type": ["string", "null"], "pattern": "^[a-zA-Z0-9_.:-]{1,128}$" },
+    "parent_event_id": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+    },
+    "tool_arguments": { "$ref": "#/$defs/capture" },
+    "tool_result": { "$ref": "#/$defs/capture" },
     "metrics": {
       "anyOf": [
         {
@@ -173,6 +179,30 @@
         },
         {
           "$ref": "telemetry-event.schema.json"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "capture": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["preview", "byte_count", "sha256", "truncated", "omitted", "redacted"],
+          "properties": {
+            "preview": {
+              "type": ["string", "null"],
+              "maxLength": 4096,
+              "description": "Runtime validation additionally enforces a 4096-byte UTF-8 limit; JSON Schema maxLength counts characters, not bytes."
+            },
+            "byte_count": { "type": ["integer", "null"], "minimum": 0 },
+            "sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+            "truncated": { "type": "boolean" },
+            "omitted": { "type": "boolean" },
+            "redacted": { "type": "boolean" }
+          }
         }
       ]
     }

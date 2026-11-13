@@ -18,6 +18,21 @@ SPEC.loader.exec_module(validation)
 
 
 class BoundaryTests(unittest.TestCase):
+    def test_optional_discovery_requires_importable_package_ancestors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            nested = root / 'optional_checks' / 'deeper'
+            nested.mkdir(parents=True)
+            (nested / 'test_example.py').write_text('import unittest\n')
+            self.assertFalse(validation.has_discoverable_tests(root))
+            (nested / '__init__.py').touch()
+            self.assertFalse(validation.has_discoverable_tests(root))
+            (nested.parent / '__init__.py').touch()
+            self.assertTrue(validation.has_discoverable_tests(root))
+            (nested / 'test_example.py').unlink()
+            (root / 'test_top_level.py').write_text('import unittest\n')
+            self.assertTrue(validation.has_discoverable_tests(root))
+
     def test_relative_imports_are_resolved_against_the_containing_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
