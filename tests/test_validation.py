@@ -91,9 +91,12 @@ class BoundaryTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         workflow = validation.yaml.safe_load((root / '.github/workflows/semgrep.yml').read_text())
         job = workflow['jobs']['semgrep']
+        self.assertNotIn('SEMGREP_APP_TOKEN', workflow.get('env', {}))
         self.assertEqual(job['permissions'], {'contents': 'read'})
         self.assertNotIn('SEMGREP_APP_TOKEN', job.get('env', {}))
+        self.assertNotIn('SEMGREP_APP_TOKEN', job['container'].get('env', {}))
         checkout, scan = job['steps']
+        self.assertIs(checkout['with']['persist-credentials'], False)
         self.assertNotIn('SEMGREP_APP_TOKEN', checkout.get('env', {}))
         self.assertEqual(scan['run'], 'semgrep ci')
         self.assertEqual(scan['env'], {
