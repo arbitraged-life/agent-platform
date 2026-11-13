@@ -24,7 +24,7 @@ import { logSiteverify } from './observability.js';
 import { validate } from './validate.js';
 import type { Env, SiteverifyRequest } from './types.js';
 
-export const WORKER_VERSION = '1.0.0';
+const WORKER_VERSION = '1.0.0';
 
 function corsHeaders(env: Env): Record<string, string> {
 	return {
