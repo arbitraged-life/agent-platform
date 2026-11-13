@@ -9,6 +9,8 @@
         "evals/benchmark/tasks/*/fixed/lib.js",
         "tests/unit/*.test.mjs",
         "runtime/observability/opik.mjs",
+        "runtime/observability/evidence.mjs",
+        "runtime/observability/otlp.mjs",
         "runtime/observability/records.mjs"
       ],
       "project": [
