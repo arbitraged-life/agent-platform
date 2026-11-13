@@ -9,7 +9,7 @@ and its tests; it does not include the surrounding deployment skill or scripts.
 Choose the target account and an unused Worker name, configure the allowed origin
 and optional expected hostname, then use an approved Wrangler installation.
 
-This template requires Node 24 (or Node 26+); its pinned Vitest release does not support Node 20. Approve an absolute, preinstalled Wrangler executable outside this project and verify its version before any credential-bearing command.
+This template requires Node 24 (or Node 26+); Vitest 5.1 requires Node 22.12+ and Wrangler 4.156 requires Node 22+. The pinned Node 24 typings and TypeScript 7 remain unchanged. The Undici 7.30.2 override carries the 7.x security fixes without switching to Undici 8. Approve an absolute, preinstalled Wrangler executable outside this project and verify its version before any credential-bearing command.
 
 ```sh
 npm ci --ignore-scripts --include=dev   # needed for local tests, not for Wrangler deployment
@@ -145,9 +145,11 @@ After the first deploy, before pointing real traffic:
 ## Testing
 
 ```sh
-npm test                   # unit tests, mocks fetch
-npm run test:integration   # hits real siteverify with test secrets
+npm ci --ignore-scripts --include=dev
+npm test                   # offline unit and validation tests; mocked siteverify
 npm run typecheck
+./node_modules/.bin/wrangler deploy --dry-run  # build locally; does not deploy
+npm run test:integration   # optional: real siteverify, uses Cloudflare test credentials
 ```
 
 Cloudflare's documented test secrets:
