@@ -180,10 +180,11 @@ wrangler.toml         # Worker config
 
 ## Contributing
 
-Two rules:
+Three rules:
 
 1. Keep the request/response contract stable. Customers will deploy this Worker as-is.
 2. Do not add features that require additional secrets or external services. The point is "drop in, set one secret, you are done."
+3. Keep the Worker entrypoint's only export the default fetch handler; workerd treats other exports as callable entrypoints. The version remains available in the health response and siteverify metadata.
 
 PRs welcome.
 
