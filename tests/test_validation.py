@@ -72,6 +72,20 @@ class BoundaryTests(unittest.TestCase):
                 self.assertEqual(step['if'],
                                  "github.event_name == 'schedule' || steps.uploader.outputs.available == 'true'")
 
+    def test_manual_semgrep_token_is_limited_to_scan_step(self):
+        root = Path(__file__).resolve().parents[1]
+        workflow = validation.yaml.safe_load((root / '.github/workflows/semgrep.yml').read_text())
+        job = workflow['jobs']['semgrep']
+        self.assertEqual(job['permissions'], {'contents': 'read'})
+        self.assertNotIn('SEMGREP_APP_TOKEN', job.get('env', {}))
+        checkout, scan = job['steps']
+        self.assertNotIn('SEMGREP_APP_TOKEN', checkout.get('env', {}))
+        self.assertEqual(scan['run'], 'semgrep ci')
+        self.assertEqual(scan['env'], {
+            'SEMGREP_APP_TOKEN': '${{ secrets.SEMGREP_APP_TOKEN }}',
+        })
+
+
     def test_validator_dispatches_advisory_gate_only_for_ci_and_security(self):
         for command in ['ci', 'security', 'lint', 'test']:
             with self.subTest(command=command):
