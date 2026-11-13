@@ -8,6 +8,8 @@ Knip covers every tracked JavaScript/TypeScript package manifest without consoli
 
 ## Local Turborepo cache
 
+The root manifest and lockfile pin Turbo 2.11.11. After updating this pin, verify the actual wrapper with `npm run quality:cached -- --summarize` twice in an otherwise unchanged checkout: a fresh local cache should miss first and hit second, with remote caching disabled.
+
 `npm run quality:cached` caches only the advisory Knip report. The key includes source files (including new JS/TS files), manifests, installed dependency-lock metadata and Node/platform/architecture. The wrapper runs in a private staging cache and compares Turbo's actual task fingerprint before and after execution. A changed fingerprint discards both the report and staged cache. Stable artifacts are published by same-filesystem file renames; output is displayed only after validation. A fresh `turbo-v2` namespace avoids reusing reports produced by the older wrapper.
 
 This before/after check is not an immutable worktree snapshot: avoid simultaneous edits in one worktree, particularly changes reverted during a run. Run the uncached strict report before deleting code. `npm run quality:cached -- --summarize` emits Turbo's run summary; `--dry=json` exposes its task/hash information. These diagnostic modes do not establish a passing release gate.
