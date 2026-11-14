@@ -1,5 +1,13 @@
 # Repository quality tools
 
+## npm toolchain
+
+The root `packageManager` field pins npm 11.21.2; the Node engine remains `>=24`. npm's [11.21.2 release](https://github.com/npm/cli/releases/tag/v11.21.2) supports that engine range. This toolchain pin is not a project dependency and does not require regenerating either lockfile.
+
+The 11.21.2 security candidate ships `undici@6.29.1`, outside the three identified high-severity advisory ranges affecting 11.21.1's bundled Undici. The November 13, 2026 registry check still reports moderate advisories for bundled `glob@13.0.6` ([GHSA-3g3m-2fjr-6pw4](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4)) and `minimatch@10.2.5` ([GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)). Preparation is not security clearance or an age waiver: the November 4 publication reaches 14 days at `2026-11-18T22:39:06.269Z`; integration remains held for age, security disposition and required review/checks.
+
+When updating the pin, put the exact npm CLI on `PATH` in an isolated temporary toolchain and confirm `npm --version`; the manifest alone does not switch the executable used by shell scripts or CI. Exercise `npm ci --ignore-scripts --include=dev` at the root and with `--prefix skills/turnstile-spin/templates/worker`, then run `./scripts/validate ci` with the same npm on `PATH` and the validation Python dependencies installed. Preserve both lockfiles and the existing install-script policy. Registry advisory results are evidence for the queried packages, not clearance from every security scanner.
+
 ## Knip
 
 The root manifest and lockfile pin Knip 6.44.0. Run `npm ci --ignore-scripts` in the repository root, then `npm run lint:knip`. The strict command fails on findings; `npm run lint:knip:report` displays findings without failing for existing lint issues. Configuration/internal errors still fail. CI runs the report uncached. No automatic deletion or fix is enabled.
