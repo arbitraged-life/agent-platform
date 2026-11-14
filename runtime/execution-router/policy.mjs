@@ -10,7 +10,7 @@ export const VERSION = '1.1.0';
 export const exec = promisify(execFile);
 const REASONS = new Set(['missing-capability','execution-lifecycle','local-harness','explicit-user-choice']);
 const ACTIONS = new Set(['read','edit','test']);
-const TASK_FIELDS = new Set(['schema_version','task_id','project','objective','workspace','profile','actions','source_write_authorized','delegation_reason','delegation_detail','acceptance_criteria','references','parent_run_id']);
+const TASK_FIELDS = new Set(['schema_version','task_id','project','objective','workspace','profile','actions','source_write_authorized','delegation_reason','delegation_detail','acceptance_criteria','references','parent_run_id','review_context']);
 function check(ok, message) { if (!ok) throw new Error(message); }
 function canonical(value) {
  if (Array.isArray(value)) return value.map(canonical);
@@ -86,10 +86,29 @@ export function routeTask(facts={}) {
  if(facts.local_available)return {route:version===1?'chatgpt-local':'direct-local',reason:version===1?'Use Desktop Commander directly; code and complexity alone do not require another agent.':'Use the direct local tool; code and complexity alone do not require another agent.'};
  return {route:'needs-user',reason:'Discover supported tools, complete independent work, then surface only the remaining capability gap.'};
 }
-export function validateTask(task) {
+function validateReviewContext(review) {
+ if(!review || typeof review!=='object' || Array.isArray(review) || review.schema_version!==1)
+  throw new Error('Typed review_context is required');
+ if(review.kind==='general') {
+  check(Object.keys(review).length===2 && Object.hasOwn(review,'kind'),'Invalid general review_context');
+  return;
+ }
+ check(review.kind==='pr-review' && Object.keys(review).length===6 && ['repository','pr','head_sha','acceptance'].every(key=>Object.hasOwn(review,key)),'Invalid PR review_context');
+ check(typeof review.repository==='string' && /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(review.repository)
+  && Number.isSafeInteger(review.pr) && review.pr>0
+  && typeof review.head_sha==='string' && /^[0-9a-f]{40}$/.test(review.head_sha),'Invalid PR review identity');
+ const a=review.acceptance;
+ check(a && typeof a==='object' && !Array.isArray(a) && Object.keys(a).length===4
+  && ['verifier','summary','findings','review_bodies'].every(key=>Object.hasOwn(a,key))
+  && ['verifier','summary'].every(key=>typeof a[key]==='string' && a[key].trim() && a[key].length<=2000)
+  && Array.isArray(a.findings) && a.findings.length<=100 && Array.isArray(a.review_bodies) && a.review_bodies.length<=20,
+  'Independent PR review acceptance evidence required');
+}
+function validateTaskShape(task,allowHistoricalReturned=false) {
  check(task && typeof task==='object' && !Array.isArray(task),'Task must be an object');
+ const historicalReturned=allowHistoricalReturned && task.schema_version===1;
  for (const key of Object.keys(task)) check(TASK_FIELDS.has(key),`Unknown task field: ${key}`);
- check(task.schema_version===1,'Unsupported task schema_version'); taskId(task.task_id);
+ check(task.schema_version===(historicalReturned?1:2),'Unsupported task schema_version'); taskId(task.task_id);
  for (const key of ['project','objective','workspace','profile','delegation_detail']) text(task[key],key);
  check(path.isAbsolute(task.workspace),'workspace must be absolute');
  check(REASONS.has(task.delegation_reason),'Invalid delegation_reason');
@@ -100,23 +119,30 @@ export function validateTask(task) {
  task.acceptance_criteria.forEach(c=>text(c,'acceptance criterion',2000));
  check(new Set(task.acceptance_criteria).size===task.acceptance_criteria.length,'Duplicate acceptance criteria');
  check(Array.isArray(task.references) && task.references.length<=30 && task.references.every(r=>typeof r==='string' && r.length<4000),'Invalid references');
+ if(historicalReturned)check(!Object.hasOwn(task,'review_context'),'Historical returned task cannot carry review_context');
+ else validateReviewContext(task.review_context);
  if (task.parent_run_id!==undefined) text(task.parent_run_id,'parent_run_id',200);
  const serialized=JSON.stringify(task);
  check(serialized.length<50000,'Task packet is too large; provide bounded context');
  check(!/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\bsk-(?:proj-|ant-)[A-Za-z0-9_-]{24,}|\bgh[pousr]_[A-Za-z0-9]{30,}|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\bBearer\s+[A-Za-z0-9_.=-]{20,}/.test(serialized),'Potential credential in task packet; remove it');
  return structuredClone(task);
 }
+export function validateTask(task) { return validateTaskShape(task); }
 export function cleanEnvironment(env=process.env) {
  return Object.fromEntries(['HOME','PATH','LANG','LC_ALL','TMPDIR','TMP','TEMP','SYSTEMROOT','COMSPEC'].filter(k=>env[k]!==undefined).map(k=>[k,env[k]]));
 }
 export async function loadPolicy(filename) {
  const raw=JSON.parse(await readFile(filename,'utf8')); const base=path.dirname(path.resolve(filename));
  check(raw.schema_version===1 && typeof raw.policy_version==='string','Unsupported policy version');
- for(const k of Object.keys(raw))check(['schema_version','policy_version','state_dir','workspace_roots','profiles','protected_branches'].includes(k),`Unknown policy setting: ${k}`);
+ for(const k of Object.keys(raw))check(['schema_version','policy_version','state_dir','workspace_roots','profiles','protected_branches','review_tools'].includes(k),`Unknown policy setting: ${k}`);
  check(Array.isArray(raw.workspace_roots) && raw.workspace_roots.length>0,'workspace_roots required');
  check(raw.profiles && typeof raw.profiles==='object' && !Array.isArray(raw.profiles),'profiles required');
  if(Object.values(raw.profiles).some(p=>p?.sandbox==='workspace-write'))check(Array.isArray(raw.protected_branches)&&raw.protected_branches.length>0&&raw.protected_branches.every(b=>typeof b==='string'&&b.length>0),'Writable profiles require protected_branches');
  if(raw.protected_branches!==undefined)check(Array.isArray(raw.protected_branches)&&raw.protected_branches.every(b=>typeof b==='string'&&b.length>0),'Invalid protected_branches');
+ if(raw.review_tools!==undefined)check(raw.review_tools && typeof raw.review_tools==='object' && !Array.isArray(raw.review_tools)
+  && Object.keys(raw.review_tools).sort((a,b)=>a.localeCompare(b)).join(',')==='gh,python'
+  && Object.values(raw.review_tools).every(v=>typeof v==='string' && path.isAbsolute(v)),
+  'review_tools require absolute python and gh executables');
  const roots=await Promise.all(raw.workspace_roots.map(v=>realpath(expand(v,base))));
  const profiles=Object.create(null);
  for (const [name,p] of Object.entries(raw.profiles)) {
@@ -131,11 +157,15 @@ export async function loadPolicy(filename) {
   if(p.adapter==='codex')codexAdapter.validateProfile(p,name);
   profiles[name]={...p,...(p.executable?{executable:p.adapter==='codex'?await canonicalPath(expand(p.executable,base)):expand(p.executable,base)}:{})};
  }
- const resolved={...raw,source_path:path.resolve(filename),state_dir:await canonicalPath(expand(raw.state_dir,base)),workspace_roots:roots,profiles};
- return {...resolved,config_digest:digest({schema_version:resolved.schema_version,policy_version:resolved.policy_version,state_dir:resolved.state_dir,workspace_roots:roots,profiles,protected_branches:resolved.protected_branches})};
+ const review_tools=raw.review_tools?Object.fromEntries(await Promise.all(
+  Object.entries(raw.review_tools).map(async ([name,executable])=>[name,await executableIdentity({adapter:'codex',executable})]))):undefined;
+ if(review_tools)check(path.basename(review_tools.gh.path)==='gh','review_tools gh executable must be named gh');
+ const resolved={...raw,source_path:path.resolve(filename),state_dir:await canonicalPath(expand(raw.state_dir,base)),workspace_roots:roots,profiles,review_tools};
+ return {...resolved,config_digest:digest({schema_version:resolved.schema_version,policy_version:resolved.policy_version,state_dir:resolved.state_dir,workspace_roots:roots,profiles,protected_branches:resolved.protected_branches,review_tools})};
 }
-export async function resolveProfile(policy, task) {
- validateTask(task); const profile=Object.hasOwn(policy.profiles,task.profile)?policy.profiles[task.profile]:undefined; check(profile,`Unknown profile: ${task.profile}`);
+export async function resolveProfile(policy, task, {historicalReturned=false}={}) {
+ validateTaskShape(task,historicalReturned);
+ const profile=Object.hasOwn(policy.profiles,task.profile)?policy.profiles[task.profile]:undefined; check(profile,`Unknown profile: ${task.profile}`);
  const workspace=await realpath(task.workspace);
  check(policy.workspace_roots.some(root=>contained(root,workspace)),'workspace is outside allowed roots');
  if(profile.sandbox==='workspace-write')check(!contained(workspace,await canonicalPath(policy.state_dir)),'State directory must be outside a writable worktree');

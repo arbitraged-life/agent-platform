@@ -109,6 +109,157 @@ test('unresolved delivery retains buffer capacity rather than discarding its onl
   await assert.rejects(() => deliver(bundle('r')), /full|capacity/i);
 });
 
+test('full durable queue drains due retry before rejecting a new whole trace', async () => {
+  const store = storage(), first = bundle('j'), second = bundle('k');
+  let clock = now, honeycombCalls = 0;
+  const delivery = createWorkerTelemetryDelivery({
+    storage: store, configuration: config('mirror', 4), now: () => clock,
+    maxEntries: 1, retryDelayMs: 1000,
+    exporters: {
+      honeycomb: async record => {
+        if (++honeycombCalls === 1) throw new DeliveryError({ code: 'HTTP_429', httpStatus: 429, retryable: true });
+        return receipt(record);
+      },
+      logfire: async record => receipt(record),
+    },
+  });
+  assert.equal((await delivery(first)).destinations.honeycomb.reason_code, 'HTTP_429');
+  assert.equal(delivery.nextAttemptAt(), now + 1000);
+  clock += 1000;
+  assert.equal((await delivery(second)).delivery_status, 'accepted');
+  assert.equal(honeycombCalls, 3);
+  assert.equal(delivery.usage().honeycomb.accepted, 4);
+  assert.equal(delivery.usage().logfire.accepted, 4);
+});
+
+test('simultaneous full-buffer recovery shares the due export claim', async () => {
+  const store = storage(), first = bundle('l'), second = bundle('m'), third = bundle('o');
+  let clock = now, honeycombCalls = 0, release, started;
+  const begun = new Promise(resolve => { started = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const delivery = createWorkerTelemetryDelivery({
+    storage: store, configuration: config('mirror', 6), now: () => clock,
+    maxEntries: 1, retryDelayMs: 1000,
+    exporters: {
+      honeycomb: async record => {
+        honeycombCalls++;
+        if (honeycombCalls === 1) throw new DeliveryError({ code: 'HTTP_429', httpStatus: 429, retryable: true });
+        if (record.event_id === first.event_id) { started(); await held; }
+        return receipt(record);
+      },
+      logfire: async record => receipt(record),
+    },
+  });
+  await delivery(first);
+  clock += 1000;
+  const recover = delivery(second);
+  await begun;
+  await assert.rejects(delivery(third), { code: 'BUFFER_FULL' });
+  release();
+  assert.equal((await recover).delivery_status, 'accepted');
+  assert.equal(honeycombCalls, 3); // Initial 429, shared retry, newly admitted second trace.
+  assert.equal(delivery.usage().honeycomb.uncertain, 0);
+  assert.equal(delivery.usage().logfire.uncertain, 0);
+});
+
+test('full queue reaches a later due trace when earlier retries remain buffered', async () => {
+  const store = storage(), size = 102, last = size - 1;
+  let clock = now, ready = false;
+  const delivery = createWorkerTelemetryDelivery({
+    storage: store, configuration: config('mirror', size * 2 + 2), now: () => clock,
+    maxEntries: size, retryDelayMs: 1000,
+    exporters: {
+      honeycomb: async record => {
+        if ((record.records[0].run_id !== `run${last}` || !ready) &&
+            record.records[0].run_id !== `run${size}`)
+          throw new DeliveryError({ code: 'HTTP_429', httpStatus: 429, retryable: true });
+        return receipt(record);
+      },
+      logfire: async record => receipt(record),
+    },
+  });
+  const trace = index => {
+    const id = createUuidV7(start + 1000 + index);
+    const records = [
+      evidenceRecord({ eventName: 'agent.operation.observed', traceId: id,
+        eventId: stableEvidenceId(id, 'operation'), runtime: 'ai-gateway', runId: `run${index}`,
+        toolName: 'email.decision', observedMs: start + 1024, recordedMs: start + 1024,
+        startedMs: start, endedMs: start + 1024, outcome: 'succeeded' }),
+      evidenceRecord({ eventName: 'agent.turn.finished', traceId: id,
+        eventId: stableEvidenceId(id, 'finished'), runtime: 'ai-gateway', runId: `run${index}`,
+        observedMs: start + 1024, recordedMs: start + 1024,
+        startedMs: start, endedMs: start + 1024, outcome: 'succeeded' }),
+    ];
+    return { schema_version: 1, record_type: 'agent.trace', event_id: id, trace_id: id, records };
+  };
+  for (let index = 0; index < size; index++) await delivery(trace(index));
+  clock += 1000;
+  ready = true;
+  assert.equal((await delivery(trace(size))).delivery_status, 'accepted');
+  assert.equal(delivery.usage().honeycomb.uncertain, 0);
+});
+
+test('full split queue reaches eligible Logfire work past a quota-blocked Honeycomb retry', async () => {
+  const store = storage(), first = bundle('a'), second = bundle('b'), third = bundle('c');
+  let clock = now, logfireCalls = 0;
+  const exporters = {
+    honeycomb: async () => { throw new DeliveryError({ code: 'HTTP_429', httpStatus: 429, retryable: true }); },
+    logfire: async record => {
+      if (++logfireCalls === 1) throw new DeliveryError({ code: 'HTTP_429', httpStatus: 429, retryable: true });
+      return receipt(record);
+    },
+  };
+  const original = createWorkerTelemetryDelivery({
+    storage: store, configuration: config('split', 4), now: () => clock,
+    maxEntries: 2, retryDelayMs: 1000, exporters,
+  });
+  assert.equal((await original(first)).route, 'honeycomb');
+  assert.equal((await original(second)).route, 'logfire');
+  clock += 1000;
+  const constrained = config('split', 4);
+  constrained.sinks.honeycomb.other_usage = 3;
+  const restarted = createWorkerTelemetryDelivery({
+    storage: store, configuration: constrained, now: () => clock,
+    maxEntries: 2, retryDelayMs: 1000, exporters,
+  });
+  assert.equal((await restarted(third)).delivery_status, 'accepted');
+  assert.equal(logfireCalls, 3); // Initial 429, recovered second trace, newly admitted third trace.
+  assert.equal(restarted.usage().honeycomb.uncertain, 0);
+});
+
+test('full-buffer admission stops waiting at deadline without abandoning live export claim', async () => {
+  const store = storage(), first = bundle('d'), next = bundle('e');
+  let clock = now, calls = 0, release, begun, finished, retained;
+  const started = new Promise(resolve => { begun = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const settled = new Promise(resolve => { finished = resolve; });
+  const delivery = createWorkerTelemetryDelivery({
+    storage: store, configuration: config('mirror', 4), now: () => clock,
+    maxEntries: 1, retryDelayMs: 1000, keepAlive: task => { retained = task; },
+    exporters: {
+      honeycomb: async record => {
+        if (++calls === 1) throw new DeliveryError({ code: 'HTTP_429', httpStatus: 429, retryable: true });
+        if (record.event_id === first.event_id) { begun(); await held; finished(); }
+        return receipt(record);
+      },
+      logfire: async record => receipt(record),
+    },
+  });
+  await delivery(first);
+  clock += 1000;
+  const since = performance.now(), admission = delivery(next);
+  await started;
+  await assert.rejects(admission, { code: 'BUFFER_FULL' });
+  assert.ok(performance.now() - since < 4700);
+  assert.ok(retained instanceof Promise, 'the host must retain a timed-out export until its receipt settles');
+  assert.equal(delivery.usage().honeycomb.uncertain, 0);
+  release();
+  await settled;
+  await retained;
+  assert.equal((await delivery(next)).delivery_status, 'accepted');
+  assert.equal(delivery.usage().honeycomb.uncertain, 0);
+});
+
 test('explicit 429 is retryable without repeating the already-accepted peer', async () => {
   const store = storage(), event = bundle('c');
   let calls = 0, clock = now;
