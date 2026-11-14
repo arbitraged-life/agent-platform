@@ -4,12 +4,13 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { validateTask, taskId, digest, contained, resolveProfile, workspaceFingerprint, doctorProfile, cleanEnvironment, exec, executableIdentity, VERSION } from './policy.mjs';
+import { codexAdapter } from './codex.mjs';
 const now=()=>new Date().toISOString();
 const runDir=(policy,id)=>path.join(policy.state_dir,'runs',taskId(id));
 async function json(filename,value) { const temp=filename+'.'+randomUUID()+'.tmp';await writeFile(temp,JSON.stringify(value,null,2)+'\n',{mode:0o600});await rename(temp,filename); }
 const readJson=async filename=>JSON.parse(await readFile(filename,'utf8'));
 async function event(dir,type,metadata={}) { await appendFile(path.join(dir,'events.jsonl'),JSON.stringify({at:now(),type,...metadata})+'\n',{mode:0o600}); }
-function renderHandoff(task) { const id=task.task_id,workspace=task.workspace; return `# Handoff: ${id}\n\nProject: ${task.project}\nProfile: ${task.profile}\nWorkspace: ${workspace}\nActions: ${task.actions.join(', ')}\nReason: ${task.delegation_reason}: ${task.delegation_detail}\n\n## Objective\n${task.objective}\n\n## Acceptance criteria\n${task.acceptance_criteria.map(c=>'- '+c).join('\n')}\n\n## References\n${task.references.map(r=>'- '+r).join('\n')}\n\n## Boundaries\nWork only on this task. Do not launch another agent, install dependencies, commit, push, deploy, send messages, access unrelated personal files, change permissions, or spend additional API money. Stop and report a blocker when broader authority is needed. Read the applicable repository instructions. Return a factual summary, changed paths, commands and outcomes, and unresolved issues. Do not claim independent acceptance.\n\nThe launch adapter does not inherit ChatGPT connectors or hidden conversation context. Model-provider access is separate from task network permissions.\n`; }
+function renderHandoff(task) { const id=task.task_id,workspace=task.workspace; return `# Handoff: ${id}\n\nProject: ${task.project}\nProfile: ${task.profile}\nWorkspace: ${workspace}\nActions: ${task.actions.join(', ')}\nReason: ${task.delegation_reason}: ${task.delegation_detail}\n\n## Objective\n${task.objective}\n\n## Acceptance criteria\n${task.acceptance_criteria.map(c=>'- '+c).join('\n')}\n\n## References\n${task.references.map(r=>'- '+r).join('\n')}\n\n## Boundaries\nWork only on this task. Do not launch another agent, install dependencies, commit, push, deploy, send messages, access unrelated personal files, change permissions, or spend additional API money. Stop and report a blocker when broader authority is needed. Read the applicable repository instructions. Return a factual summary, changed paths, commands and outcomes, and unresolved issues. Do not claim independent acceptance.\n\nThe launch adapter does not inherit the originating host's connectors or hidden conversation context. Model-provider access is separate from task network permissions.\n`; }
 const qHelper=fileURLToPath(new URL('../../skills/q-first-pr-review/scripts/triage.py',import.meta.url));
 export function validateReviewSnapshot(review,snapshot) {
  if(!snapshot || typeof snapshot!=='object' || snapshot.repository!==review.repository || snapshot.pr!==review.pr
@@ -95,17 +96,36 @@ export async function requestCancel(policy,id) {
 }
 function stopChild(child) { if(!child.pid)return;try {if(process.platform==='win32')child.kill('SIGTERM');else process.kill(-child.pid,'SIGTERM');}catch(e){if(e.code!=='ESRCH')throw e;} }
 function killChild(child) { if(!child.pid)return;try {if(process.platform==='win32')child.kill('SIGKILL');else process.kill(-child.pid,'SIGKILL');}catch(e){if(e.code!=='ESRCH')throw e;} }
-function groupAlive(child) {
+async function groupAlive(child) {
  if(process.platform==='win32'||!child?.pid)return false;
- try{process.kill(-child.pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw error;}
+ try{process.kill(-child.pid,0);return true;}catch(error){
+  if(error.code==='ESRCH')return false;
+  // Darwin denies signal-zero probes for zombie-only process groups.
+  // Only positive evidence that every member is a zombie permits release.
+  if(process.platform==='darwin'&&error.code==='EPERM'){
+   try{
+    const {stdout}=await exec('/bin/ps',['-g',String(child.pid),'-o','state='],{timeout:2000,maxBuffer:65536,env:{COMMAND_MODE:'unix2003'}});
+    const states=stdout.trim().split(/\s+/).filter(Boolean);
+    if(states.length&&states.every(state=>state.startsWith('Z')))return false;
+    // Empty output or a nonzero ps exit cannot replace authoritative ESRCH.
+   }catch{}
+  }
+  throw error;
+ }
 }
 async function stopRemainingGroup(child) {
- if(!groupAlive(child))return {lingering:false,stopped:true};
- stopChild(child);
- for(let i=0;i<10&&groupAlive(child);i++)await new Promise(resolve=>setTimeout(resolve,100));
- if(groupAlive(child))killChild(child);
- for(let i=0;i<10&&groupAlive(child);i++)await new Promise(resolve=>setTimeout(resolve,100));
- return {lingering:true,stopped:!groupAlive(child)};
+ if(!await groupAlive(child))return {lingering:false,stopped:true};
+ try{stopChild(child);}catch(error){
+  if(process.platform!=='darwin'||error.code!=='EPERM'||await groupAlive(child))throw error;
+ }
+ for(let i=0;i<10&&await groupAlive(child);i++)await new Promise(resolve=>setTimeout(resolve,100));
+ if(await groupAlive(child)){
+  try{killChild(child);}catch(error){
+   if(process.platform!=='darwin'||error.code!=='EPERM'||await groupAlive(child))throw error;
+  }
+ }
+ for(let i=0;i<10&&await groupAlive(child);i++)await new Promise(resolve=>setTimeout(resolve,100));
+ return {lingering:true,stopped:!await groupAlive(child)};
 }
 export async function runPrepared(policy,id,approval={}) {
  if(process.platform==='win32')throw new Error('Windows process-tree supervision is not supported; use a manual handoff');
@@ -141,7 +161,7 @@ export async function runPrepared(policy,id,approval={}) {
   // Re-read under the exclusive workspace lock to prevent double submission.
   if((await readJson(path.join(dir,'status.json'))).status!=='prepared')throw new Error('Run is not prepared');
   const finalPath=path.join(dir,'agent-final.txt'),outputLimit=profile.max_output_bytes??10*1024*1024;
-  const args=['exec','--ignore-user-config','--sandbox',profile.sandbox,'--ephemeral','--json','--color','never','-c','approval_policy="never"','-c','sandbox_workspace_write.network_access=false','--cd',workspace,'--output-last-message',finalPath,'-'];
+  const args=codexAdapter.launchArgs(profile,workspace,finalPath);
   // Recheck the approved branch, workspace and Q evidence under the exclusive lock before recording a launch.
   await resolveProfile(policy,task);
   if((await workspaceFingerprint(workspace,policy.state_dir)).digest!==state.workspace_fingerprint.digest)throw new Error('Prepared workspace changed before launch; prepare a new handoff');

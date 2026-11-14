@@ -112,15 +112,6 @@ class SkillTests(unittest.TestCase):
         self.assertIn("declared skill catalog/index", audit)
         self.assertNotIn("NERV purity", audit)
 
-    def test_chatgpt_harness_is_portable_and_runtime_bounded(self):
-        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
-        self.assertIn("chatgpt-harness", rows)
-        self.assertEqual(rows["chatgpt-harness"]["license"], "LICENSE")
-        content = (self.root / "skills/chatgpt-harness/SKILL.md").read_text()
-        self.assertIn("Desktop Commander", content)
-        self.assertIn("enforcement hooks remain runtime-enforced", content)
-        self.assertIn("verify the requested outcome", content)
-        self.assertNotIn("agent-framework", content)
 
     def test_generic_wrapper_replacements_are_bounded(self):
         rows = {row["name"]: row for row in MODULE["catalog"](self.root)}

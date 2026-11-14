@@ -1,12 +1,12 @@
-import { readFile, realpath, access, stat, lstat, readlink, opendir } from 'node:fs/promises';
+import { readFile, realpath, stat, lstat, readlink, opendir } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { createReadStream, constants } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { codexAdapter } from './codex.mjs';
 
-export const VERSION = '1.0.7';
+export const VERSION = '1.1.0';
 export const exec = promisify(execFile);
 const REASONS = new Set(['missing-capability','execution-lifecycle','local-harness','explicit-user-choice']);
 const ACTIONS = new Set(['read','edit','test']);
@@ -45,17 +45,8 @@ function nulPaths(bytes) {
  check(start===bytes.length,'Malformed NUL-delimited Git paths');
  return names;
 }
-async function fileDigest(filename) {
- const hash=createHash('sha256');
- for await(const chunk of createReadStream(filename))hash.update(chunk);
- return hash.digest('hex');
-}
 export async function executableIdentity(profile) {
- if(profile.adapter!=='codex')return null;
- const filename=await realpath(profile.executable),info=await stat(filename);
- check(info.isFile(),'Codex executable is not a regular file');
- await access(filename,constants.X_OK);
- return {path:filename,sha256:await fileDigest(filename)};
+ return profile.adapter==='codex'?codexAdapter.executableIdentity(profile):null;
 }
 async function* trackedEntries(workspace) {
  const child=spawn('git',['-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null','-C',workspace,'ls-files','--cached','--stage','-z'],{env:cleanEnvironment(),stdio:['ignore','pipe','ignore']});
@@ -81,11 +72,18 @@ async function* trackedEntries(workspace) {
 }
 export function routeTask(facts={}) {
  check(facts && typeof facts==='object' && !Array.isArray(facts),'Route facts must be an object');
- for(const key of ['authority_blocked','native_available','local_available'])if(Object.hasOwn(facts,key))check(typeof facts[key]==='boolean',`${key} must be boolean`);
- if (facts.authority_blocked) return {route:'needs-user',reason:'Permission, consent, spending, or safety boundary: do not route around it.'};
- if (facts.local_available && REASONS.has(facts.delegate_reason) && typeof facts.delegate_detail==='string' && facts.delegate_detail.trim()) return {route:'local-agent',reason:facts.delegate_detail};
- if (facts.native_available) return {route:'chatgpt-native',reason:'The owning connected tool can complete the task.'};
- if (facts.local_available) return {route:'chatgpt-local',reason:'Use Desktop Commander directly; code and complexity alone do not require another agent.'};
+ const version=Object.hasOwn(facts,'contract_version')?facts.contract_version:1;
+ check(version===1 || version===2,'Unsupported routing contract_version');
+ if(version===1)for(const key of ['delegate_available','host_delegation_required'])check(!Object.hasOwn(facts,key),`${key} requires contract_version 2`);
+ for(const key of ['authority_blocked','native_available','local_available',...(version===2?['delegate_available','host_delegation_required']:[])])if(Object.hasOwn(facts,key))check(typeof facts[key]==='boolean',`${key} must be boolean`);
+ if(facts.authority_blocked)return {route:'needs-user',reason:'Permission, consent, spending, or safety boundary: do not route around it.'};
+ const canDelegate=(version===1?facts.local_available:facts.delegate_available) && REASONS.has(facts.delegate_reason) && typeof facts.delegate_detail==='string' && facts.delegate_detail.trim();
+ if(version===2 && facts.host_delegation_required)return facts.delegate_available
+  ? {route:'delegated-agent',reason:'The host requires a separate authorized task on the selected executor.'}
+  : {route:'needs-user',reason:'Host-required delegation cannot fall back to direct execution; the selected executor is unavailable.'};
+ if(canDelegate)return {route:version===1?'local-agent':'delegated-agent',reason:facts.delegate_detail};
+ if(facts.native_available)return {route:version===1?'chatgpt-native':'owner-tool',reason:'The owning connected tool can complete the task.'};
+ if(facts.local_available)return {route:version===1?'chatgpt-local':'direct-local',reason:version===1?'Use Desktop Commander directly; code and complexity alone do not require another agent.':'Use the direct local tool; code and complexity alone do not require another agent.'};
  return {route:'needs-user',reason:'Discover supported tools, complete independent work, then surface only the remaining capability gap.'};
 }
 function validateReviewContext(review) {
@@ -155,9 +153,8 @@ export async function loadPolicy(filename) {
   check(p.sandbox!=='read-only' || p.actions.every(a=>a==='read'),`Read-only profile cannot edit/test: ${name}`);
   check(p.sandbox!=='workspace-write' || p.requires_isolated_worktree===true,`Write profile requires isolated worktree: ${name}`);
   if(p.max_output_bytes!==undefined)check(Number.isInteger(p.max_output_bytes)&&p.max_output_bytes>=1&&p.max_output_bytes<=10*1024*1024,`Invalid max_output_bytes: ${name}`);
-  check(p.adapter==='manual' || p.requires_chatgpt_login===true,`Codex requires subscription login: ${name}`);
   for (const k of Object.keys(p)) check(['adapter','executable','sandbox','actions','max_seconds','max_output_bytes','requires_isolated_worktree','requires_chatgpt_login','description'].includes(k),`Unknown profile setting: ${k}`);
-  if(p.adapter==='codex')text(p.executable,`executable for Codex profile ${name}`,4096);
+  if(p.adapter==='codex')codexAdapter.validateProfile(p,name);
   profiles[name]={...p,...(p.executable?{executable:p.adapter==='codex'?await canonicalPath(expand(p.executable,base)):expand(p.executable,base)}:{})};
  }
  const review_tools=raw.review_tools?Object.fromEntries(await Promise.all(
@@ -286,10 +283,5 @@ export async function workspaceFingerprint(workspace,stateDir) {
 }
 export async function doctorProfile(profile) {
  check(profile.adapter==='codex','This profile is handoff-only; no validated launch adapter');
- const options={timeout:15000,maxBuffer:1024*1024,env:cleanEnvironment()};
- const {stdout:help}=await exec(profile.executable,['exec','--help'],options);
- for(const flag of ['--ignore-user-config','--sandbox','--json','--ephemeral','--output-last-message']) check(help.includes(flag),`Installed Codex lacks required flag ${flag}`);
- const {stdout,stderr}=await exec(profile.executable,['login','status'],options);
- check(/Logged in using ChatGPT/i.test(stdout+'\n'+stderr),'ChatGPT subscription login required; no API-key fallback');
- return {adapter:'codex',login:'ChatGPT',required_flags:true,sandbox:profile.sandbox};
+ return codexAdapter.doctor(profile,exec,cleanEnvironment);
 }
