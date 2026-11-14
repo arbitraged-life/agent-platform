@@ -104,9 +104,10 @@ async function groupAlive(child) {
   // Only positive evidence that every member is a zombie permits release.
   if(process.platform==='darwin'&&error.code==='EPERM'){
    try{
-    const {stdout}=await exec('/bin/ps',['-g',String(child.pid),'-o','state='],{timeout:2000,maxBuffer:65536});
+    const {stdout}=await exec('/bin/ps',['-g',String(child.pid),'-o','state='],{timeout:2000,maxBuffer:65536,env:{COMMAND_MODE:'unix2003'}});
     const states=stdout.trim().split(/\s+/).filter(Boolean);
     if(states.length&&states.every(state=>state.startsWith('Z')))return false;
+    // Empty output or a nonzero ps exit cannot replace authoritative ESRCH.
    }catch{}
   }
   throw error;
@@ -114,9 +115,15 @@ async function groupAlive(child) {
 }
 async function stopRemainingGroup(child) {
  if(!await groupAlive(child))return {lingering:false,stopped:true};
- stopChild(child);
+ try{stopChild(child);}catch(error){
+  if(process.platform!=='darwin'||error.code!=='EPERM'||await groupAlive(child))throw error;
+ }
  for(let i=0;i<10&&await groupAlive(child);i++)await new Promise(resolve=>setTimeout(resolve,100));
- if(await groupAlive(child))killChild(child);
+ if(await groupAlive(child)){
+  try{killChild(child);}catch(error){
+   if(process.platform!=='darwin'||error.code!=='EPERM'||await groupAlive(child))throw error;
+  }
+ }
  for(let i=0;i<10&&await groupAlive(child);i++)await new Promise(resolve=>setTimeout(resolve,100));
  return {lingering:true,stopped:!await groupAlive(child)};
 }

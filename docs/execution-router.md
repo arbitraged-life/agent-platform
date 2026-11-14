@@ -233,9 +233,12 @@ fingerprint, or leaves descendant processes in its owned Unix process group,
 it remains `needs-review`, not `verified-complete`. The supervisor terminates
 that process group before releasing the workspace lock; if it cannot confirm
 termination the lock remains for manual inspection. On macOS, a denied
-signal-zero probe falls back to a bounded `/bin/ps` inspection. Only a nonempty
-group consisting entirely of zombies proves that no member can continue work;
-live members, empty output, or inspection failures retain the lock.
+signal-zero probe falls back to a bounded `/bin/ps` inspection with explicit
+Unix 2003 process-group selection, independent of inherited legacy command mode.
+Only a nonempty group consisting entirely of zombies proves that no member can
+continue work; live members, empty output, or inspection failures retain the lock.
+A denied termination signal is rechecked against the same evidence rather than
+ignored; unresolved permission failures still retain the lock.
 A pending cancellation poll cannot schedule another signal after the child
 closes or the run is released. Other process groups and Windows descendants
 are not confined by this mechanism. A successful child is `returned`; controller inspection with
