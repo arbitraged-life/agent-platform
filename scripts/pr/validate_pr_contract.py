@@ -26,21 +26,122 @@ def normalize_heading(value: str) -> str:
     return " ".join(value.strip().split()).casefold()
 
 
+def _fence_marker(line: str) -> tuple[str, int, str] | None:
+    stripped = line.lstrip()
+    marker = re.match(r"([`~])\1{2,}", stripped)
+    if marker is None:
+        return None
+    return marker.group(1), len(marker.group()), stripped[marker.end():].strip()
+
+
+def _mask_html_comments(body: str) -> str:
+    def mask(fragment: str) -> str:
+        return "".join(char if char in "\r\n" else " " for char in fragment)
+
+    lines = body.splitlines(keepends=True)
+    block_start = re.compile(
+        r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|(?:[-+*]|1[.)])[ \t]+|<!--"
+        r"|(?:=+|-+)[ \t]*$|(?P<rule>[_*])(?:[ \t]*(?P=rule)){2,}[ \t]*$)"
+    )
+
+    def code_span_end(line_index: int, position: int, delimiter: str) -> tuple[int, int] | None:
+        heading = re.match(r" {0,3}#{1,6}(?:[ \t]|$)", lines[line_index]) is not None
+        for index in range(line_index, len(lines)):
+            candidate = lines[index]
+            if index > line_index and (
+                heading or not candidate.strip() or block_start.match(candidate.rstrip("\r\n"))
+                or _fence_marker(candidate) is not None
+            ):
+                break
+            start = position if index == line_index else 0
+            for closing in re.finditer(r"`+", candidate[start:]):
+                if closing.group() == delimiter:
+                    return index, start + closing.end()
+        return None
+
+    output: list[str] = []
+    fenced: tuple[str, int] | None = None
+    code_end: tuple[int, int] | None = None
+    commented = False
+    for index, line in enumerate(lines):
+        position = 0
+        if code_end is not None:
+            if index < code_end[0]:
+                output.append(line)
+                continue
+            position = code_end[1]
+            output.append(line[:position])
+            code_end = None
+        marker = _fence_marker(line)
+        if fenced is not None:
+            if marker is not None and marker[0] == fenced[0] and marker[1] >= fenced[1] and not marker[2]:
+                fenced = None
+            output.append(line)
+            continue
+        if not commented and not position and marker is not None:
+            fenced = marker[:2]
+            output.append(line)
+            continue
+
+        while position < len(line):
+            if commented:
+                end = line.find("-->", position)
+                if end == -1:
+                    output.append(mask(line[position:]))
+                    break
+                output.append(mask(line[position:end + 3]))
+                position = end + 3
+                commented = False
+            else:
+                token = re.search(r"<!--|`+", line[position:])
+                if token is None:
+                    output.append(line[position:])
+                    break
+                start = position + token.start()
+                output.append(line[position:start])
+                escape_start = start
+                while escape_start > 0 and line[escape_start - 1] == "\\":
+                    escape_start -= 1
+                if (start - escape_start) % 2:
+                    output.append(line[start:start + 1])
+                    position = start + 1
+                elif token.group() == "<!--":
+                    position = start
+                    commented = True
+                else:
+                    position = start + len(token.group())
+                    end = code_span_end(index, position, token.group())
+                    if end is None:
+                        output.append(token.group())
+                    elif end[0] == index:
+                        output.append(line[start:end[1]])
+                        position = end[1]
+                    else:
+                        output.append(line[start:])
+                        code_end = end
+                        break
+    return "".join(output)
+
+
 def _document_lines(body: str) -> list[tuple[int, str]]:
     out: list[tuple[int, str]] = []
-    fenced = False
+    fenced: tuple[str, int] | None = None
     offset = 0
     for line in body.splitlines(keepends=True):
-        stripped = line.lstrip()
-        if stripped.startswith((chr(96) * 3, "~~~")):
-            fenced = not fenced
-        elif not fenced:
+        marker = _fence_marker(line)
+        if fenced is not None:
+            if marker is not None and marker[0] == fenced[0] and marker[1] >= fenced[1] and not marker[2]:
+                fenced = None
+        elif marker is not None:
+            fenced = marker[:2]
+        else:
             out.append((offset, line.rstrip("\r\n")))
         offset += len(line)
     return out
 
 
 def parse_sections(body: str) -> tuple[dict[str, str], set[str]]:
+    body = _mask_html_comments(body)
     headings: list[tuple[int, int, str]] = []
     for offset, line in _document_lines(body):
         if not line.startswith("## "):
@@ -62,7 +163,6 @@ def parse_sections(body: str) -> tuple[dict[str, str], set[str]]:
 
 
 def meaningful_length(text: str) -> int:
-    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
     text = re.sub(r"(?m)^\s*[-*+]\s*", "", text)
     return len(" ".join(text.split()))
 

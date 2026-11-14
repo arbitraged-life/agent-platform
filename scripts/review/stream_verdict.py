@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Stream tool-free OMP JSONL and stop as soon as a final assistant
-`text_end` contains a parseable review verdict. Fail closed otherwise.
+"""Stream tool-free OMP JSONL and stop on a valid final assistant `text_end`.
+Fail closed on any invalid final response.
 
 A reader thread drains stdout into a queue so the deadline is enforced by the
 queue's own `get(timeout=...)`, not by a blocking `readline()` on the main
@@ -9,7 +9,7 @@ but silent.
 
 Exit codes: 0 = verdict found, printed as the sole stdout line.
             124 = timed out with no verdict.
-            125 = process exited on its own with no verdict.
+            125 = invalid final response or process exited without a verdict.
 """
 import json
 import queue
@@ -18,6 +18,18 @@ import sys
 import threading
 import time
 
+
+def valid_verdict(candidate: object) -> bool:
+    if not isinstance(candidate, dict) or candidate.keys() != {"verdict", "findings"}:
+        return False
+    findings = candidate["findings"]
+    if not isinstance(findings, list) or any(
+        not isinstance(finding, str) or not finding.strip() for finding in findings
+    ):
+        return False
+    return (candidate["verdict"] == "PASS" and not findings) or (
+        candidate["verdict"] == "FAIL" and bool(findings)
+    )
 
 if len(sys.argv) < 3:
     print("usage: stream_verdict.py <timeout_seconds> <cmd> [args...]", file=sys.stderr)
@@ -42,6 +54,7 @@ threading.Thread(target=_pump, daemon=True).start()
 
 deadline = time.monotonic() + timeout
 verdict = None
+invalid_final = False
 stdout_closed = False
 
 while time.monotonic() < deadline:
@@ -60,18 +73,25 @@ while time.monotonic() < deadline:
         evt = json.loads(line)
     except json.JSONDecodeError:
         continue
-    content = None
+    if not isinstance(evt, dict):
+        continue
     ev = evt.get("assistantMessageEvent")
-    if evt.get("type") == "message_update" and ev and ev.get("type") == "text_end":
-        content = ev.get("content")
-    if isinstance(content, str):
-        try:
-            candidate = json.loads(content)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(candidate, dict) and candidate.get("verdict") in ("PASS", "FAIL"):
-            verdict = candidate
-            break
+    if evt.get("type") != "message_update" or not isinstance(ev, dict) or ev.get("type") != "text_end":
+        continue
+    content = ev.get("content")
+    if not isinstance(content, str):
+        invalid_final = True
+        break
+    try:
+        candidate = json.loads(content)
+    except json.JSONDecodeError:
+        invalid_final = True
+        break
+    if not valid_verdict(candidate):
+        invalid_final = True
+        break
+    verdict = candidate
+    break
 
 if proc.poll() is None:
     proc.kill()
@@ -80,6 +100,8 @@ if proc.poll() is None:
     except subprocess.TimeoutExpired:
         pass
 
+if invalid_final:
+    sys.exit(125)
 if verdict is not None:
     print(json.dumps(verdict))
     sys.exit(0)

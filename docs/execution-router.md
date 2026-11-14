@@ -150,6 +150,27 @@ make a model request. `run` is supervised while the launcher process is
 alive; it is not a new daemon or scheduler. Cancellation is a request to that
 supervisor, not a facility to kill an arbitrary PID.
 
+A caught preparation write failure atomically moves the failed run directory
+into a private, owner-only rollback container on the same filesystem. Cleanup
+compares its device/inode with the ownership snapshot taken after creation,
+then recursively removes only the claimed directory, never the public task-ID
+path. After successful cleanup, the same task ID can be prepared again.
+Existing task IDs are still refused without modifying their state.
+
+A replacement detected before the claim is left in place; a replacement captured
+by the claim is retained in the rollback container, not deleted or restored over
+the public path. A replacement created at the public path after the claim is
+untouched. Cleanup failure preserves both errors and exposes `cleanup_path` in
+the exception and its CLI-visible message for manual inspection; it does not
+return an approval digest. An unsuccessful claim removes only its empty
+rollback container.
+
+Private state must remain trusted during initial directory creation/ownership
+capture and within the private rollback container. These checks do not sandbox
+arbitrary same-UID filesystem mutation. Rollback does not promise recovery from
+an abruptly killed process or a power failure, and does not permit replay of an
+already launched task.
+
 ## Security and reliability boundaries
 
 The launcher rejects scope expansion, unrecognized task fields, path traversal,

@@ -3,9 +3,19 @@ import eventSchema from '../../schemas/telemetry-event.schema.json' with {type:'
 import configSchema from '../../schemas/opik-config.schema.json' with {type:'json'};
 import assert from 'node:assert/strict';
 import {turnEvent,normalizeUsage,openAgentEvent,ompEvent} from '../../runtime/observability/records.mjs';
-import {createOpikExporter,validateOpikConfig} from '../../runtime/observability/opik.mjs';
+import {createOpikExporter,opikRecords,validateOpikConfig} from '../../runtime/observability/opik.mjs';
+import {deliveryRecord,validateDeliveryRecord} from '../../runtime/observability/delivery.mjs';
+import {createPosthogExporter,posthogOperationalRecord} from '../../runtime/observability/posthog.mjs';
+import {evidenceRecord} from '../../runtime/observability/evidence.mjs';
 const timing={startedMs:1700000000000,endedMs:1700000001500};
 const config={schema_version:1,endpoint:'https://example.invalid/opik/api',workspace:'fixture',project:'fixture',credential_env:'OPIK_API_KEY'};
+const fakeCredential=()=>['ghp',Date.now().toString(36).padEnd(24,'x')].join('_');
+function trackedResponse(status, onCancel) {
+ return new Response(new ReadableStream({
+  start(controller) { controller.enqueue(new TextEncoder().encode('private provider body')); },
+  cancel: onCancel,
+ }), {status});
+}
 
 test('runtime adapters share units and preserve reported totals without inventing usage',()=>{
  const open=openAgentEvent({runtime:'opencode',sessionID:'run',assistant:{role:'assistant',time:{created:timing.startedMs,completed:timing.endedMs},tokens:{input:7,output:9,total:19,cache:{read:3}},cost:0}});
@@ -123,4 +133,81 @@ test('non-v7 ingestion IDs are rejected before transport',async()=>{
   const id=event.event_id.slice(0,14)+version+event.event_id.slice(15);
   await assert.rejects(()=>exporter({...event,event_id:id}),/UUID/);
  }
+});
+
+test('Opik projection and exporter reject every credential-shaped completed-turn identifier',async()=>{
+ const event=turnEvent({runtime:'omp',runId:'run',...timing}), credential=fakeCredential();
+ let calls=0;
+ const exporter=createOpikExporter(config,{environment:{OPIK_API_KEY:'fixture'},fetcher:async()=>{calls++;return new Response('');}});
+ for(const field of ['runtime','run_id','task_id','agent_id','model_id','provider']) {
+  const unsafe={...event,[field]:credential};
+  assert.throws(()=>opikRecords(unsafe,'fixture'),/Sensitive telemetry identifier/);
+  await assert.rejects(()=>exporter(unsafe),/Sensitive telemetry identifier/);
+ }
+ assert.equal(calls,0);
+ assert.equal(opikRecords(event,'fixture').trace.id,event.event_id);
+ assert.throws(()=>opikRecords({record_type:'agent.trace'},'fixture'));
+});
+
+test('delivery references reject credential-shaped runtime and run ID before projection or transport',async()=>{
+ const event=turnEvent({runtime:'omp',runId:'run',...timing}),timestamp=new Date(timing.endedMs).toISOString();
+ const receipt={observed_at:timestamp,recorded_at:timestamp,destinations:{opik:{delivery_status:'accepted'},posthog:{delivery_status:'accepted'}}};
+ const valid=deliveryRecord(event,receipt),credential=fakeCredential();
+ let calls=0;
+ const exporter=createPosthogExporter({schema_version:1,endpoint:'https://example.invalid',credential_env:'POSTHOG_PROJECT_TOKEN',distinct_id:'fixture'},
+  {environment:{POSTHOG_PROJECT_TOKEN:'fixture'},fetcher:async()=>{calls++;return new Response('');}});
+ assert.equal(posthogOperationalRecord(valid).properties.run_id,'run');
+ for(const field of ['runtime','run_id']) {
+  assert.throws(()=>validateDeliveryRecord({...valid,[field]:credential}),/Sensitive telemetry identifier/);
+  assert.throws(()=>deliveryRecord({...event,[field]:credential},receipt),/Sensitive telemetry identifier/);
+  assert.throws(()=>posthogOperationalRecord({...valid,[field]:credential}),/Sensitive telemetry identifier/);
+  await assert.rejects(()=>exporter({...valid,[field]:credential}),/Sensitive telemetry identifier/);
+ }
+ assert.equal(calls,0);
+});
+
+test('Opik discards unused success and HTTP rejection bodies without changing receipts',async()=>{
+ const event=turnEvent({runtime:'omp',runId:'run',...timing});
+ for(const status of [200,429,403]) {
+  let cancellations=0,calls=0;
+  const exporter=createOpikExporter(config,{environment:{OPIK_API_KEY:'fixture'},fetcher:async()=>{
+   calls++;return trackedResponse(status,()=>{cancellations++;});
+  }});
+  if(status===200) {
+   const receipt=await exporter(event);
+   assert.equal(receipt.delivery_status,'accepted');
+   assert.equal(receipt.accepted_records.length,2);
+   assert.equal(calls,2);
+  } else {
+   await assert.rejects(()=>exporter(event),error=>error.receipt.reason_code===`HTTP_${status}` &&
+    error.receipt.retryable===(status===429) && error.receipt.delivery_status===(status===403?'denied':'failed'));
+   assert.equal(calls,1);
+  }
+  assert.equal(cancellations,calls);
+ }
+});
+
+test('Opik ignores body cancellation failures while retaining HTTP classification',async()=>{
+ const event=turnEvent({runtime:'omp',runId:'run',...timing});
+ for(const status of [200,429,403]) {
+  const exporter=createOpikExporter(config,{environment:{OPIK_API_KEY:'fixture'},fetcher:async()=>trackedResponse(status,()=>{throw new Error('private provider body');})});
+  if(status===200) assert.equal((await exporter(event)).delivery_status,'accepted');
+  else await assert.rejects(()=>exporter(event),error=>error.receipt.reason_code===`HTTP_${status}` &&
+   !error.message.includes('private provider body'));
+ }
+});
+
+test('evidence metrics retain privacy checks and valid projections for legacy exporters',async()=>{
+ const metrics=turnEvent({runtime:'omp',runId:'run',...timing}),observedMs=timing.startedMs;
+ const envelope=evidenceRecord({eventName:'agent.turn.finished',traceId:metrics.event_id,runId:'run',runtime:'omp',
+  observedMs,recordedMs:observedMs,endedMs:timing.endedMs,outcome:'succeeded',metrics});
+ let calls=0;
+ const opik=createOpikExporter(config,{environment:{OPIK_API_KEY:'fixture'},fetcher:async()=>{
+  calls++;return new Response(null,{status:200});
+ }});
+ assert.equal((await opik(envelope)).delivery_status,'accepted');
+ assert.equal(calls,2);
+ const unsafe={...envelope,metrics:{...metrics,provider:fakeCredential()}};
+ await assert.rejects(()=>opik(unsafe),/Sensitive telemetry identifier/);
+ assert.equal(calls,2);
 });

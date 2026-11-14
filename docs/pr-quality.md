@@ -14,6 +14,15 @@ knowledge layer.
 | PR structure | `examples/pr-quality/PULL_REQUEST_TEMPLATE.md` + `scripts/pr/validate_pr_contract.py` | Validator checks structure/evidence presence, not whether semantic Why/What claims are true |
 | Code-generation budgets | `scripts/quality/codegen_budget.py` + example config | Hard size budgets fail; comment/test ratios are advisory by default |
 | Team style | `repo-style-miner` skill | Mine accepted target-repo PRs/review feedback; never invent or publish proprietary examples here |
+| Tool-free review verdict | `scripts/review/stream_verdict.py` + `scripts/review/adversarial-review-gate.sh` | PASS requires empty findings; FAIL requires nonblank findings; a valid shape does not establish factual review quality |
+
+Required PR headings and minimum content must be visible outside HTML comments.
+An unterminated comment hides the remaining body. Matched inline-code spans and
+escaped comment delimiters remain literal; code spans do not cross paragraph or
+block boundaries. Fenced examples do not create sections, and only a matching
+fence character of sufficient length closes them.
+The purity checker also rejects standard, diff3, and longer Git conflict markers;
+that rule cannot be bypassed with an ignore tag.
 
 ## Intended work-repository rollout
 

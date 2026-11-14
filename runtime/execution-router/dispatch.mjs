@@ -1,4 +1,4 @@
-import { mkdir, rmdir, writeFile, readFile, rename, appendFile, rm, stat, realpath } from 'node:fs/promises';
+import { mkdir, mkdtemp, rmdir, writeFile, readFile, rename, appendFile, rm, stat, lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -7,7 +7,17 @@ import { validateTask, taskId, digest, contained, resolveProfile, workspaceFinge
 import { codexAdapter } from './codex.mjs';
 const now=()=>new Date().toISOString();
 const runDir=(policy,id)=>path.join(policy.state_dir,'runs',taskId(id));
-async function json(filename,value) { const temp=filename+'.'+randomUUID()+'.tmp';await writeFile(temp,JSON.stringify(value,null,2)+'\n',{mode:0o600});await rename(temp,filename); }
+async function json(filename,value) {
+ const temp=filename+'.'+randomUUID()+'.tmp';
+ try {
+  await writeFile(temp,JSON.stringify(value,null,2)+'\n',{mode:0o600});
+  await rename(temp,filename);
+ } catch(error) {
+  try {await rm(temp,{force:true});}
+  catch(cleanupError) {throw new AggregateError([error,cleanupError],'JSON write and temporary cleanup failed');}
+  throw error;
+ }
+}
 const readJson=async filename=>JSON.parse(await readFile(filename,'utf8'));
 async function event(dir,type,metadata={}) { await appendFile(path.join(dir,'events.jsonl'),JSON.stringify({at:now(),type,...metadata})+'\n',{mode:0o600}); }
 function renderHandoff(task) { const id=task.task_id,workspace=task.workspace; return `# Handoff: ${id}\n\nProject: ${task.project}\nProfile: ${task.profile}\nWorkspace: ${workspace}\nActions: ${task.actions.join(', ')}\nReason: ${task.delegation_reason}: ${task.delegation_detail}\n\n## Objective\n${task.objective}\n\n## Acceptance criteria\n${task.acceptance_criteria.map(c=>'- '+c).join('\n')}\n\n## References\n${task.references.map(r=>'- '+r).join('\n')}\n\n## Boundaries\nWork only on this task. Do not launch another agent, install dependencies, commit, push, deploy, send messages, access unrelated personal files, change permissions, or spend additional API money. Stop and report a blocker when broader authority is needed. Read the applicable repository instructions. Return a factual summary, changed paths, commands and outcomes, and unresolved issues. Do not claim independent acceptance.\n\nThe launch adapter does not inherit the originating host's connectors or hidden conversation context. Model-provider access is separate from task network permissions.\n`; }
@@ -75,13 +85,45 @@ export async function prepare(policy,input) {
  await mkdir(path.join(policy.state_dir,'runs'),{recursive:true,mode:0o700});
  const dir=runDir(policy,id);
  try{await mkdir(dir,{mode:0o700});}catch(e){if(e.code==='EEXIST')throw new Error('Task already exists; inspect it or use a new task_id');throw e;}
- const prepared={router_version:VERSION,status:'prepared',task_id:id,project:task.project,created_at:now(),expires_at:new Date(Date.now()+86400000).toISOString(),policy_digest:policy.config_digest,workspace_fingerprint:fingerprint,packet_digest:digest(task),review_snapshot_digest:reviewSnapshotDigest,executable_identity:executable,profile:task.profile,verified:false};
- prepared.approval_digest=digest({router_version:VERSION,packet:task,policy:policy.config_digest,workspace:fingerprint,executable,review_snapshot_digest:reviewSnapshotDigest,expires_at:prepared.expires_at});
- await json(path.join(dir,'packet.json'),task);await json(path.join(dir,'status.json'),prepared);
- const handoff=renderHandoff(task);
- await writeFile(path.join(dir,'HANDOFF.md'),handoff,{mode:0o600});
- await event(dir,'prepared',{task_id:id,project:task.project,profile:task.profile,policy_version:policy.policy_version});
- return {...prepared,handoff_path:path.join(dir,'HANDOFF.md'),handoff_only:profile.adapter==='manual'};
+ let owner;
+ try {
+  owner=await lstat(dir);
+  if(!owner.isDirectory())throw new Error('Task preparation directory ownership changed');
+  const prepared={router_version:VERSION,status:'prepared',task_id:id,project:task.project,created_at:now(),expires_at:new Date(Date.now()+86400000).toISOString(),policy_digest:policy.config_digest,workspace_fingerprint:fingerprint,packet_digest:digest(task),review_snapshot_digest:reviewSnapshotDigest,executable_identity:executable,profile:task.profile,verified:false};
+  prepared.approval_digest=digest({router_version:VERSION,packet:task,policy:policy.config_digest,workspace:fingerprint,executable,review_snapshot_digest:reviewSnapshotDigest,expires_at:prepared.expires_at});
+  await json(path.join(dir,'packet.json'),task);await json(path.join(dir,'status.json'),prepared);
+  const handoff=renderHandoff(task);
+  await writeFile(path.join(dir,'HANDOFF.md'),handoff,{mode:0o600});
+  await event(dir,'prepared',{task_id:id,project:task.project,profile:task.profile,policy_version:policy.policy_version});
+  return {...prepared,handoff_path:path.join(dir,'HANDOFF.md'),handoff_only:profile.adapter==='manual'};
+ } catch(error) {
+  let rollbackRoot,claimed=false,cleanupError;
+  try {
+   const current=await lstat(dir);
+   if(!owner||!current.isDirectory()||current.dev!==owner.dev||current.ino!==owner.ino)
+    throw new Error('Task preparation directory ownership changed');
+   rollbackRoot=await mkdtemp(path.join(path.dirname(dir),'.prepare-rollback-'));
+   const claimedDir=path.join(rollbackRoot,'task');
+   // Claim the public path atomically; never recursively delete that path.
+   await rename(dir,claimedDir);claimed=true;
+   const claimedOwner=await lstat(claimedDir);
+   if(!claimedOwner.isDirectory()||claimedOwner.dev!==owner.dev||claimedOwner.ino!==owner.ino)
+    throw new Error('Task preparation directory ownership changed during rollback claim');
+   await rm(claimedDir,{recursive:true});claimed=false;
+  } catch(caught) {cleanupError=caught;}
+  if(rollbackRoot&&!claimed) {
+   try {await rmdir(rollbackRoot);rollbackRoot=undefined;}
+   catch(containerError) {cleanupError=cleanupError
+    ?new AggregateError([cleanupError,containerError],'Rollback container cleanup failed'):containerError;}
+  }
+  if(cleanupError) {
+   const cleanupPath=rollbackRoot??dir;
+   const combined=new AggregateError([error,cleanupError],`Task preparation and cleanup failed; inspect ${cleanupPath}`);
+   combined.cleanup_path=cleanupPath;
+   throw combined;
+  }
+  throw error;
+ }
 }
 export async function inspect(policy,id) {
  const state=await readJson(path.join(runDir(policy,id),'status.json'));

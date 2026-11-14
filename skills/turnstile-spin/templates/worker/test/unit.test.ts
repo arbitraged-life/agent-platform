@@ -202,6 +202,27 @@ describe('POST / (siteverify proxy) — form body', () => {
 	});
 });
 
+describe('POST / (siteverify proxy) — multipart body', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it('preserves token aliases and explicit remoteip in bounded multipart input', async () => {
+		const form = new FormData();
+		form.append('cf-turnstile-response', 'abc');
+		form.append('remoteip', '9.9.9.9');
+		const upstream = vi.spyOn(globalThis, 'fetch').mockImplementationOnce(async (_url, init) => {
+			const forwarded = init?.body as FormData;
+			expect(forwarded.get('response')).toBe('abc');
+			expect(forwarded.get('remoteip')).toBe('9.9.9.9');
+			return new Response(JSON.stringify({ success: true }), { status: 200 });
+		});
+		const res = await worker.fetch(new Request('https://w/', {
+			method: 'POST', headers: { 'CF-Connecting-IP': '1.2.3.4' }, body: form,
+		}), TEST_ENV);
+		expect(res.status).toBe(200);
+		expect(upstream).toHaveBeenCalledOnce();
+	});
+});
+
 describe('Content-Type handling', () => {
 	beforeEach(() => vi.restoreAllMocks());
 	afterEach(() => vi.restoreAllMocks());
@@ -368,5 +389,97 @@ describe('Missing secret', () => {
 		expect(res.status).toBe(500);
 		const body = (await res.json()) as { 'error-codes': string[] };
 		expect(body['error-codes']).toContain('missing-input-secret');
+	});
+});
+
+describe('bounded siteverify request bodies', () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it.each([
+		['application/json', JSON.stringify({ token: 'abc', padding: 'x'.repeat(16384) })],
+		['application/x-www-form-urlencoded', `token=abc&padding=${'x'.repeat(16384)}`],
+	])('rejects oversized %s before upstream verification', async (contentType, body) => {
+		const upstream = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected upstream call'));
+		const res = await worker.fetch(new Request('https://w/', {
+			method: 'POST', headers: { 'Content-Type': contentType }, body,
+		}), TEST_ENV);
+		expect(res.status).toBe(413);
+		expect(await res.json()).toMatchObject({ success: false, 'error-codes': ['request-too-large'] });
+		expect(upstream).not.toHaveBeenCalled();
+	});
+
+	it('rejects oversized multipart form bodies before parsing', async () => {
+		const form = new FormData();
+		form.append('token', 'abc');
+		form.append('padding', 'x'.repeat(16384));
+		const upstream = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected upstream call'));
+		const res = await worker.fetch(new Request('https://w/', { method: 'POST', body: form }), TEST_ENV);
+		expect(res.status).toBe(413);
+		expect(upstream).not.toHaveBeenCalled();
+	});
+
+	it('does not trust an understated Content-Length and cancels the overflowing stream', async () => {
+		const cancel = vi.fn();
+		const payload = new TextEncoder().encode(JSON.stringify({ token: 'abc', padding: 'x'.repeat(16384) }));
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(payload.subarray(0, 100));
+				controller.enqueue(payload.subarray(100));
+			},
+			cancel,
+		});
+		const upstream = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected upstream call'));
+		const res = await worker.fetch(new Request('https://w/', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', 'Content-Length': '1' },
+			body: stream,
+			duplex: 'half',
+		} as RequestInit & { duplex: 'half' }), TEST_ENV);
+		expect(res.status).toBe(413);
+		expect(cancel).toHaveBeenCalledOnce();
+		expect(upstream).not.toHaveBeenCalled();
+	});
+
+	it('rejects an oversized declared length before consuming the request body', async () => {
+		const upstream = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected upstream call'));
+		const request = new Request('https://w/', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', 'Content-Length': '16385' },
+			body: new ReadableStream<Uint8Array>({ start(controller) {
+				controller.enqueue(new TextEncoder().encode('{"token":"abc"}'));
+			} }),
+			duplex: 'half',
+		} as RequestInit & { duplex: 'half' });
+		const res = await worker.fetch(request, TEST_ENV);
+		expect(res.status).toBe(413);
+		expect(request.bodyUsed).toBe(false);
+		expect(upstream).not.toHaveBeenCalled();
+	});
+
+	it('counts UTF-8 bytes rather than characters without Content-Length', async () => {
+		const upstream = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected upstream call'));
+		const res = await worker.fetch(new Request('https://w/', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ token: 'abc', padding: '界'.repeat(5500) }),
+		}), TEST_ENV);
+		expect(res.status).toBe(413);
+		expect(upstream).not.toHaveBeenCalled();
+	});
+
+	it('accepts an exact-limit JSON body and forwards the original token', async () => {
+		const upstream = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			new Response(JSON.stringify({ success: true }), { status: 200 }),
+		);
+		const prefix = JSON.stringify({ token: 'abc', padding: '' });
+		const body = JSON.stringify({ token: 'abc', padding: 'x'.repeat(16384 - prefix.length) });
+		expect(new TextEncoder().encode(body).byteLength).toBe(16384);
+		const res = await worker.fetch(new Request('https://w/', {
+			method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+		}), TEST_ENV);
+		expect(res.status).toBe(200);
+		expect((await res.json() as { success: boolean }).success).toBe(true);
+		expect(upstream).toHaveBeenCalledOnce();
+		expect((upstream.mock.calls[0]?.[1]?.body as FormData).get('response')).toBe('abc');
 	});
 });

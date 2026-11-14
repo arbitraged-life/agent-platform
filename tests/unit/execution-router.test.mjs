@@ -279,7 +279,102 @@ test('state above workspace does not exclude symlinked inputs inside workspace',
 test('policy does not accept dangerous sandbox',async()=>{const f=await fixture();f.data.profiles['codex-readonly'].sandbox='danger-full-access';await writeFile(f.policyPath,JSON.stringify(f.data));await assert.rejects(()=>loadPolicy(f.policyPath),/sandbox/);});
 test('prototype-keyed profiles bind approval and inherited names cannot select an executor',async()=>{const f=await fixture();f.data.profiles=JSON.parse(`{"codex-readonly":${JSON.stringify(f.data.profiles['codex-readonly'])},"__proto__":${JSON.stringify(f.data.profiles['codex-readonly'])}}`);await writeFile(f.policyPath,JSON.stringify(f.data));const loaded=await loadPolicy(f.policyPath);const approved=await prepare(loaded,packet(f.workspace,{profile:'__proto__'}));for(const profile of ['constructor','toString'])await assert.rejects(()=>resolveProfile(loaded,packet(f.workspace,{profile})),/Unknown profile/);f.data.profiles.__proto__.max_seconds++;await writeFile(f.policyPath,JSON.stringify(f.data));const changed=await loadPolicy(f.policyPath);await assert.rejects(()=>runPrepared(changed,'router-test',{approved_digest:approved.approval_digest,approval_ref:'user approved fixture'}),/policy changed/);});
 test('prepare produces a digest-bound approval packet but never launches',async()=>{const f=await fixture();const p=await prepare(f.policy,packet(f.workspace));assert.equal(p.status,'prepared');assert.match(p.approval_digest,/^[a-f0-9]{64}$/);assert.equal((await inspect(f.policy,'router-test')).status,'prepared');});
-test('duplicate task IDs are refused, not rerun',async()=>{const f=await fixture();await prepare(f.policy,packet(f.workspace));await assert.rejects(()=>prepare(f.policy,packet(f.workspace)),/already exists/);});
+test('duplicate task IDs are refused without changing the existing packet',async()=>{
+ const f=await fixture();await prepare(f.policy,packet(f.workspace));
+ const filename=path.join(f.policy.state_dir,'runs','router-test','packet.json');
+ const original=await readFile(filename,'utf8');
+ await assert.rejects(()=>prepare(f.policy,packet(f.workspace,{objective:'Different task'})),/already exists/);
+ assert.equal(await readFile(filename,'utf8'),original);
+});
+test('failed preparation rolls back only its owned state and preserves errors',async(t)=>{
+ for(const mode of ['write','replacement','cleanup','late-replacement','claim-replacement','claim-denied'])await t.test(mode,async()=>{
+  const f=await fixture();
+  const script=`
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {syncBuiltinESMExports} from 'node:module';
+import {loadPolicy} from ${JSON.stringify(new URL('../../runtime/execution-router/policy.mjs',import.meta.url).href)};
+const policy=await loadPolicy(${JSON.stringify(f.policyPath)});
+const task=${JSON.stringify(packet(f.workspace))};
+const mode=${JSON.stringify(mode)},dir=path.join(policy.state_dir,'runs',task.task_id);
+const originalWrite=fs.writeFile,originalRemove=fs.rm,originalRename=fs.rename;
+const failure=Object.assign(new Error('Injected preparation write failure'),{code:'EIO'});
+let injected=false;
+fs.rename=async(source,...args)=>{
+ if(source===dir&&mode==='claim-denied')throw Object.assign(new Error('Injected claim denial'),{code:'EACCES'});
+ if(source===dir&&mode==='claim-replacement') {
+  await originalRename(dir,dir+'.original');
+  await fs.mkdir(dir);
+  await originalWrite(path.join(dir,'owner'),'replacement');
+ }
+ return originalRename(source,...args);
+};
+fs.writeFile=async(filename,...args)=>{
+ const name=path.basename(filename);
+ if(!injected&&(mode==='replacement'?name==='HANDOFF.md':name.startsWith('status.json.'))) {
+  injected=true;
+  if(mode==='replacement') {
+   await fs.rename(dir,dir+'.original');
+   await fs.mkdir(dir);
+   await originalWrite(path.join(dir,'owner'),'replacement');
+  } else await originalWrite(filename,'partial',{mode:0o600});
+  throw failure;
+ }
+ return originalWrite(filename,...args);
+};
+fs.rm=async(filename,...args)=>{
+ if(mode==='cleanup'&&args[0]?.recursive)throw Object.assign(new Error('Injected cleanup denial'),{code:'EPERM'});
+ if(mode==='late-replacement'&&args[0]?.recursive) {
+  await fs.rename(dir,dir+'.original').catch(error=>{if(error.code!=='ENOENT')throw error;});
+  await fs.mkdir(dir);
+  await originalWrite(path.join(dir,'owner'),'replacement');
+ }
+ return originalRemove(filename,...args);
+};
+syncBuiltinESMExports();
+const {prepare}=await import(${JSON.stringify(new URL('../../runtime/execution-router/dispatch.mjs',import.meta.url).href)});
+let error;
+try {await prepare(policy,task);} catch(caught) {error=caught;}
+assert.ok(injected,'fault reached the preparation write');
+if(mode==='write') {
+ assert.equal(error,failure,'original write error must survive rollback');
+ await assert.rejects(()=>fs.stat(dir),{code:'ENOENT'});
+ assert.equal((await prepare(policy,task)).status,'prepared');
+ assert.equal(JSON.parse(await fs.readFile(path.join(dir,'packet.json'),'utf8')).task_id,task.task_id);
+ assert.deepEqual(await fs.readdir(path.dirname(dir)),[task.task_id]);
+} else if(mode==='late-replacement') {
+ assert.equal(error,failure);
+ assert.equal(await fs.readFile(path.join(dir,'owner'),'utf8'),'replacement');
+ assert.deepEqual(await fs.readdir(path.dirname(dir)),[task.task_id]);
+} else {
+ assert.ok(error instanceof AggregateError);
+ assert.equal(error.errors[0],failure);
+ assert.ok(error.message.includes(error.cleanup_path),'CLI diagnostic must expose the retained location');
+ if(mode==='replacement') {
+  assert.match(error.errors[1].message,/ownership changed/);
+  assert.equal(await fs.readFile(path.join(dir,'owner'),'utf8'),'replacement');
+  assert.equal(JSON.parse(await fs.readFile(path.join(dir+'.original','packet.json'),'utf8')).task_id,task.task_id);
+ } else if(mode==='claim-replacement') {
+  assert.match(error.errors[1].message,/ownership changed/);
+  assert.equal(await fs.readFile(path.join(error.cleanup_path,'task','owner'),'utf8'),'replacement');
+  assert.equal(JSON.parse(await fs.readFile(path.join(dir+'.original','packet.json'),'utf8')).task_id,task.task_id);
+  await assert.rejects(()=>fs.stat(dir),{code:'ENOENT'});
+ } else if(mode==='claim-denied') {
+  assert.equal(error.errors[1].code,'EACCES');
+  assert.deepEqual(await fs.readdir(path.dirname(dir)),[task.task_id]);
+  assert.equal(JSON.parse(await fs.readFile(path.join(dir,'packet.json'),'utf8')).task_id,task.task_id);
+ } else {
+  assert.equal(error.errors[1].code,'EPERM');
+  const retained=path.join(error.cleanup_path,'task');
+  assert.equal(JSON.parse(await fs.readFile(path.join(retained,'packet.json'),'utf8')).task_id,task.task_id);
+  assert.deepEqual((await fs.readdir(retained)).filter(name=>name.endsWith('.tmp')),[]);
+ }
+}
+`;
+  await exec(process.execPath,['--input-type=module','-e',script],{timeout:15000});
+ });
+});
 test('run requires explicit approval evidence',async()=>{const f=await fixture();await prepare(f.policy,packet(f.workspace));await assert.rejects(()=>runPrepared(f.policy,'router-test',{}),/approval/);assert.equal((await inspect(f.policy,'router-test')).status,'prepared');});
 test('edited packet invalidates approval digest',async()=>{const f=await fixture();const p=await prepare(f.policy,packet(f.workspace));const file=path.join(f.policy.state_dir,'runs','router-test','packet.json');const changed=JSON.parse(await readFile(file,'utf8'));changed.objective='Different action';await writeFile(file,JSON.stringify(changed));await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/digest/);});
 test('workspace drift invalidates prepared approval',async()=>{const f=await fixture();const p=await prepare(f.policy,packet(f.workspace));await writeFile(path.join(f.workspace,'new.txt'),'drift');await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/workspace changed/);});

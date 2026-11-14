@@ -19,6 +19,9 @@ tool names, raw exceptions, credentials, and arbitrary metadata. Identifiers are
 caller-provided opaque identifiers; private policy controls their values. Content
 capture from older adapters is intentionally not part of this structured event
 contract. Private opt-in content pipelines require separate redaction and review.
+All exporter boundaries, including legacy Opik/PostHog projections and delivery
+records, reject credential-shaped identifiers with the shared sensitive-value
+validator before transport. Schema validation alone does not enforce that policy.
 
 `openAgentEvent` and `ompEvent` adapt existing runtime records. `turnEvent` constructs
 records for other adapters. `createOpikExporter` uses one shared trace/span mapping,
@@ -43,6 +46,9 @@ Only explicit HTTP 429 nonacceptance is eligible for bounded retry. Authenticati
 approval, safety and ambiguous transport failures are terminal. An interrupted
 in-flight entry remains uncertain and is never automatically replayed. Stable IDs
 support correlation and PostHog deduplication; they are not an exactly-once guarantee.
+Unused HTTP response bodies are cancelled without exposing their content or
+changing acceptance/retry classifications. OTLP success bodies remain available
+to the bounded acknowledgement parser; failed or oversized reads are cancelled.
 
 The Opik mapping follows the
 [create-span API](https://www.comet.com/docs/opik/reference/rest-api/spans/create-span):
@@ -181,6 +187,15 @@ claims. Persistence runs independently of slow network delivery. Consumers can
 flush persistence before a bounded shutdown wait, then drain eligible records at
 next startup. Abandoned claims require review; the queue never guesses whether a
 remote mutation succeeded.
+
+Admission is serialized across Node instances and processes by an owner-only
+`admission.sqlite` transaction. JSON records remain the authoritative queue; the
+SQLite file stores no second copy of events. Lock contention waits asynchronously
+for at most five seconds, then rejects the new admission. Network delivery never
+holds this transaction, and a terminated lock owner does not strand the lock.
+Do not delete the admission file while writers are active. Stop old-version
+writers before sharing an outbox with this version; they do not participate in
+the admission lock.
 
 Native OMP payload references (inspected 2026-10-12):
 [shared events](https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/extensibility/shared-events.ts),
@@ -340,6 +355,13 @@ the total property bound stops new admission visibly. Do not delete receipts to
 reclaim capacity: doing so removes the replay barrier. This is not a monthly archive.
 Private consumers must install this portable source from a reviewed release
 artifact, not a mutable sibling checkout.
+Operation IDs must be unique within a generation. Receipts retain a digest of the
+sanitized observable generation and its original observation time, including
+after accepted payloads are cleared. Reusing a trace ID with changed usage, timing,
+or operation metadata fails; identical sanitized content remains idempotent.
+Historical receipts without input identity require explicit reconciliation for
+public capture. Internal drain may finish their stored pending payload, but must
+not erase replay barriers or resend accepted signals.
 
 ## Bounded tool content
 

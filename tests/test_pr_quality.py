@@ -92,6 +92,119 @@ Revert safely.
         errors = self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT)
         self.assertTrue(any("missing required section: ## Why" in error for error in errors))
 
+    def test_all_required_headings_inside_comment_are_missing(self):
+        body = "<!--\n" + self._valid_body() + "-->\n"
+        errors = self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT)
+        self.assertEqual(errors, [
+            f"missing required section: ## {heading}"
+            for heading in self.m.DEFAULT["required_sections"]
+        ])
+        self.assertEqual(self.m.parse_sections(body), ({}, set()))
+
+    def test_multiline_comment_cannot_supply_heading_or_visible_content(self):
+        body = (
+            "## Why\n<!-- hidden description is sufficiently long to pass the minimum\n"
+            "## What\nThis text is hidden too.\n-->\n"
+        )
+        sections, duplicates = self.m.parse_sections(body)
+        self.assertEqual(set(sections), {"why"})
+        self.assertFalse(duplicates)
+        errors = self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT)
+        self.assertIn("section ## Why has 0 meaningful characters; minimum is 20", errors)
+        self.assertIn("missing required section: ## What", errors)
+
+    def test_unterminated_comment_hides_remaining_headings(self):
+        body = "## Why\n\nVisible rationale of sufficient length.\n<!--\n" + self._valid_body()
+        errors = self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT)
+        self.assertEqual(errors, [
+            f"missing required section: ## {heading}"
+            for heading in self.m.DEFAULT["required_sections"][1:]
+        ])
+
+    def test_inline_comment_cannot_change_heading_or_supply_section_content(self):
+        body = (
+            "## Why <!-- hidden heading suffix -->\r\n"
+            "<!-- hidden rationale of enough length -->\r\n"
+            + "## What" + self._valid_body().split("## What", 1)[1]
+        )
+        errors = self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT)
+        self.assertEqual(errors, ["section ## Why has 0 meaningful characters; minimum is 20"])
+
+    def test_mixed_and_shorter_fences_do_not_close_open_fence(self):
+        body = (
+            "````markdown\n~~~\n```\n"
+            + self._valid_body()
+            + "````\n"
+            + self._valid_body()
+        )
+        errors = self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT)
+        self.assertEqual(errors, [])
+        sections, duplicates = self.m.parse_sections(body)
+        self.assertEqual(set(sections), {"why", "what", "verification", "risk / rollback"})
+        self.assertFalse(duplicates)
+
+    def test_fenced_comment_examples_do_not_hide_visible_sections(self):
+        body = (
+            "````markdown\n<!--\n## Why\n```\n~~~\n"
+            "````\n"
+            + self._valid_body()
+            + "\n~~~markdown\n<!--\n## What\n~~~\n"
+        )
+        self.assertEqual(
+            self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT),
+            [],
+        )
+
+    def test_unclosed_comment_example_inside_fence_keeps_later_sections_visible(self):
+        body = self._valid_body().replace(
+            "## What", "````markdown\n<!-- example starts\n````\n\n## What", 1
+        )
+        self.assertEqual(
+            self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT),
+            [],
+        )
+
+    def test_inline_code_comment_examples_keep_visible_sections(self):
+        for example in (
+            "The literal `<!--` starts an HTML comment.",
+            "The literal `` ` <!-- `` includes a backtick.",
+            "The code span `continues\nwith <!-- on another line`.",
+            "The escaped delimiter \\<!-- is literal.",
+        ):
+            with self.subTest(example=example):
+                body = self._valid_body().replace(
+                    "This fixes a repeated failure that blocks reliable releases.",
+                    "This fixes a repeated failure that blocks reliable releases. " + example,
+                )
+                self.assertEqual(
+                    self.m.validate("fix(pr): preserve literal comment examples", body, self.m.DEFAULT),
+                    [],
+                )
+
+    def test_inline_comment_examples_count_as_visible_content(self):
+        body = self._valid_body().replace(
+            "This fixes a repeated failure that blocks reliable releases.",
+            "`<!-- a literal comment with substantial visible detail -->`",
+        )
+        self.assertEqual(
+            self.m.validate("fix(pr): preserve literal comment examples", body, self.m.DEFAULT),
+            [],
+        )
+
+    def test_unmatched_or_escaped_backticks_do_not_hide_comments(self):
+        for opening, closing in (("`", "`"), ("``", "``"), ("\\`", "`")):
+            with self.subTest(opening=opening):
+                body = (
+                    f"A literal {opening} before <!--\n"
+                    + self._valid_body()
+                    + f"-->\n\nA separate paragraph with {closing}.\n"
+                )
+                self.assertEqual(self.m.parse_sections(body), ({}, set()))
+
+    def test_code_spans_cannot_cross_html_comment_block_boundaries(self):
+        body = "An unmatched ` before a block\n<!-- literal close `\n" + self._valid_body() + "-->\n"
+        self.assertEqual(self.m.parse_sections(body), ({}, set()))
+
     def test_duplicate_required_heading_fails(self):
         body = self._valid_body() + "\n## Why\n\nAnother sufficiently long rationale.\n"
         errors = self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT)

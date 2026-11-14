@@ -57,9 +57,10 @@ def verify_upstream(root=ROOT):
         raise ValueError('Upstream commit must be immutable')
     if sha(contained_file(root, lock['license_path'])) != lock['license_sha256']:
         raise ValueError('Upstream license changed')
-    names = {row['name'] for row in catalog(root)}
+    rows = catalog(root)
+    expected = {row['name'] for row in rows if row['license'] == lock['license_path']}
     if (not isinstance(lock['skills'], list) or len(set(lock['skills'])) != len(lock['skills'])
-            or not set(lock['skills']).issubset(names)):
+            or set(lock['skills']) != expected):
         raise ValueError('Upstream skill names must match catalog entries')
     actual = {str(p.relative_to(root)) for name in lock['skills']
               for p in (root / 'skills' / name).rglob('*') if p.is_file()}

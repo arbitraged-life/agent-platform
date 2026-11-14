@@ -31,6 +31,23 @@ class PurityCheckerTests(unittest.TestCase):
             "path=/" + "Users/alice/Code/example # ai-purity-ignore: legacy-paths",
         ))
 
+    def test_merge_conflict_markers_are_not_bypassable(self):
+        for marker in (
+            "<<<<<<< HEAD", "=======", ">>>>>>> feature/topic",
+            "||||||| base", "<<<<<<<<< configured", "========= ",
+            "  <<<<<<< HEAD # ai-purity-ignore: merge-conflict",
+        ):
+            with self.subTest(marker=marker):
+                result = self.audit("README.txt", marker)
+                self.assertEqual(result["rule"], "MERGE-CONFLICT")
+                self.assertIsNone(result["ignore_tag"])
+
+    def test_ordinary_text_and_inline_operators_are_not_markers(self):
+        for text in ("use <<<<<<< as an example", "a ======= b", "=======literal",
+                     ">>>>>>>feature", "|||||||base", "some ordinary text"):
+            with self.subTest(text=text):
+                self.assertIsNone(self.audit("README.txt", text))
+
 
 if __name__ == "__main__":
     unittest.main()

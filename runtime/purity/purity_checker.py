@@ -36,7 +36,7 @@ SLOP_RE = re.compile(
 )
 
 # Merge conflict markers check
-MERGE_CONFLICT_RE = re.compile(r"^(<<<<<<<|=======|>>>>>>>)\b")
+MERGE_CONFLICT_RE = re.compile(r"^(?:<{7,}|={7,}|>{7,}|\|{7,})(?:\s|$)")
 
 # High entropy secrets/API key detection to prevent hardcoded credentials
 SECRET_RE = re.compile(

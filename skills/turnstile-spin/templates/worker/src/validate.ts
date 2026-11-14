@@ -1,7 +1,7 @@
 /**
  * Calls Cloudflare's siteverify endpoint. One retry on transient (5xx + network)
- * failures, with a tight timeout. Returns the upstream JSON unmodified plus
- * Worker metadata.
+ * failures, with a tight timeout. Validates upstream JSON before returning
+ * it with Worker metadata.
  */
 
 import { SiteverifyError } from './errors.js';
@@ -15,6 +15,23 @@ export interface ValidateResult {
 	response: SiteverifyResponse;
 	upstreamStatus: number;
 	durationMs: number;
+}
+
+function parseSiteverifyResponse(value: unknown): SiteverifyResponse {
+	const invalid = () => new SiteverifyError(502, 'invalid-upstream-response', 'Invalid Siteverify response');
+	if (value === null || typeof value !== 'object' || Array.isArray(value)) throw invalid();
+	const data = value as Record<string, unknown>;
+	const success = data.success;
+	if (typeof success !== 'boolean') throw invalid();
+	for (const field of ['challenge_ts', 'hostname', 'action', 'cdata']) {
+		if (data[field] !== undefined && typeof data[field] !== 'string') throw invalid();
+	}
+	const errorCodes = data['error-codes'];
+	if (errorCodes !== undefined && (!Array.isArray(errorCodes) || !errorCodes.every(code => typeof code === 'string'))) {
+		throw invalid();
+	}
+	const codes: string[] = errorCodes === undefined ? [] : errorCodes as string[];
+	return { ...data, success, 'error-codes': codes };
 }
 
 /**
@@ -43,7 +60,7 @@ export async function validate(req: SiteverifyRequest, env: Env, workerVersion: 
 			const result = await fetchWithTimeout(SITEVERIFY_URL, body, UPSTREAM_TIMEOUT_MS);
 			const durationMs = Date.now() - start;
 			if (result.status >= 200 && result.status < 300) {
-				const data = result.data as SiteverifyResponse;
+				const data = parseSiteverifyResponse(result.data);
 				data._worker = {
 					duration_ms: durationMs,
 					worker_version: workerVersion,
@@ -62,18 +79,24 @@ export async function validate(req: SiteverifyRequest, env: Env, workerVersion: 
 				return { response: data, upstreamStatus: result.status, durationMs };
 			}
 			if (!RETRY_ON_STATUSES.has(result.status) || attempt === 1) {
-				// Preserve upstream diagnostics while enforcing failure for non-2xx responses.
-				const data = result.data as Partial<SiteverifyResponse>;
+				// Preserve object diagnostics, but never accept an HTTP error as success.
+				const data = result.data !== null && typeof result.data === 'object' && !Array.isArray(result.data)
+					? result.data as Record<string, unknown>
+					: {};
+				const errorCodes = data['error-codes'];
 				const response: SiteverifyResponse = {
 					...data,
 					success: false,
-					'error-codes': data['error-codes'] ?? ['bad-request'],
+					'error-codes': Array.isArray(errorCodes) && errorCodes.every(code => typeof code === 'string')
+						? errorCodes
+						: ['bad-request'],
 					_worker: { duration_ms: durationMs, worker_version: workerVersion },
 				};
 				return { response, upstreamStatus: result.status, durationMs };
 			}
 			// 5xx + first attempt: retry
 		} catch (err) {
+			if (err instanceof SiteverifyError && err.code === 'invalid-upstream-response') throw err;
 			lastErr = err;
 			if (attempt === 1) break;
 		}
@@ -95,7 +118,11 @@ async function fetchWithTimeout(url: string, body: FormData, timeoutMs: number):
 			signal: controller.signal,
 		});
 		const data = await response.json().catch((error: unknown) => {
-			if (response.ok || controller.signal.aborted) throw error;
+			if (controller.signal.aborted) throw error;
+			if (response.ok) {
+				if (error instanceof SyntaxError) throw new SiteverifyError(502, 'invalid-upstream-response', 'Invalid Siteverify response');
+				throw error;
+			}
 			return {};
 		});
 		return { status: response.status, data };

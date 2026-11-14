@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile, rm, readdir } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm, readdir, chmod, symlink } from "node:fs/promises";
 import os from "node:os";
 import { execFileSync, spawn } from "node:child_process";
 import path from "node:path";
@@ -10,6 +10,7 @@ import { createOpikExporter } from "../../runtime/observability/opik.mjs";
 import { createPosthogExporter, posthogOperationalRecord } from "../../runtime/observability/posthog.mjs";
 import { createDurableExporter } from "../../runtime/observability/outbox.mjs";
 import { deliveryRecord, validateDeliveryRecord } from "../../runtime/observability/delivery.mjs";
+import { DatabaseSync } from "node:sqlite";
 const timing = { startedMs: 1700000000000, endedMs: 1700000001500 };
 const traceId = createUuidV7(timing.startedMs);
 const base = {
@@ -40,6 +41,42 @@ async function directory(t) {
 }
 function result(event, receipt = accepted) {
   return { event_id: event.event_id, destinations: { opik: receipt, posthog: accepted } };
+}
+const outboxModuleUrl = new URL("../../runtime/observability/outbox.mjs", import.meta.url).href;
+const outboxRows = async (dir) => (await readdir(dir)).filter((name) => name.endsWith(".json"));
+function outboxChild(script, args, t) {
+  const child = spawn(process.execPath, ["--input-type=module", "-e", script, ...args], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stdout = "", stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
+  child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+  const timeout = setTimeout(() => child.kill("SIGKILL"), 15000);
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    await exited;
+  });
+  const exited = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => { clearTimeout(timeout); resolve({ code, signal, stdout, stderr }); });
+  });
+  return { child, exited, output: () => stdout };
+}
+async function childLine(child, line) {
+  if (child.output().includes(line)) return;
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => { cleanup(); reject(new Error(`Child did not report ${line}`)); }, 10000);
+    const onData = () => { if (child.output().includes(line)) { cleanup(); resolve(); } };
+    const onExit = () => { cleanup(); reject(new Error(`Child exited before ${line}`)); };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      child.child.stdout.off("data", onData);
+      child.child.off("exit", onExit);
+    };
+    child.child.stdout.on("data", onData);
+    child.child.once("exit", onExit);
+    onData();
+  });
 }
 
 test("delivery destination schema accepts any key order but rejects missing or extra routes", () => {
@@ -424,6 +461,166 @@ test("bounded queue evicts delivered entries, retains blocked evidence and rejec
   await queue(turnEvent({ runtime: "fixture", runId: "one", ...timing }));
   await assert.rejects(() => queue(turnEvent({ runtime: "fixture", runId: "two", ...timing })), /capacity/);
   assert.equal((await readdir(dir)).filter((name) => name.endsWith(".json")).length, 1);
+});
+test("independent instances serialize one-slot admission while delivery is blocked", async (t) => {
+  const dir = await directory(t);
+  const first = turnEvent({ runtime: "fixture", runId: "first-instance", ...timing });
+  const second = turnEvent({ runtime: "fixture", runId: "second-instance",
+    startedMs: timing.startedMs + 1, endedMs: timing.endedMs + 1 });
+  const queue = () => createDurableExporter({
+    directory: dir, maxEntries: 1, exporter: async () => assert.fail("network called"),
+    beforeAttempt: async () => ({ delivery_status: "capacity_blocked" }),
+  });
+  const outcomes = await Promise.allSettled([queue()(first), queue()(second)]);
+  assert.equal(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1);
+  assert.match(outcomes.find((outcome) => outcome.status === "rejected").reason.message, /capacity exhausted/);
+  assert.equal((await outboxRows(dir)).length, 1);
+  const winner = outcomes[0].status === "fulfilled" ? first : second;
+  assert.deepEqual(JSON.parse(await readFile(path.join(dir, `${winner.event_id}.json`), "utf8")).event, winner);
+});
+
+test("two processes serialize distinct one-slot admissions without executing exporter", async (t) => {
+  const dir = await directory(t);
+  const first = turnEvent({ runtime: "fixture", runId: "first-process", ...timing });
+  const second = turnEvent({ runtime: "fixture", runId: "second-process",
+    startedMs: timing.startedMs + 1, endedMs: timing.endedMs + 1 });
+  const script = `import { createDurableExporter } from ${JSON.stringify(outboxModuleUrl)};
+    const event = JSON.parse(process.argv[2]);
+    console.log("ready");
+    process.stdin.once("data", async () => {
+      try {
+        const outcome = await createDurableExporter({
+          directory: process.argv[1], maxEntries: 1,
+          beforeAttempt: async () => ({ delivery_status: "capacity_blocked" }),
+          exporter: async () => { throw Error("network called"); },
+        })(event);
+        console.log(outcome.outbox_status);
+      } catch (error) { console.log(error.message); }
+      process.exitCode = 0;
+    });`;
+  const children = [first, second].map((event) => outboxChild(script, [dir, JSON.stringify(event)], t));
+  await Promise.all(children.map((child) => childLine(child, "ready")));
+  for (const child of children) child.child.stdin.end("start");
+  const outcomes = await Promise.all(children.map((child) => child.exited));
+  for (const outcome of outcomes) assert.equal(outcome.code, 0, outcome.stderr);
+  assert.equal(outcomes.filter((outcome) => outcome.stdout.includes("capacity_blocked")).length, 1);
+  assert.equal(outcomes.filter((outcome) => outcome.stdout.includes("capacity exhausted")).length, 1);
+  assert.equal((await outboxRows(dir)).length, 1);
+});
+
+test("concurrent identical event admission deduplicates without temporary collisions", async (t) => {
+  const dir = await directory(t);
+  const event = turnEvent({ runtime: "fixture", runId: "identical", ...timing });
+  const queue = () => createDurableExporter({
+    directory: dir, maxEntries: 1, exporter: async () => assert.fail("network called"),
+    beforeAttempt: async () => ({ delivery_status: "capacity_blocked" }),
+  });
+  await Promise.all([queue()(event), queue()(event)]);
+  const stored = JSON.parse(await readFile(path.join(dir, `${event.event_id}.json`), "utf8"));
+  assert.deepEqual(stored.event, event);
+  assert.equal(stored.attempts, 0);
+  assert.deepEqual((await outboxRows(dir)), [`${event.event_id}.json`]);
+  assert.equal((await readdir(dir)).some((name) => name.endsWith(".new") || name.endsWith(".tmp")), false);
+  await assert.rejects(queue()({ ...event, run_id: "changed" }), /Outbox event identity collision/);
+});
+
+test("busy admission transaction times out without changing evidence and a killed holder releases it", async (t) => {
+  const dir = await directory(t);
+  const first = turnEvent({ runtime: "fixture", runId: "retained", ...timing });
+  const second = turnEvent({ runtime: "fixture", runId: "contender",
+    startedMs: timing.startedMs + 1, endedMs: timing.endedMs + 1 });
+  const queue = createDurableExporter({
+    directory: dir, maxEntries: 1, exporter: async () => assert.fail("network called"),
+    beforeAttempt: async () => ({ delivery_status: "capacity_blocked" }),
+  });
+  await queue(first);
+  const saved = await readFile(path.join(dir, `${first.event_id}.json`), "utf8");
+  const lockHolder = outboxChild(`import { DatabaseSync } from "node:sqlite";
+    const db = new DatabaseSync(process.argv[1]);
+    db.exec("BEGIN IMMEDIATE");
+    console.log("locked");
+    process.stdin.resume();`, [path.join(dir, "admission.sqlite")], t);
+  await childLine(lockHolder, "locked");
+  await assert.rejects(queue(second), /Outbox admission lock timed out; event not admitted/);
+  assert.deepEqual(await outboxRows(dir), [`${first.event_id}.json`]);
+  assert.equal(await readFile(path.join(dir, `${first.event_id}.json`), "utf8"), saved);
+  lockHolder.child.kill("SIGKILL");
+  assert.equal((await lockHolder.exited).signal, "SIGKILL");
+  const fresh = outboxChild(`import { createDurableExporter } from ${JSON.stringify(outboxModuleUrl)};
+    const event = JSON.parse(process.argv[2]);
+    try {
+      const receipt = await createDurableExporter({
+        directory: process.argv[1], maxEntries: 1,
+        beforeAttempt: async () => ({ delivery_status: "capacity_blocked" }),
+        exporter: async () => { throw Error("network called"); },
+      })(event);
+      console.log(receipt.outbox_status);
+    } catch (error) { console.log(error.message); process.exitCode = 1; }`,
+  [dir, JSON.stringify(first)], t);
+  const resumed = await fresh.exited;
+  assert.equal(resumed.code, 0, resumed.stderr);
+  assert.match(resumed.stdout, /capacity_blocked/);
+  assert.equal(await readFile(path.join(dir, `${first.event_id}.json`), "utf8"), saved);
+});
+
+test("another instance's preflight cannot release this process's admission transaction", async (t) => {
+  const dir = await directory(t);
+  const retained = turnEvent({ runtime: "fixture", runId: "held-admission", ...timing });
+  const contender = turnEvent({ runtime: "fixture", runId: "another-instance",
+    startedMs: timing.startedMs + 1, endedMs: timing.endedMs + 1 });
+  const queue = () => createDurableExporter({
+    directory: dir, maxEntries: 1, exporter: async () => assert.fail("network called"),
+    beforeAttempt: async () => ({ delivery_status: "capacity_blocked" }),
+  });
+  await queue()(retained);
+  const file = path.join(dir, `${retained.event_id}.json`);
+  const saved = await readFile(file, "utf8");
+  // This is the transaction held during another admission's filesystem inventory.
+  const holder = new DatabaseSync(path.join(dir, "admission.sqlite"));
+  holder.exec("BEGIN IMMEDIATE");
+  const probe = `import { DatabaseSync } from "node:sqlite";
+    const db = new DatabaseSync(process.argv[1], { timeout: 0 });
+    try { db.exec("BEGIN IMMEDIATE"); console.log("acquired"); db.exec("COMMIT"); }
+    catch (error) { console.log(error.errcode === 5 ? "busy" : error.message); process.exitCode = error.errcode === 5 ? 0 : 1; }
+    finally { db.close(); }`;
+  try {
+    await assert.rejects(queue()(contender), /Outbox admission lock timed out; event not admitted/);
+    const blocked = await outboxChild(probe, [path.join(dir, "admission.sqlite")], t).exited;
+    assert.equal(blocked.code, 0, blocked.stderr);
+    assert.match(blocked.stdout, /^busy\s*$/);
+    assert.equal(await readFile(file, "utf8"), saved);
+  } finally {
+    holder.exec("ROLLBACK");
+    holder.close();
+  }
+  const resumed = await outboxChild(probe, [path.join(dir, "admission.sqlite")], t).exited;
+  assert.equal(resumed.code, 0, resumed.stderr);
+  assert.match(resumed.stdout, /^acquired\s*$/);
+  assert.equal(await readFile(file, "utf8"), saved);
+});
+
+test("outbox rejects unsafe admission files without overwriting evidence", async (t) => {
+  const event = turnEvent({ runtime: "fixture", runId: "unsafe-lock", ...timing });
+  for (const kind of ["symlink", "permissions", "directory"]) {
+    const dir = await directory(t);
+    const file = path.join(dir, "admission.sqlite");
+    if (kind === "symlink") {
+      const target = path.join(dir, "target");
+      await writeFile(target, "untouched");
+      await symlink(target, file);
+    } else if (kind === "permissions") {
+      const db = new DatabaseSync(file);
+      db.close();
+      await chmod(file, 0o644);
+    } else {
+      const { mkdir } = await import("node:fs/promises");
+      await mkdir(file);
+    }
+    const queue = createDurableExporter({ directory: dir, exporter: async () => assert.fail("network called") });
+    await assert.rejects(queue(event), /Unsafe outbox admission file|ELOOP|EISDIR/);
+    assert.deepEqual(await outboxRows(dir), []);
+    if (kind === "symlink") assert.equal(await readFile(path.join(dir, "target"), "utf8"), "untouched");
+  }
 });
 test("unknown tool measurements remain null; observed zero remains zero", () => {
   const unknown = turnEvent({ runtime: "fixture", runId: "run", ...timing }),

@@ -1,8 +1,11 @@
 import { mkdir, open, readdir, rename, rm, lstat, link } from "node:fs/promises";
-import { constants, readFileSync, readlinkSync } from "node:fs";
+import { constants, closeSync, openSync, readFileSync, readlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { setTimeout as delay } from "node:timers/promises";
 import { validateObservabilityRecord } from "./evidence.mjs";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -91,6 +94,77 @@ export function createDurableExporter({
     if (!info.isDirectory() || info.mode & 0o077 || (process.getuid && info.uid !== process.getuid()))
       throw new Error("Unsafe outbox directory");
   }
+  async function withAdmissionLock(action) {
+    const filename = path.join(directory, "admission.sqlite");
+    let state;
+    try {
+      state = await lstat(filename);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      const temporary = path.join(directory, `admission.${randomUUID()}.new`);
+      let created = false;
+      let creationError;
+      try {
+        const descriptor = openSync(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_RDWR | constants.O_NOFOLLOW, 0o600);
+        created = true;
+        // Close before linking: closing an unrelated descriptor of a locked inode releases POSIX locks.
+        closeSync(descriptor);
+        try { await link(temporary, filename); }
+        catch (linkError) { if (linkError.code !== "EEXIST") throw linkError; }
+      } catch (error) {
+        creationError = error;
+      } finally {
+        if (created) {
+          try { await rm(temporary, { force: true }); }
+          catch (cleanupError) {
+            if (creationError)
+              throw new AggregateError([creationError, cleanupError], "Outbox admission initialization and cleanup failed");
+            throw cleanupError;
+          }
+        }
+      }
+      if (creationError) throw creationError;
+      state = await lstat(filename);
+    }
+    if (!state.isFile() || state.mode & 0o077 || (process.getuid && state.uid !== process.getuid()))
+      throw new Error("Unsafe outbox admission file");
+    const db = new DatabaseSync(filename);
+    let active = false;
+    let failure;
+    let value;
+    try {
+      db.exec("PRAGMA busy_timeout=0");
+      const deadline = process.hrtime.bigint() + 5_000_000_000n;
+      for (;;) {
+        try {
+          db.exec("BEGIN IMMEDIATE");
+          active = true;
+          break;
+        } catch (error) {
+          if (!Number.isInteger(error.errcode) || (error.errcode & 0xff) !== 5) throw error;
+          if (process.hrtime.bigint() >= deadline)
+            throw new Error("Outbox admission lock timed out; event not admitted");
+          await delay(10);
+        }
+      }
+      value = await action();
+      db.exec("COMMIT");
+      active = false;
+    } catch (error) {
+      failure = error;
+    } finally {
+      const errors = failure ? [failure] : [];
+      if (active) {
+        try { db.exec("ROLLBACK"); }
+        catch (error) { errors.push(error); }
+      }
+      try { db.close(); }
+      catch (error) { errors.push(error); }
+      if (errors.length > 1) throw new AggregateError(errors, "Outbox admission and cleanup failed");
+      if (errors.length === 1) throw errors[0];
+    }
+    return value;
+  }
   async function read(name) {
     const handle = await open(path.join(directory, name), constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
     try {
@@ -134,15 +208,19 @@ export function createDurableExporter({
   }
   async function save(row) {
     const file = path.join(directory, `${row.event.event_id}.json`),
-      temporary = file + `.${process.pid}.tmp`;
+      temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
     const handle = await open(temporary, "wx", 0o600);
     try {
-      await handle.writeFile(JSON.stringify(row));
-      await handle.sync();
+      try {
+        await handle.writeFile(JSON.stringify(row));
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await rename(temporary, file);
     } finally {
-      await handle.close();
+      await rm(temporary, { force: true });
     }
-    await rename(temporary, file);
   }
   async function interrupt(row) {
     await onInterrupted(row.event, { receipts: row.receipt?.destinations, attempts: row.attempts });
@@ -210,56 +288,76 @@ export function createDurableExporter({
     const snapshot = structuredClone(event);
     validateObservabilityRecord(snapshot);
     await prepare();
-    let row;
-    try {
-      row = await read(`${snapshot.event_id}.json`);
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
-    if (row) {
-      if (JSON.stringify(row.event) !== JSON.stringify(snapshot))
-        throw new Error("Outbox event identity collision");
+    return withAdmissionLock(async () => {
+      let row;
+      try {
+        row = await read(`${snapshot.event_id}.json`);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+      if (row) {
+        if (JSON.stringify(row.event) !== JSON.stringify(snapshot))
+          throw new Error("Outbox event identity collision");
+        return row;
+      }
+      const names = (await readdir(directory)).filter(
+        (name) => UUID.test(name.slice(0, -5)) && name.endsWith(".json"),
+      );
+      let evicted = 0;
+      const rows = await Promise.all(names.map(read));
+      const removable = rows.filter(settled).sort((a, b) => a.updated_at.localeCompare(b.updated_at));
+      for (const old of removable) {
+        if (names.length - evicted < maxEntries && now() - Date.parse(old.updated_at) < maxAgeMs) continue;
+        await rm(path.join(directory, `${old.event.event_id}.json`));
+        evicted++;
+      }
+      if (names.length - evicted >= maxEntries)
+        throw new Error("Outbox capacity exhausted; unresolved evidence retained");
+      row = {
+        schema_version: 1,
+        event: snapshot,
+        state: "pending",
+        attempts: 0,
+        next_attempt_at: 0,
+        receipt: null,
+        evicted_delivered_count: evicted,
+        updated_at: new Date(now()).toISOString(),
+      };
+      // Exclusive creation prevents concurrent submitters from replacing a receipt.
+      let handle;
+      const temporary = path.join(directory, `${snapshot.event_id}.${process.pid}.${randomUUID()}.new`);
+      let created = false;
+      let failure;
+      try {
+        handle = await open(temporary, "wx", 0o600);
+        created = true;
+        await handle.writeFile(JSON.stringify(row));
+        await handle.sync();
+        try {
+          await link(temporary, path.join(directory, `${snapshot.event_id}.json`));
+        } catch (error) {
+          if (error.code !== "EEXIST") throw error;
+          row = await read(`${snapshot.event_id}.json`);
+          if (JSON.stringify(row.event) !== JSON.stringify(snapshot))
+            throw new Error("Outbox event identity collision");
+        }
+      } catch (error) {
+        failure = error;
+      } finally {
+        const errors = failure ? [failure] : [];
+        if (handle) {
+          try { await handle.close(); }
+          catch (error) { errors.push(error); }
+        }
+        if (created) {
+          try { await rm(temporary, { force: true }); }
+          catch (error) { errors.push(error); }
+        }
+        if (errors.length > 1) throw new AggregateError(errors, "Outbox admission and temporary cleanup failed");
+        if (errors.length === 1) throw errors[0];
+      }
       return row;
-    }
-    const names = (await readdir(directory)).filter(
-      (name) => UUID.test(name.slice(0, -5)) && name.endsWith(".json"),
-    );
-    let evicted = 0;
-    const rows = await Promise.all(names.map(read));
-    const removable = rows.filter(settled).sort((a, b) => a.updated_at.localeCompare(b.updated_at));
-    for (const old of removable) {
-      if (names.length - evicted < maxEntries && now() - Date.parse(old.updated_at) < maxAgeMs) continue;
-      await rm(path.join(directory, `${old.event.event_id}.json`));
-      evicted++;
-    }
-    if (names.length - evicted >= maxEntries)
-      throw new Error("Outbox capacity exhausted; unresolved evidence retained");
-    row = {
-      schema_version: 1,
-      event: snapshot,
-      state: "pending",
-      attempts: 0,
-      next_attempt_at: 0,
-      receipt: null,
-      evicted_delivered_count: evicted,
-      updated_at: new Date(now()).toISOString(),
-    };
-    // Exclusive creation prevents concurrent submitters from replacing a receipt.
-    let handle;
-    const temporary = path.join(directory, `${snapshot.event_id}.${process.pid}.new`);
-    try {
-      handle = await open(temporary, "wx", 0o600);
-      await handle.writeFile(JSON.stringify(row));
-      await handle.sync();
-      await link(temporary, path.join(directory, `${snapshot.event_id}.json`));
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      row = await read(`${snapshot.event_id}.json`);
-    } finally {
-      if (handle) await handle.close();
-      await rm(temporary, { force: true });
-    }
-    return row;
+    });
   }
   const send = (event) => serial(() => submit(event)).then((row) => schedule(() => deliver(row)));
   send.drain = ({ limit = 20 } = {}) =>
