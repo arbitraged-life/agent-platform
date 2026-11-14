@@ -232,10 +232,13 @@ If a returned run cannot obtain its final workspace
 fingerprint, or leaves descendant processes in its owned Unix process group,
 it remains `needs-review`, not `verified-complete`. The supervisor terminates
 that process group before releasing the workspace lock; if it cannot confirm
-termination the lock remains for manual inspection. A pending cancellation
-poll cannot schedule another signal after the child closes or the run is
-released. Other process groups and Windows descendants are not confined by
-this mechanism. A successful child is `returned`; controller inspection with
+termination the lock remains for manual inspection. On macOS, a denied
+signal-zero probe falls back to a bounded `/bin/ps` inspection. Only a nonempty
+group consisting entirely of zombies proves that no member can continue work;
+live members, empty output, or inspection failures retain the lock.
+A pending cancellation poll cannot schedule another signal after the child
+closes or the run is released. Other process groups and Windows descendants
+are not confined by this mechanism. A successful child is `returned`; controller inspection with
 artifact hashes and per-criterion evidence is required for
 `verified-complete`. A stale heartbeat becomes `unknown`; do not automatically
 restart or clear its workspace lock.

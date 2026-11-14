@@ -588,6 +588,31 @@ test('exceptional supervision still kills a SIGTERM-ignoring descendant',async()
  }
 });
 
+test('Darwin denied group probes release a workspace only with positive zombie-only evidence',async()=>{
+ for(const states of ['Z\nZ+\n','Z\nS\n','','unreadable']){
+  const f=await fixture(),p=await prepare(f.policy,packet(f.workspace));
+  const script=`import assert from 'node:assert/strict';import cp from 'node:child_process';import {promisify} from 'node:util';import {syncBuiltinESMExports} from 'node:module';
+const realExec=promisify(cp.execFile),realKill=process.kill,states=${JSON.stringify(states)};
+cp.execFile=Object.assign((...args)=>realExec(...args),{[promisify.custom]:async(file,...args)=>{
+ if(file!=='/bin/ps')return realExec(file,...args);
+ if(states==='unreadable')throw new Error('process inspection unavailable');
+ return {stdout:states,stderr:''};
+}});
+syncBuiltinESMExports();Object.defineProperty(process,'platform',{value:'darwin'});
+process.kill=(pid,signal)=>{if(pid<0&&signal===0)throw Object.assign(new Error('group probe denied'),{code:'EPERM'});return realKill(pid,signal);};
+const {loadPolicy}=await import(${JSON.stringify(new URL('../../runtime/execution-router/policy.mjs',import.meta.url).href)});
+const {runPrepared,prepare,inspect}=await import(${JSON.stringify(new URL('../../runtime/execution-router/dispatch.mjs',import.meta.url).href)});
+const policy=await loadPolicy(${JSON.stringify(f.policyPath)}),approval={approved_digest:${JSON.stringify(p.approval_digest)},approval_ref:'user approved fixture'};
+const zombiesOnly=states==='Z\\nZ+\\n';
+if(zombiesOnly){const result=await runPrepared(policy,'router-test',approval);assert.equal(result.status,'returned');assert.equal(result.verified,false);}
+else{await assert.rejects(()=>runPrepared(policy,'router-test',approval),{code:'EPERM'});const state=await inspect(policy,'router-test');assert.equal(state.status,'cleanup-uncertain');assert.equal(state.lock_retained,true);}
+const next=await prepare(policy,${JSON.stringify(packet(f.workspace,{task_id:'next-task'}))}),nextApproval={...approval,approved_digest:next.approval_digest};
+if(zombiesOnly)assert.equal((await runPrepared(policy,'next-task',nextApproval)).status,'returned');
+else await assert.rejects(()=>runPrepared(policy,'next-task',nextApproval),/Workspace already has a run/);`;
+  await exec(process.execPath,['--input-type=module','-e',script],{timeout:10000});
+ }
+});
+
 test('isolated read-only profiles allow omitted protected branches',async()=>{
  const f=await fixture(),linked=path.join(f.root,'read-only-linked');
  await exec('git',['-C',f.workspace,'worktree','add','-qb','readonly-feature',linked]);

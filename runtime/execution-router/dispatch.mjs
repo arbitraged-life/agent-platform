@@ -96,17 +96,29 @@ export async function requestCancel(policy,id) {
 }
 function stopChild(child) { if(!child.pid)return;try {if(process.platform==='win32')child.kill('SIGTERM');else process.kill(-child.pid,'SIGTERM');}catch(e){if(e.code!=='ESRCH')throw e;} }
 function killChild(child) { if(!child.pid)return;try {if(process.platform==='win32')child.kill('SIGKILL');else process.kill(-child.pid,'SIGKILL');}catch(e){if(e.code!=='ESRCH')throw e;} }
-function groupAlive(child) {
+async function groupAlive(child) {
  if(process.platform==='win32'||!child?.pid)return false;
- try{process.kill(-child.pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw error;}
+ try{process.kill(-child.pid,0);return true;}catch(error){
+  if(error.code==='ESRCH')return false;
+  // Darwin denies signal-zero probes for zombie-only process groups.
+  // Only positive evidence that every member is a zombie permits release.
+  if(process.platform==='darwin'&&error.code==='EPERM'){
+   try{
+    const {stdout}=await exec('/bin/ps',['-g',String(child.pid),'-o','state='],{timeout:2000,maxBuffer:65536});
+    const states=stdout.trim().split(/\s+/).filter(Boolean);
+    if(states.length&&states.every(state=>state.startsWith('Z')))return false;
+   }catch{}
+  }
+  throw error;
+ }
 }
 async function stopRemainingGroup(child) {
- if(!groupAlive(child))return {lingering:false,stopped:true};
+ if(!await groupAlive(child))return {lingering:false,stopped:true};
  stopChild(child);
- for(let i=0;i<10&&groupAlive(child);i++)await new Promise(resolve=>setTimeout(resolve,100));
- if(groupAlive(child))killChild(child);
- for(let i=0;i<10&&groupAlive(child);i++)await new Promise(resolve=>setTimeout(resolve,100));
- return {lingering:true,stopped:!groupAlive(child)};
+ for(let i=0;i<10&&await groupAlive(child);i++)await new Promise(resolve=>setTimeout(resolve,100));
+ if(await groupAlive(child))killChild(child);
+ for(let i=0;i<10&&await groupAlive(child);i++)await new Promise(resolve=>setTimeout(resolve,100));
+ return {lingering:true,stopped:!await groupAlive(child)};
 }
 export async function runPrepared(policy,id,approval={}) {
  if(process.platform==='win32')throw new Error('Windows process-tree supervision is not supported; use a manual handoff');
