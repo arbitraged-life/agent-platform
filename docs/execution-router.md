@@ -256,8 +256,10 @@ that process group before releasing the workspace lock; if it cannot confirm
 termination the lock remains for manual inspection. On macOS, a denied
 signal-zero probe falls back to a bounded `/bin/ps` inspection with explicit
 Unix 2003 process-group selection, independent of inherited legacy command mode.
-Only a nonempty group consisting entirely of zombies proves that no member can
-continue work; live members, empty output, or inspection failures retain the lock.
+The inspection includes detached members without a controlling terminal and
+checks every reported process-group ID. Only a nonempty result for the owned
+group consisting entirely of zombies proves that no member can continue work;
+live members, mismatched groups, empty output, or inspection failures retain the lock.
 A denied termination signal is rechecked against the same evidence rather than
 ignored; unresolved permission failures still retain the lock.
 A pending cancellation poll cannot schedule another signal after the child

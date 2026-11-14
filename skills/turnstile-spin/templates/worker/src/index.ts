@@ -37,20 +37,25 @@ async function readRequestBody(request: Request): Promise<Uint8Array> {
 	const reader = request.body.getReader();
 	const chunks: Uint8Array[] = [];
 	let length = 0;
+	let overflow = false;
 	try {
 		for (;;) {
 			const { done, value } = await reader.read();
 			if (done) break;
 			if (length + value.byteLength > MAX_REQUEST_BYTES) {
-				try {
-					await reader.cancel();
-				} catch {
-					// The size error remains authoritative even if cancellation fails.
-				}
-				throw new SiteverifyError(413, 'request-too-large', 'Request body exceeds 16384 bytes');
+				overflow = true;
+				break;
 			}
 			chunks.push(value);
 			length += value.byteLength;
+		}
+		if (overflow) {
+			try {
+				await reader.cancel();
+			} catch {
+				// The size error remains authoritative even if cancellation fails.
+			}
+			throw new SiteverifyError(413, 'request-too-large', 'Request body exceeds 16384 bytes');
 		}
 	} finally {
 		reader.releaseLock();

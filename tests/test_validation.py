@@ -2,6 +2,7 @@ import ast
 import re
 from collections.abc import Mapping
 from importlib.machinery import SourceFileLoader
+from itertools import product
 from importlib.util import spec_from_loader, module_from_spec
 from pathlib import Path
 # qlty-ignore(bandit:B404): Git fixture operations use argv without a shell.
@@ -20,45 +21,46 @@ validation = module_from_spec(SPEC)
 SPEC.loader.exec_module(validation)
 
 
+def condition_lexeme(lexeme: str, values: Mapping[str, str], prior_success: bool) -> str:
+    operators = {'&&': 'and', '||': 'or', '==': '==', '(': '(', ')': ')'}
+    if lexeme in operators:
+        return operators[lexeme]
+    if lexeme == 'always()':
+        return 'True'
+    if lexeme == 'success()':
+        return str(prior_success)
+    if lexeme.startswith("'"):
+        return lexeme
+    if lexeme in values:
+        return repr(values[lexeme])
+    raise AssertionError(f"Unexpected workflow condition symbol: {lexeme}")
+
+
+def condition_boolean(node, expression: str):
+    if isinstance(node, ast.Constant) and type(node.value) in (bool, str):
+        return node.value
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, (ast.And, ast.Or)):
+        operands = [condition_boolean(value, expression) for value in node.values]
+        return all(operands) if isinstance(node.op, ast.And) else any(operands)
+    if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], ast.Eq):
+        return condition_boolean(node.left, expression) == condition_boolean(node.comparators[0], expression)
+    raise AssertionError(f"Unsupported workflow condition: {expression}")
+
+
 def workflow_condition(expression: str, values: Mapping[str, str],
                        prior_success: bool = True) -> bool:
     """Evaluate only the boolean GitHub condition vocabulary used in this workflow."""
     raw = expression.strip()
     if raw.startswith('${{') and raw.endswith('}}'):
         raw = raw[3:-2].strip()
-    tokens = re.findall(r"'[^']*'|[A-Za-z_][\w.-]*(?:\(\))?|==|&&|\|\||[()]", raw)
-    if ''.join(tokens) != ''.join(raw.split()):
+    lexemes = re.findall(r"'[^']*'|[A-Za-z_][\w.-]*(?:\(\))?|==|&&|\|\||[()]", raw)
+    if ''.join(lexemes) != ''.join(raw.split()):
         raise AssertionError(f"Unrecognized workflow condition: {raw}")
-    operators = {'&&': 'and', '||': 'or', '==': '==', '(': '(', ')': ')'}
-    converted = []
-    for token in tokens:
-        if token in operators:
-            converted.append(operators[token])
-        elif token == 'always()':
-            converted.append('True')
-        elif token == 'success()':
-            converted.append(str(prior_success))
-        elif token.startswith("'"):
-            converted.append(token)
-        elif token in values:
-            converted.append(repr(values[token]))
-        else:
-            raise AssertionError(f"Unexpected workflow condition symbol: {token}")
+    converted = [condition_lexeme(lexeme, values, prior_success) for lexeme in lexemes]
     tree = ast.parse(' '.join(converted), mode='eval')
-
-    def boolean(node):
-        if isinstance(node, ast.Expression):
-            return boolean(node.body)
-        if isinstance(node, ast.Constant) and type(node.value) in (bool, str):
-            return node.value
-        if isinstance(node, ast.BoolOp) and isinstance(node.op, (ast.And, ast.Or)):
-            operands = [boolean(value) for value in node.values]
-            return all(operands) if isinstance(node.op, ast.And) else any(operands)
-        if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], ast.Eq):
-            return boolean(node.left) == boolean(node.comparators[0])
-        raise AssertionError(f"Unsupported workflow condition: {raw}")
-
-    return bool(boolean(tree)) and (prior_success or 'always()' in tokens or 'success()' in tokens)
+    return bool(condition_boolean(tree.body, raw)) and (
+        prior_success or 'always()' in lexemes or 'success()' in lexemes
+    )
 
 
 class BoundaryTests(unittest.TestCase):
@@ -189,30 +191,28 @@ class BoundaryTests(unittest.TestCase):
         uploader = jobs['upload-test-insights']
         self.assertTrue(run_tests['continue-on-error'])
 
-        for event in ('schedule', 'pull_request'):
-            for credential in (False, True):
-                for test_result in ('success', 'failure'):
-                    for prior_ok in (False, True):
-                        with self.subTest(event=event, credential=credential,
-                                          test_result=test_result, prior_ok=prior_ok):
-                            values = {
-                                'github.event_name': event,
-                                'needs.insights-config.outputs.available': str(credential).lower(),
-                                'steps.tests.outcome': test_result if credential else 'skipped',
-                                'needs.node-tests.outputs.test-outcome': test_result if credential else '',
-                            }
-                            expected_job = event == 'schedule' or credential
-                            self.assertEqual(workflow_condition(tests['if'], values), expected_job)
-                            self.assertEqual(workflow_condition(run_tests['if'], values) and expected_job,
-                                             credential)
-                            self.assertEqual(workflow_condition(artifact['if'], values, prior_ok) and expected_job,
-                                             credential)
-                            self.assertEqual(workflow_condition(audit['if'], values, prior_ok) and expected_job,
-                                             event == 'schedule')
-                            self.assertEqual(workflow_condition(failure['if'], values, prior_ok) and expected_job,
-                                             credential and test_result == 'failure')
-                            self.assertEqual(workflow_condition(uploader['if'], values, prior_ok),
-                                             credential)
+        for event, credential, test_result, prior_ok in product(
+            ('schedule', 'pull_request'), (False, True), ('success', 'failure'), (False, True)
+        ):
+            with self.subTest(event=event, credential=credential,
+                              test_result=test_result, prior_ok=prior_ok):
+                values = {
+                    'github.event_name': event,
+                    'needs.insights-config.outputs.available': str(credential).lower(),
+                    'steps.tests.outcome': test_result if credential else 'skipped',
+                    'needs.node-tests.outputs.test-outcome': test_result if credential else '',
+                }
+                expected_job = event == 'schedule' or credential
+                self.assertEqual(workflow_condition(tests['if'], values), expected_job)
+                self.assertEqual(workflow_condition(run_tests['if'], values) and expected_job,
+                                 credential)
+                self.assertEqual(workflow_condition(artifact['if'], values, prior_ok) and expected_job,
+                                 credential)
+                self.assertEqual(workflow_condition(audit['if'], values, prior_ok) and expected_job,
+                                 event == 'schedule')
+                self.assertEqual(workflow_condition(failure['if'], values, prior_ok) and expected_job,
+                                 credential and test_result == 'failure')
+                self.assertEqual(workflow_condition(uploader['if'], values, prior_ok), credential)
 
     def test_validator_dispatches_advisory_gate_only_for_ci_and_security(self):
         for command in ['ci', 'security', 'lint', 'test']:

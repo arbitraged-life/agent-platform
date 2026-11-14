@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -10,28 +11,33 @@ ROOT = Path(__file__).resolve().parents[1]
 RESOLVE = ROOT / "scripts" / "skills" / "resolve-skill-path.sh"
 STREAM = ROOT / "scripts" / "review" / "stream_verdict.py"
 GATE = ROOT / "scripts" / "review" / "adversarial-review-gate.sh"
+GIT_EXECUTABLE = shutil.which("git")
+BASH_EXECUTABLE = shutil.which("bash")
 
 
 class SkillPathTests(unittest.TestCase):
     def test_resolves_valid_skill_path(self):
+        # qlty-ignore(bandit:B603): Resolved executable, repository script and literal argv; no shell evaluation.
         result = subprocess.run(
-            ["bash", str(RESOLVE), "--name", "example-skill"],
+            [BASH_EXECUTABLE, str(RESOLVE), "--name", "example-skill"],
             cwd=ROOT, text=True, capture_output=True, check=True,
         )
         self.assertEqual(result.stdout.strip(), "skills/example-skill/SKILL.md")
 
     def test_mkdir_creates_only_skill_directory(self):
         with tempfile.TemporaryDirectory() as td:
+            # qlty-ignore(bandit:B603): Resolved executable, repository script and literal argv in a temporary fixture.
             result = subprocess.run(
-                ["bash", str(RESOLVE), "--name", "example-skill", "--mkdir"],
+                [BASH_EXECUTABLE, str(RESOLVE), "--name", "example-skill", "--mkdir"],
                 cwd=td, text=True, capture_output=True, check=True,
             )
             self.assertEqual(result.stdout.strip(), "skills/example-skill/SKILL.md")
             self.assertTrue((Path(td) / "skills" / "example-skill").is_dir())
 
     def test_rejects_invalid_skill_name(self):
+        # qlty-ignore(bandit:B603): Literal invalid-input fixture is passed as argv, never shell source.
         result = subprocess.run(
-            ["bash", str(RESOLVE), "--name", "../escape"],
+            [BASH_EXECUTABLE, str(RESOLVE), "--name", "../escape"],
             cwd=ROOT, text=True, capture_output=True,
         )
         self.assertNotEqual(result.returncode, 0)
@@ -47,6 +53,7 @@ class ReviewStreamTests(unittest.TestCase):
 
     def stream(self, *events):
         producer = "import json; events = " + repr(events) + "; [print(json.dumps(event), flush=True) for event in events]"
+        # qlty-ignore(bandit:B603): Current interpreter runs repository code and test-owned producer source without a shell.
         return subprocess.run(
             [sys.executable, str(STREAM), "5", sys.executable, "-c", producer],
             text=True, capture_output=True,
@@ -109,6 +116,7 @@ class ReviewStreamTests(unittest.TestCase):
         self.assertEqual(result.returncode, 125)
 
     def test_process_without_verdict_times_out(self):
+        # qlty-ignore(bandit:B603): Current interpreter and literal sleeping fixture; bounded process timeout, no shell.
         result = subprocess.run(
             [sys.executable, str(STREAM), "0.05", sys.executable, "-c", "import time; time.sleep(30)"],
             text=True, capture_output=True, timeout=3,
@@ -122,6 +130,7 @@ class ReviewStreamTests(unittest.TestCase):
             + repr(self.event(json.dumps({"verdict": "PASS", "findings": ["defect"]})))
             + "), flush=True); time.sleep(30)"
         )
+        # qlty-ignore(bandit:B603): Current interpreter runs a test-owned invalid-verdict producer, never external input.
         result = subprocess.run(
             [sys.executable, str(STREAM), "5", sys.executable, "-c", producer],
             text=True, capture_output=True, timeout=3,
@@ -132,11 +141,13 @@ class ReviewStreamTests(unittest.TestCase):
     def test_gate_rejects_contradictory_pass_without_environment_skip(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            subprocess.run(["git", "init", "-q", "--initial-branch=main", str(root)], check=True)
+            # qlty-ignore(bandit:B603): Resolved Git executable and literal argv create only a temporary fixture repository.
+            subprocess.run([GIT_EXECUTABLE, "init", "-q", "--initial-branch=main", str(root)], check=True)
 
             def git(*args):
+                # qlty-ignore(bandit:B603): Resolved Git executable with test-owned argv and local fixture paths; no shell.
                 return subprocess.run(
-                    ["git", "-c", "user.name=Review Fixture", "-c", "user.email=review@example.test", *args],
+                    [GIT_EXECUTABLE, "-c", "user.name=Review Fixture", "-c", "user.email=review@example.test", *args],
                     cwd=root, text=True, capture_output=True, check=True,
                 ).stdout.strip()
 
@@ -166,8 +177,9 @@ class ReviewStreamTests(unittest.TestCase):
                 ADVERSARIAL_REVIEW_SKIP="1",
                 ADVERSARIAL_REVIEW_TIMEOUT="5",
             )
+            # qlty-ignore(bandit:B603): Resolved Bash runs the repository gate with a test-owned producer and synthetic input.
             result = subprocess.run(
-                ["bash", str(GATE)], cwd=root, env=env,
+                [BASH_EXECUTABLE, str(GATE)], cwd=root, env=env,
                 input=f"refs/heads/main {local_sha} refs/heads/main {remote_sha}\n",
                 text=True, capture_output=True,
             )

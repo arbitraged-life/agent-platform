@@ -92,6 +92,47 @@ Revert safely.
         errors = self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT)
         self.assertTrue(any("missing required section: ## Why" in error for error in errors))
 
+    def test_indented_pseudo_closers_cannot_expose_fenced_sections(self):
+        for fence in ("```", "~~~"):
+            for indent in ("    ", "\t", " \t"):
+                with self.subTest(fence=fence, indent=indent):
+                    body = f"{fence}markdown\n{indent}{fence}\n" + self._valid_body()
+                    self.assertEqual(self.m.parse_sections(body), ({}, set()))
+                    errors = self.m.validate(
+                        "fix(pr): enforce Markdown fence indentation", body, self.m.DEFAULT
+                    )
+                    self.assertEqual(len(errors), len(self.m.DEFAULT["required_sections"]))
+                    for heading in self.m.DEFAULT["required_sections"]:
+                        self.assertTrue(any(f"## {heading}" in error for error in errors))
+
+    def test_valid_indented_closers_expose_only_following_sections(self):
+        for fence in ("```", "~~~"):
+            for spaces in range(4):
+                with self.subTest(fence=fence, spaces=spaces):
+                    body = (
+                        f"   {fence}markdown\n## Hidden\nExample content.\n"
+                        + " " * spaces + fence + "\n" + self._valid_body()
+                    )
+                    self.assertEqual(
+                        self.m.validate(
+                            "fix(pr): enforce Markdown fence indentation", body, self.m.DEFAULT
+                        ),
+                        [],
+                    )
+                    sections, _ = self.m.parse_sections(body)
+                    self.assertNotIn("hidden", sections)
+
+    def test_indented_pseudo_openers_do_not_hide_visible_sections(self):
+        for indent in ("    ", "\t"):
+            with self.subTest(indent=indent):
+                body = indent + "```markdown\n" + self._valid_body()
+                self.assertEqual(
+                    self.m.validate(
+                        "fix(pr): enforce Markdown fence indentation", body, self.m.DEFAULT
+                    ),
+                    [],
+                )
+
     def test_all_required_headings_inside_comment_are_missing(self):
         body = "<!--\n" + self._valid_body() + "-->\n"
         errors = self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT)

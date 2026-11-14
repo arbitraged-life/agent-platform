@@ -20,7 +20,9 @@ Required PR headings and minimum content must be visible outside HTML comments.
 An unterminated comment hides the remaining body. Matched inline-code spans and
 escaped comment delimiters remain literal; code spans do not cross paragraph or
 block boundaries. Fenced examples do not create sections, and only a matching
-fence character of sufficient length closes them.
+fence character of sufficient length closes them. Fence markers permit zero to
+three leading spaces; four-space and tab-indented pseudo-closers remain code
+content and cannot expose hidden section headings.
 The purity checker also rejects standard, diff3, and longer Git conflict markers;
 that rule cannot be bypassed with an ignore tag.
 

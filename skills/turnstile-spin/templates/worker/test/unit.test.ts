@@ -408,13 +408,33 @@ describe('bounded siteverify request bodies', () => {
 		expect(upstream).not.toHaveBeenCalled();
 	});
 
-	it('rejects oversized multipart form bodies before parsing', async () => {
+	it('rejects and cancels an oversized incoming multipart body before parsing', async () => {
 		const form = new FormData();
 		form.append('token', 'abc');
 		form.append('padding', 'x'.repeat(16384));
+		// Finish the client-side FormData encoder before simulating the incoming HTTP stream.
+		// Cancelling that encoder directly is not the same as cancelling an incoming request.
+		const encoded = new Request('https://w/', { method: 'POST', body: form });
+		const bytes = new Uint8Array(await encoded.arrayBuffer());
+		expect(bytes.byteLength).toBeGreaterThan(16384);
+		const cancel = vi.fn();
+		const incoming = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(bytes.subarray(0, 16384));
+				controller.enqueue(bytes.subarray(16384));
+			},
+			cancel,
+		});
 		const upstream = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected upstream call'));
-		const res = await worker.fetch(new Request('https://w/', { method: 'POST', body: form }), TEST_ENV);
+		const res = await worker.fetch(new Request('https://w/', {
+			method: 'POST',
+			headers: { 'Content-Type': encoded.headers.get('Content-Type') ?? '' },
+			body: incoming,
+			duplex: 'half',
+		} as RequestInit & { duplex: 'half' }), TEST_ENV);
 		expect(res.status).toBe(413);
+		expect(await res.json()).toMatchObject({ success: false, 'error-codes': ['request-too-large'] });
+		expect(cancel).toHaveBeenCalledOnce();
 		expect(upstream).not.toHaveBeenCalled();
 	});
 
@@ -436,6 +456,27 @@ describe('bounded siteverify request bodies', () => {
 			duplex: 'half',
 		} as RequestInit & { duplex: 'half' }), TEST_ENV);
 		expect(res.status).toBe(413);
+		expect(cancel).toHaveBeenCalledOnce();
+		expect(upstream).not.toHaveBeenCalled();
+	});
+
+	it('preserves the size error if cancelling an overflowing incoming stream fails', async () => {
+		const cancel = vi.fn().mockRejectedValue(new Error('cancel failed'));
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(new Uint8Array(16385));
+			},
+			cancel,
+		});
+		const upstream = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected upstream call'));
+		const res = await worker.fetch(new Request('https://w/', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: stream,
+			duplex: 'half',
+		} as RequestInit & { duplex: 'half' }), TEST_ENV);
+		expect(res.status).toBe(413);
+		expect(await res.json()).toMatchObject({ success: false, 'error-codes': ['request-too-large'] });
 		expect(cancel).toHaveBeenCalledOnce();
 		expect(upstream).not.toHaveBeenCalled();
 	});

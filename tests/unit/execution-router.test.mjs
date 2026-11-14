@@ -371,8 +371,24 @@ if(mode==='write') {
   assert.deepEqual((await fs.readdir(retained)).filter(name=>name.endsWith('.tmp')),[]);
  }
 }
+console.log(JSON.stringify({failurePreserved:error===failure||error?.errors?.[0]===failure,
+ errorKind:error?.constructor.name,cleanupPath:error?.cleanup_path,message:error?.message}));
 `;
-  await exec(process.execPath,['--input-type=module','-e',script],{timeout:15000});
+  const {stdout}=await exec(process.execPath,['--input-type=module','-e',script],{timeout:15000});
+  const observed=JSON.parse(stdout.trim()),dir=path.join(f.policy.state_dir,'runs','router-test');
+  assert.equal(observed.failurePreserved,true,'the original write failure remains observable');
+  assert.equal(observed.errorKind,['write','late-replacement'].includes(mode)?'Error':'AggregateError');
+  if(observed.cleanupPath) {
+   assert.ok(observed.message.includes(observed.cleanupPath),'CLI-visible failure names the retained location');
+   if(['replacement','claim-denied'].includes(mode))assert.equal(observed.cleanupPath,dir);
+   else {
+    assert.equal(path.dirname(observed.cleanupPath),path.dirname(dir));
+    assert.match(path.basename(observed.cleanupPath),/^\.prepare-rollback-/);
+   }
+  }
+  if(['replacement','late-replacement'].includes(mode))assert.equal(await readFile(path.join(dir,'owner'),'utf8'),'replacement');
+  else if(mode==='claim-replacement')assert.equal(await readFile(path.join(observed.cleanupPath,'task','owner'),'utf8'),'replacement');
+  else assert.equal(JSON.parse(await readFile(path.join(mode==='cleanup'?path.join(observed.cleanupPath,'task'):dir,'packet.json'),'utf8')).task_id,'router-test');
  });
 });
 test('run requires explicit approval evidence',async()=>{const f=await fixture();await prepare(f.policy,packet(f.workspace));await assert.rejects(()=>runPrepared(f.policy,'router-test',{}),/approval/);assert.equal((await inspect(f.policy,'router-test')).status,'prepared');});
@@ -683,10 +699,11 @@ test('exceptional supervision still kills a SIGTERM-ignoring descendant',async()
  }
 });
 
-test('Darwin denied group probes release a workspace only with positive zombie-only evidence',async(t)=>{
+test('Darwin denied group probes release a workspace only with identified zombie-only members',async(t)=>{
  for(const scenario of [
-  {name:'zombie-only group',states:'Z\nZ+\n',status:'returned'},
+  {name:'zombie-only detached group',states:'Z\nZ+\n',status:'returned'},
   {name:'live member',states:'Z\nS\n'},
+  {name:'unrelated zombie',states:'Z\n',otherGroup:true},
   {name:'empty inspection',states:''},
   {name:'unreadable inspection',states:'unreadable'},
   {name:'zombie transition while polling',states:'Z\n',transition:'poll',status:'needs-review'},
@@ -697,16 +714,20 @@ test('Darwin denied group probes release a workspace only with positive zombie-o
  ])await t.test(scenario.name,async()=>{
   const f=await fixture(),p=await prepare(f.policy,packet(f.workspace));
   const script=`import assert from 'node:assert/strict';import cp from 'node:child_process';import {promisify} from 'node:util';import {syncBuiltinESMExports} from 'node:module';
-const realExec=promisify(cp.execFile),realKill=process.kill,{states,status,transition}=${JSON.stringify(scenario)};
-cp.execFile=Object.assign((...args)=>realExec(...args),{[promisify.custom]:async(file,...args)=>{
- if(file!=='/bin/ps')return realExec(file,...args);
+const realExec=promisify(cp.execFile),realKill=process.kill,{states,status,transition,otherGroup}=${JSON.stringify(scenario)};
+let groupPid,inspectionCount=0;
+cp.execFile=Object.assign((...args)=>realExec(...args),{[promisify.custom]:async(file,args,...rest)=>{
+ if(file!=='/bin/ps')return realExec(file,args,...rest);
+ assert.deepEqual(args,['-x','-g',String(groupPid),'-o','pgid=,state=']);
+ inspectionCount++;
  if(states==='unreadable')throw new Error('process inspection unavailable');
- return {stdout:states,stderr:''};
+ return {stdout:states.trim().split('\\n').filter(Boolean).map(state=>\`\${groupPid+(otherGroup?1:0)} \${state}\`).join('\\n'),stderr:''};
 }});
 syncBuiltinESMExports();Object.defineProperty(process,'platform',{value:'darwin'});
 let dead=!transition;
 process.kill=(pid,signal)=>{
  if(pid>=0)return realKill(pid,signal);
+ groupPid=-pid;
  if(signal===0){if(!dead)return true;throw Object.assign(new Error('group probe denied'),{code:'EPERM'});}
  if(transition){
   if(signal===(transition==='poll'?'SIGTERM':transition)){
@@ -722,11 +743,17 @@ const {runPrepared,prepare,inspect}=await import(${JSON.stringify(new URL('../..
 const policy=await loadPolicy(${JSON.stringify(f.policyPath)}),approval={approved_digest:${JSON.stringify(p.approval_digest)},approval_ref:'user approved fixture'};
 if(status){const result=await runPrepared(policy,'router-test',approval);assert.equal(result.status,status);assert.equal(result.verified,false);}
 else{await assert.rejects(()=>runPrepared(policy,'router-test',approval),{code:'EPERM'});const state=await inspect(policy,'router-test');assert.equal(state.status,'cleanup-uncertain');assert.equal(state.lock_retained,true);}
+assert.ok(inspectionCount>0,'denied probes must inspect the detached group');
 const next=await prepare(policy,${JSON.stringify(packet(f.workspace,{task_id:'next-task'}))}),nextApproval={...approval,approved_digest:next.approval_digest};
 dead=!transition;
 if(status)assert.equal((await runPrepared(policy,'next-task',nextApproval)).status,status);
-else await assert.rejects(()=>runPrepared(policy,'next-task',nextApproval),/Workspace already has a run/);`;
-  await exec(process.execPath,['--input-type=module','-e',script],{timeout:10000});
+else await assert.rejects(()=>runPrepared(policy,'next-task',nextApproval),/Workspace already has a run/);
+console.log(JSON.stringify({inspectionCount,runStatus:(await inspect(policy,'router-test')).status,lockRetained:(await inspect(policy,'router-test')).lock_retained??false}));`;
+  const {stdout}=await exec(process.execPath,['--input-type=module','-e',script],{timeout:10000});
+  const observed=JSON.parse(stdout.trim());
+  assert.ok(observed.inspectionCount>0);
+  assert.equal(observed.runStatus,scenario.status??'cleanup-uncertain');
+  assert.equal(observed.lockRetained,!scenario.status);
  });
 });
 

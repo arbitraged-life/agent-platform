@@ -479,6 +479,57 @@ test("independent instances serialize one-slot admission while delivery is block
   assert.deepEqual(JSON.parse(await readFile(path.join(dir, `${winner.event_id}.json`), "utf8")).event, winner);
 });
 
+test("admission preserves an undefined callback failure and releases its lock", async (t) => {
+  const dir = await directory(t);
+  const event = turnEvent({ runtime: "fixture", runId: "undefined-admission-error", ...timing });
+  let failClock = true, delivered = 0;
+  const queue = createDurableExporter({
+    directory: dir,
+    now: () => {
+      if (failClock) throw undefined;
+      return timing.endedMs;
+    },
+    exporter: async (record) => { delivered++; return result(record); },
+  });
+  await assert.rejects(queue(event), error => error === undefined);
+  assert.deepEqual(await outboxRows(dir), []);
+  assert.equal(delivered, 0);
+  failClock = false;
+  const receipt = await queue(event);
+  assert.equal(receipt.outbox_status, "recorded");
+  assert.equal(receipt.delivery_attempts, 1);
+  assert.equal(delivered, 1);
+});
+
+test("admission lock is released before a blocked network delivery", async (t) => {
+  const dir = await directory(t);
+  const first = turnEvent({ runtime: "fixture", runId: "network-first", ...timing });
+  const second = turnEvent({ runtime: "fixture", runId: "network-second",
+    startedMs: timing.startedMs + 1, endedMs: timing.endedMs + 1 });
+  let release, notify;
+  const blocked = new Promise((resolve) => { release = resolve; });
+  const started = new Promise((resolve) => { notify = resolve; });
+  const queue = () => createDurableExporter({
+    directory: dir, maxEntries: 1,
+    exporter: async (event) => {
+      if (event.event_id === first.event_id) {
+        notify();
+        await blocked;
+      }
+      return result(event);
+    },
+  });
+  const pending = queue()(first);
+  await started;
+  try {
+    await assert.rejects(queue()(second), /capacity exhausted/);
+    assert.deepEqual(await outboxRows(dir), [`${first.event_id}.json`]);
+  } finally {
+    release();
+    await pending;
+  }
+});
+
 test("two processes serialize distinct one-slot admissions without executing exporter", async (t) => {
   const dir = await directory(t);
   const first = turnEvent({ runtime: "fixture", runId: "first-process", ...timing });

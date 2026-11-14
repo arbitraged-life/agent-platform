@@ -162,9 +162,11 @@ export function createOpikExporter(configuration, { environment = process.env, f
       ])
         requests.push({ key: `${resource}:${record.id}`, resource, method: "POST", record });
     }
+    if (requests.length > 2) throw new Error("Unsupported telemetry request count");
     const accepted = [...acceptedRecords];
-    for (const { key, resource, method, record } of requests) {
-      if (accepted.includes(key)) continue;
+    async function sendRequest(request) {
+      const { key, resource, method, record } = request;
+      if (accepted.includes(key)) return;
       const response = await sendTelemetry(
         fetcher,
         `${config.endpoint}/v1/private/${resource}`,
@@ -184,6 +186,9 @@ export function createOpikExporter(configuration, { environment = process.env, f
       await discardTelemetryResponse(response);
       accepted.push(key);
     }
+    // A completed turn produces at most a trace and its dependent span.
+    if (requests[0]) await sendRequest(requests[0]);
+    if (requests[1]) await sendRequest(requests[1]);
     return acceptedReceipt(snapshot.trace_id ?? snapshot.event_id, accepted);
   };
 }

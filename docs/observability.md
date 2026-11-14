@@ -49,6 +49,7 @@ support correlation and PostHog deduplication; they are not an exactly-once guar
 Unused HTTP response bodies are cancelled without exposing their content or
 changing acceptance/retry classifications. OTLP success bodies remain available
 to the bounded acknowledgement parser; failed or oversized reads are cancelled.
+Opik completes response disposal before dispatching the dependent span.
 
 The Opik mapping follows the
 [create-span API](https://www.comet.com/docs/opik/reference/rest-api/spans/create-span):
@@ -196,6 +197,13 @@ holds this transaction, and a terminated lock owner does not strand the lock.
 Do not delete the admission file while writers are active. Stop old-version
 writers before sharing an outbox with this version; they do not participate in
 the admission lock.
+
+Admission preflight does not open and close an existing SQLite inode: doing so
+can release another connection's POSIX locks in the same process. A newly created
+lock-file descriptor closes before its inode is published. Transaction release,
+record-save cleanup, and delivery-claim release preserve the primary failure
+alongside cleanup failures instead of replacing one with another. A rejected
+admission never starts network delivery.
 
 Native OMP payload references (inspected 2026-10-12):
 [shared events](https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/extensibility/shared-events.ts),

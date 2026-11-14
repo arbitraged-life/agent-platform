@@ -197,6 +197,25 @@ test('Opik ignores body cancellation failures while retaining HTTP classificatio
  }
 });
 
+test('Opik waits for response disposal before dispatching the dependent span',async()=>{
+ const event=turnEvent({runtime:'omp',runId:'serial-disposal',...timing});
+ let release,notify;
+ const blocked=new Promise(resolve=>{release=resolve;});
+ const started=new Promise(resolve=>{notify=resolve;});
+ const sent=[];
+ const exporter=createOpikExporter(config,{environment:{OPIK_API_KEY:'fixture'},fetcher:async(_url,options)=>{
+  sent.push(JSON.parse(options.body));
+  if(sent.length===1)return new Response(new ReadableStream({cancel:async()=>{notify();await blocked;}}));
+  return new Response(null,{status:200});
+ }});
+ const delivery=exporter(event);
+ await started;
+ assert.equal(sent.length,1);
+ release();
+ assert.equal((await delivery).delivery_status,'accepted');
+ assert.equal(sent.length,2);
+});
+
 test('evidence metrics retain privacy checks and valid projections for legacy exporters',async()=>{
  const metrics=turnEvent({runtime:'omp',runId:'run',...timing}),observedMs=timing.startedMs;
  const envelope=evidenceRecord({eventName:'agent.turn.finished',traceId:metrics.event_id,runId:'run',runtime:'omp',
