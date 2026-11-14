@@ -163,11 +163,12 @@ npm run typecheck
 npm run test:integration   # optional: real siteverify, uses Cloudflare test credentials
 ```
 
-Multipart cancellation fixtures finish encoding `FormData` before presenting its
-bytes as an incoming request stream. This separates client-side encoding from
-Worker-side cancellation under Node 24. HTTP smoke checks use chunked requests
-without `Content-Length` to exercise the streamed byte limit rather than only
-the declared-length rejection path.
+The multipart cancellation tests in `test/unit.test.ts` finish encoding
+`FormData` before presenting its bytes as an incoming request stream. This
+separates client-side encoding from Worker-side cancellation under Node 24.
+For a manual HTTP smoke check, send chunked requests without `Content-Length`
+to exercise the streamed byte limit rather than only the declared-length
+rejection path.
 
 Cloudflare's documented test secrets:
 
