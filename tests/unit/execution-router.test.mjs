@@ -588,6 +588,53 @@ test('exceptional supervision still kills a SIGTERM-ignoring descendant',async()
  }
 });
 
+test('Darwin denied group probes release a workspace only with positive zombie-only evidence',async(t)=>{
+ for(const scenario of [
+  {name:'zombie-only group',states:'Z\nZ+\n',status:'returned'},
+  {name:'live member',states:'Z\nS\n'},
+  {name:'empty inspection',states:''},
+  {name:'unreadable inspection',states:'unreadable'},
+  {name:'zombie transition while polling',states:'Z\n',transition:'poll',status:'needs-review'},
+  {name:'zombie transition before SIGTERM',states:'Z\n',transition:'SIGTERM',status:'needs-review'},
+  {name:'zombie transition before SIGKILL',states:'Z\n',transition:'SIGKILL',status:'needs-review'},
+  {name:'denied SIGTERM with a live member',states:'Z\nS\n',transition:'SIGTERM'},
+  {name:'denied SIGKILL with unreadable inspection',states:'unreadable',transition:'SIGKILL'},
+ ])await t.test(scenario.name,async()=>{
+  const f=await fixture(),p=await prepare(f.policy,packet(f.workspace));
+  const script=`import assert from 'node:assert/strict';import cp from 'node:child_process';import {promisify} from 'node:util';import {syncBuiltinESMExports} from 'node:module';
+const realExec=promisify(cp.execFile),realKill=process.kill,{states,status,transition}=${JSON.stringify(scenario)};
+cp.execFile=Object.assign((...args)=>realExec(...args),{[promisify.custom]:async(file,...args)=>{
+ if(file!=='/bin/ps')return realExec(file,...args);
+ if(states==='unreadable')throw new Error('process inspection unavailable');
+ return {stdout:states,stderr:''};
+}});
+syncBuiltinESMExports();Object.defineProperty(process,'platform',{value:'darwin'});
+let dead=!transition;
+process.kill=(pid,signal)=>{
+ if(pid>=0)return realKill(pid,signal);
+ if(signal===0){if(!dead)return true;throw Object.assign(new Error('group probe denied'),{code:'EPERM'});}
+ if(transition){
+  if(signal===(transition==='poll'?'SIGTERM':transition)){
+   dead=true;
+   if(transition!=='poll')throw Object.assign(new Error('group signal denied'),{code:'EPERM'});
+  }
+  return true;
+ }
+ return realKill(pid,signal);
+};
+const {loadPolicy}=await import(${JSON.stringify(new URL('../../runtime/execution-router/policy.mjs',import.meta.url).href)});
+const {runPrepared,prepare,inspect}=await import(${JSON.stringify(new URL('../../runtime/execution-router/dispatch.mjs',import.meta.url).href)});
+const policy=await loadPolicy(${JSON.stringify(f.policyPath)}),approval={approved_digest:${JSON.stringify(p.approval_digest)},approval_ref:'user approved fixture'};
+if(status){const result=await runPrepared(policy,'router-test',approval);assert.equal(result.status,status);assert.equal(result.verified,false);}
+else{await assert.rejects(()=>runPrepared(policy,'router-test',approval),{code:'EPERM'});const state=await inspect(policy,'router-test');assert.equal(state.status,'cleanup-uncertain');assert.equal(state.lock_retained,true);}
+const next=await prepare(policy,${JSON.stringify(packet(f.workspace,{task_id:'next-task'}))}),nextApproval={...approval,approved_digest:next.approval_digest};
+dead=!transition;
+if(status)assert.equal((await runPrepared(policy,'next-task',nextApproval)).status,status);
+else await assert.rejects(()=>runPrepared(policy,'next-task',nextApproval),/Workspace already has a run/);`;
+  await exec(process.execPath,['--input-type=module','-e',script],{timeout:10000});
+ });
+});
+
 test('isolated read-only profiles allow omitted protected branches',async()=>{
  const f=await fixture(),linked=path.join(f.root,'read-only-linked');
  await exec('git',['-C',f.workspace,'worktree','add','-qb','readonly-feature',linked]);
