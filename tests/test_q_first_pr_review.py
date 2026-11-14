@@ -86,6 +86,20 @@ class QFirstTests(unittest.TestCase):
         self.assertIn("race conditions", result["q_review_bodies_unverified"][0]["body_excerpt"])
         self.assertEqual(result["active_q_findings"], 0)
 
+    def test_full_q_text_changes_are_visible_without_exporting_full_body(self):
+        first = pr()
+        first["reviews"]["nodes"][0]["body"] = "A" * 500 + "first"
+        initial = q_first.classify(first, [thread(comment("amazon-q-developer", "B" * 320 + "first"))], "o/r")
+        second = pr()
+        second["reviews"]["nodes"][0]["body"] = "A" * 500 + "second"
+        changed = q_first.classify(second, [thread(comment("amazon-q-developer", "B" * 320 + "second"))], "o/r")
+        self.assertEqual(initial["q_review_bodies_unverified"][0]["body_excerpt"],
+                         changed["q_review_bodies_unverified"][0]["body_excerpt"])
+        self.assertNotEqual(initial["q_review_bodies_unverified"][0].get("body_sha256"),
+                            changed["q_review_bodies_unverified"][0].get("body_sha256"))
+        self.assertNotEqual(initial["findings"][0].get("thread_sha256"),
+                            changed["findings"][0].get("thread_sha256"))
+
     def test_truncated_history_with_no_visible_q_is_unknown(self):
         record = pr(reviewed=False)
         record["reviews"]["pageInfo"] = {"hasPreviousPage": True}

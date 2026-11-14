@@ -1,25 +1,26 @@
-# Execution Router v1.0.6
+# Execution Router v1.1.0
 
-A shared decision skill and small, dependency-free local handoff supervisor for a
-multi-brain execution mesh. ChatGPT, CLI coding agents, and other local agents can
-all be valid reasoning/execution surfaces over the same authoritative repositories
-and systems. The router does not replace ChatGPT's platform routing, a coding
-harness, or an OS sandbox.
+A shared decision skill and dependency-free local handoff supervisor. Connected
+tools, CLI coding agents, and remote services are peer execution surfaces over
+the same authoritative repositories and systems. The router does not replace
+host routing, a coding harness, or an OS sandbox. Concrete host procedures live
+in linked adapters; private transport and provider choices remain consumer-owned.
 
 ## Execution model
 
 The system that owns the state remains authoritative regardless of which executor
-performed the work. Prefer the lowest-overhead authorized surface that is best
-suited to complete and verify the task. ChatGPT connectors are often ideal for
-app-owned state; coding/local agents can be better for sustained implementation,
-repository-native harnesses, local test loops, or resumable execution. Handoff is
-a routing choice, not an escalation hierarchy.
+performed the work. Select by capability, locality, lifecycle, material cost and
+user preference within the current authorization and host boundary. An owning
+connector can complete app-owned actions; a coding agent can provide repository
+harnesses, local test loops, or resumable execution. Handoff is a routing choice,
+not an escalation hierarchy or a grant of authority.
 
-### Desktop Commander transport selection
+### Direct-local transport selection
 
 Transport preference is consumer-owned deployment policy. The reusable
-`routeTask` decision stops at `chatgpt-local`; transport sub-selection within
-that route is performed by the consuming controller using its trusted
+`routeTask` decision stops at `direct-local` with routing contract v2, or
+`chatgpt-local` with the default legacy v1 contract. Transport sub-selection
+within that route is performed by the consuming controller using its trusted
 configuration rather than a universal private/direct or hosted preference.
 
 Treat the selected transport and target device as part of the execution context:
@@ -30,6 +31,44 @@ Before same-device replay, establish that the original invocation has terminated
 or use an idempotency/operation-status mechanism that makes replay safe; then
 inspect authoritative target state. Transport selection does not change
 ownership, authorization, or approval boundaries.
+
+### Routing contract compatibility
+
+`route --facts FILE` and `routeTask(facts)` select routing contract v2 only
+when `facts.contract_version` is the JSON number `2`. An omitted version or
+the number `1` uses the existing v1 behavior and labels. Other versions,
+including strings and null, fail closed. Route labels map as follows:
+
+| Meaning | v1 (default) | v2 |
+| --- | --- | --- |
+| Owning tool | `chatgpt-native` | `owner-tool` |
+| Direct local tool | `chatgpt-local` | `direct-local` |
+| Separate executor | `local-agent` | `delegated-agent` |
+| No authorized path | `needs-user` | `needs-user` |
+
+Both contracts accept optional `native_available` and `local_available`
+capabilities and `authority_blocked`. When supplied, these must be JSON
+booleans; authorization denial always returns `needs-user`, regardless of
+available tools. Optional delegation additionally requires a recognized
+`delegate_reason` (`missing-capability`, `execution-lifecycle`,
+`local-harness`, or `explicit-user-choice`) and nonblank `delegate_detail`.
+Neither complexity alone nor an unrecognized reason authorizes a handoff.
+
+V2 adds independent `delegate_available` and `host_delegation_required`
+booleans. The first describes an actual available separate executor, which
+can be remote even when `local_available` is false; local tool availability
+does not imply delegated executor availability. A host-required task boundary
+is itself a concrete reason to delegate when that executor is available.
+Otherwise the router returns `needs-user`, never an owning tool or direct call.
+This implementation refuses both v2-only fields under contract v1, even when
+false. Older installed implementations can ignore unknown fields, so callers
+must verify the exact installed executable before using v2. A non-executing
+route probe with `contract_version:2`, `host_delegation_required:true`,
+`delegate_available:true`, `native_available:true` and `local_available:true`
+must return `delegated-agent`. Reject errors, legacy labels and other outcomes;
+never dispatch host-bound work from an unverified result. Source publication
+does not establish this installed capability. The routing contract does not
+itself authorize a launch or bypass task, policy, or approval checks.
 
 ## Ownership
 
@@ -45,9 +84,9 @@ Run `node scripts/execution/router.mjs --help`. Supply a private `--policy` JSON
 file for doctor/prepare/run/status/cancel/verify. The template is maintained by
 your operational repository; the reusable framework contains no personal paths,
 account identifiers, credentials, or blanket launch approvals.
-For `route --facts FILE`, supplied `authority_blocked`, `native_available`,
-and `local_available` values must be JSON booleans; strings such as `"false"`
-are rejected instead of being interpreted as available capabilities.
+For `route --facts FILE`, supply facts as JSON. Typed capabilities and
+versioning are described above; strings such as `"false"` are rejected
+instead of being interpreted as available capabilities.
 Writable profiles require the private policy to list the repository's protected
 branch names under `protected_branches` (for example,
 `["main","master","trunk","develop","release"]`); the launcher also always
@@ -60,18 +99,54 @@ workspace roots, and state directory, not just literal policy JSON. Moving
 a relative policy path to a different executable invalidates prior approval.
 An optional per-profile `max_output_bytes` can lower the default 10 MiB output
 ceiling; unsupported/unknown policy settings fail closed.
+PR review tasks also require `review_tools` with absolute executable paths for
+`python` and `gh`. Both binaries are resolved, hashed in the policy approval,
+and rechecked before every Q snapshot. The launcher invokes the bundled helper
+through pinned Python with an isolated import path and constructs a child-only
+`PATH` starting at the pinned GitHub CLI directory; the helper runs only the
+fixed `gh` command, not a CLI-supplied executable. It does not trust the ambient
+`PATH` for either tool and bounds the total pagination read to 55 seconds.
 
 Profile names are own JSON keys, including `__proto__`; inherited names are
 not profiles. The canonical policy digest covers every configured profile.
 The router's internal `router_version` is distinct from the operator-managed
 `policy_version`. Prepared approval digests bind the internal router version;
 approvals prepared by an older router must be prepared and approved again
-before launch. Existing returned runs remain available for inspection and
-controller verification.
+before launch. Authenticated `returned` runs with an unchanged historical v1
+packet digest may still receive controller verification using the same profile,
+workspace, policy, artifact and acceptance checks. Their persisted packet is
+not rewritten. New v1 preparation, any v1 launch, and unfinished/uncertain
+v1 results remain denied; this historical read path grants no dispatch access.
+
+Task packets require `schema_version:2` and every task declares
+`review_context`: `{"schema_version":1,"kind":"general"}`
+for non-PR work, or `kind:"pr-review"` with `repository` (`owner/name`),
+positive integer `pr`, exact 40-hex `head_sha`, and an `acceptance` record.
+That record has a nonempty independent controller `verifier` and `summary`,
+plus `findings` entries (`thread_id`, `disposition` of `fixed`,
+`not-actionable` or `escalate`, and concrete `evidence`) for every active Q
+thread. Each nonempty top-level Q review body requires an indexed
+`review_bodies` evidence entry. A PR review/remediation dispatch with unknown,
+truncated, unreviewed, stale or changed Q evidence is denied before executor
+launch, rather than routed to another provider. The canonical bundled
+`q-first-pr-review` helper performs only read-only GitHub GraphQL calls; it
+does not invoke inference, request a review or post comments. Its snapshot
+digest (including complete Q review body/thread hashes and the bundled helper
+bytes) joins the prepared approval and is rechecked before launch. A failed
+prelaunch read does not consume approval or launch the executor. The task
+kind is an explicit typed operator assertion, not an inference from prose:
+misclassifying PR work as `general`, direct use of other executors and
+controller identity authentication remain outside this cooperative boundary.
+The recorded verifier is an attestation, not cryptographic evidence of
+independent human review. This source version does not activate consumers.
 
 `prepare` never calls a model. `run` requires an approval reference and exact
-prepared digest. `doctor` checks CLI flags and subscription authentication but
-does not make a model request. `run` is supervised while the launcher process is
+prepared digest. Codex-specific executable identity, subscription login
+checks, fixed argv (including sandbox, no user configuration, no network
+access in workspace-write mode, and no approval prompts) live in the concrete
+Codex adapter. Manual profiles remain handoff-only and cannot launch.
+`doctor` checks Codex CLI flags and subscription authentication but does not
+make a model request. `run` is supervised while the launcher process is
 alive; it is not a new daemon or scheduler. Cancellation is a request to that
 supervisor, not a facility to kill an arbitrary PID.
 
@@ -175,6 +250,19 @@ repositories and a fixture executable with Codex's interface. No provider is
 called. This validates mechanical behavior, not end-to-end model quality or
 whether ChatGPT will invoke the skill in every new conversation. Run fresh-chat
 routing scenarios separately after installing the plugin/project overlay.
+The deterministic `node evals/routing.mjs` cases exercise both contract
+versions, denied and host-required boundaries, remote executor availability,
+and invalid versions/typed flags. These are source-level routing checks, not
+evidence of an installed overlay or live deployment. Updating reusable
+source alone does not change a private policy, installed plugin, active
+runtime, or provider configuration.
+
+The connected coding-agent procedure reconciles the already-published proposal
+in [PR #95](https://github.com/arbitraged-life/agent-platform/pull/95), source
+`4b6457c73b51dd598a3a5a8caf6e7f10dcdabd39`. The BB adapter retains that proposal's
+reference and its official-source baseline; the generic procedure is factored
+into this neutral core. This reconciliation does not merge or close that PR,
+attest current BB service health, or update any installed launcher.
 
 ## Maintenance
 

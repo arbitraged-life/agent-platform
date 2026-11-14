@@ -11,6 +11,11 @@ and additional static analyzers).
 The GitHub Actions CI remains responsible for repository-specific validation,
 platform/runtime tests, and the independent TruffleHog secret job. Mergify
 requires `qlty check` plus those deterministic checks before merge.
+The secret gate runs the TruffleHog image pinned by digest and consumes JSONL
+results. It permits one proven synthetic Postgres fixture result only when its
+commit, file, line, detector, verification state, and raw-value SHA-256 all
+match the reviewed disposition in `scripts/trufflehog_gate.py`. Malformed JSON,
+scanner failures, duplicate results, or any other finding fail the gate.
 
 The old reusable workflow had no active external default-branch consumers when
 retired. Migration provenance remains in `docs/MIGRATION_PROVENANCE.md` and

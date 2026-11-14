@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import worker, { WORKER_VERSION } from '../src/index.js';
+import worker from '../src/index.js';
 import type { Env } from '../src/types.js';
 
 const ENV: Env = {
@@ -31,7 +31,6 @@ describe('validation surface — /health', () => {
 		const body = (await res.json()) as { ok: boolean; version: string };
 		expect(body.ok).toBe(true);
 		expect(body.version).toMatch(/^\d+\.\d+\.\d+$/);
-		expect(body.version).toBe(WORKER_VERSION);
 	});
 
 	it('GET / returns the same shape as /health', async () => {
@@ -87,7 +86,9 @@ describe('validation surface — dummy siteverify returns structured error', () 
 		expect(body['error-codes'].length).toBeGreaterThan(0);
 		expect(body._worker).toBeDefined();
 		expect(typeof body._worker?.duration_ms).toBe('number');
-		expect(body._worker?.worker_version).toBe(WORKER_VERSION);
+		const health = await worker.fetch(new Request('https://w/health'), ENV);
+		const healthBody = (await health.json()) as { version: string };
+		expect(body._worker?.worker_version).toBe(healthBody.version);
 	});
 
 	it('returns structured error on Worker-level failure (no bare 500)', async () => {

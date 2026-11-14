@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile, rm, readdir } from "node:fs/promises";
 import os from "node:os";
+import { execFileSync, spawn } from "node:child_process";
 import path from "node:path";
 import { createUuidV7, turnEvent } from "../../runtime/observability/records.mjs";
 import { evidenceRecord, stableEvidenceId, validateEvidence } from "../../runtime/observability/evidence.mjs";
@@ -55,8 +56,22 @@ test("delivery destination schema accepts any key order but rejects missing or e
   const extra = { ...record, destinations: { ...record.destinations, unused: record.destinations.opik } };
   assert.throws(() => validateDeliveryRecord(missing), /destinations/);
   assert.throws(() => validateDeliveryRecord(extra), /destinations/);
+  const joined = { ...record, destinations: { "opik,posthog": record.destinations.opik } };
+  assert.throws(() => validateDeliveryRecord(joined), /destinations/);
   const array = Object.assign([], record.destinations);
   assert.throws(() => validateDeliveryRecord({ ...record, destinations: array }), /destinations/);
+});
+
+test("equivalent delivery receipts retain identity regardless of destination insertion order", () => {
+  const event = turnEvent({ runtime: "fixture", runId: "run", ...timing });
+  const timestamp = new Date(timing.endedMs).toISOString();
+  const receipt = { observed_at: timestamp, recorded_at: timestamp };
+  const first = deliveryRecord(event, { ...receipt, destinations: { honeycomb: accepted, logfire: accepted } });
+  const reordered = deliveryRecord(event, { ...receipt, destinations: { logfire: accepted, honeycomb: accepted } });
+  assert.equal(first.event_id, reordered.event_id);
+  const changed = deliveryRecord(event, { ...receipt, destinations: { honeycomb: accepted,
+    logfire: { delivery_status: "denied", reason_code: "HTTP_401", failure_stage: "connector_authentication" } } });
+  assert.notEqual(first.event_id, changed.event_id);
 });
 
 test("operation evidence rejects unknown fields and never infers effect verification", () => {
@@ -214,6 +229,190 @@ test("denial and unknown acceptance never automatically replay", async (t) => {
   await writeFile(file, JSON.stringify(row));
   assert.equal((await queue.drain())[0].outbox_status, "interrupted");
   assert.equal(calls, 1);
+});
+test("outbox refuses FIFO entries without waiting for a writer", async (t) => {
+  const dir = await directory(t);
+  const event = turnEvent({ runtime: "fixture", runId: "fifo", ...timing });
+  execFileSync("mkfifo", [path.join(dir, `${event.event_id}.json`)]);
+  const moduleUrl = new URL("../../runtime/observability/outbox.mjs", import.meta.url).href;
+  const script = `import { createDurableExporter } from ${JSON.stringify(moduleUrl)};
+    const event = JSON.parse(process.argv[2]);
+    try {
+      await createDurableExporter({ directory: process.argv[1], exporter: async () => { throw Error("network called"); } })(event);
+      console.log("accepted");
+    } catch (error) { console.log(error.message); }`;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", script, dir, JSON.stringify(event)],
+    { stdio: ["ignore", "pipe", "ignore"] });
+  let output = "";
+  child.stdout.on("data", (chunk) => { output += chunk; });
+  const timeout = setTimeout(() => child.kill("SIGKILL"), 5000);
+  const exitCode = await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code) => resolve(code));
+  });
+  clearTimeout(timeout);
+  assert.equal(exitCode, 0, "FIFO outbox open blocked or child failed");
+  assert.match(output, /Unsafe outbox entry/);
+});
+
+test("active claims are not interrupted and do not starve later rows", async (t) => {
+  const dir = await directory(t);
+  const first = turnEvent({ runtime: "fixture", runId: "active", ...timing });
+  const second = turnEvent({ runtime: "fixture", runId: "later", startedMs: timing.startedMs + 1, endedMs: timing.endedMs + 1 });
+  let entered, release;
+  const started = new Promise((resolve) => { entered = resolve; });
+  const held = new Promise((resolve) => { release = resolve; });
+  let interruptions = 0, calls = 0;
+  const owner = createDurableExporter({ directory: dir, exporter: async (event) => {
+    entered();
+    await held;
+    return result(event);
+  } });
+  const pending = owner(first);
+  t.after(() => release());
+  await started;
+  await createDurableExporter({
+    directory: dir, exporter: async () => assert.fail("blocked delivery"),
+    beforeAttempt: async () => ({ delivery_status: "capacity_blocked" }),
+  })(second);
+  const observer = createDurableExporter({
+    directory: dir,
+    exporter: async (event) => { calls++; return result(event); },
+    onInterrupted: async () => { interruptions++; },
+  });
+  assert.equal((await observer.drain({ limit: 1 }))[0].outbox_status, "recorded");
+  assert.equal(interruptions, 0);
+  assert.equal(calls, 1);
+  release();
+  await pending;
+  assert.equal(interruptions, 0);
+});
+
+test("abandoned same-host claims account once but never replay unknown acceptance", async (t) => {
+  const dir = await directory(t);
+  const event = turnEvent({ runtime: "fixture", runId: "crash", ...timing });
+  const moduleUrl = new URL("../../runtime/observability/outbox.mjs", import.meta.url).href;
+  const script = `import { createDurableExporter } from ${JSON.stringify(moduleUrl)};
+    const event = JSON.parse(process.argv[2]);
+    await createDurableExporter({ directory: process.argv[1], exporter: async () => process.exit(0) })(event);`;
+  const child = spawn(process.execPath, ["--input-type=module", "-e", script, dir, JSON.stringify(event)], { stdio: "ignore" });
+  const exitCode = await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code) => resolve(code));
+  });
+  assert.equal(exitCode, 0);
+  let interruptions = 0, calls = 0;
+  const resumed = createDurableExporter({
+    directory: dir,
+    exporter: async () => { calls++; assert.fail("unknown acceptance replayed"); },
+    onInterrupted: async (_record, { attempts }) => { assert.equal(attempts, 1); interruptions++; },
+  });
+  assert.equal((await resumed.drain())[0].outbox_status, "interrupted");
+  assert.equal(interruptions, 1);
+  assert.deepEqual(await resumed.drain(), []);
+  assert.equal((await resumed.retry(event.event_id)).delivery_status, "uncertain");
+  assert.equal(interruptions, 1);
+  assert.equal(calls, 0);
+  const row = JSON.parse(await readFile(path.join(dir, `${event.event_id}.json`), "utf8"));
+  assert.equal(row.state, "interrupted");
+  assert.equal(row.attempts, 1);
+  assert.ok((await readdir(dir)).includes(`${event.event_id}.claim`));
+});
+test("PID-only legacy claims remain uncertain without stealing or replay", async (t) => {
+  const dir = await directory(t);
+  const event = turnEvent({ runtime: "fixture", runId: "legacy", ...timing });
+  const blocked = createDurableExporter({
+    directory: dir, exporter: async () => assert.fail("blocked delivery"),
+    beforeAttempt: async () => ({ delivery_status: "capacity_blocked" }),
+  });
+  await blocked(event);
+  const file = path.join(dir, `${event.event_id}.json`);
+  const row = JSON.parse(await readFile(file, "utf8"));
+  row.state = "in_flight";
+  row.attempts = 1;
+  await writeFile(file, JSON.stringify(row));
+  const claim = path.join(dir, `${event.event_id}.claim`);
+  await writeFile(claim, "99999999", { mode: 0o600 });
+  let interruptions = 0;
+  const observer = createDurableExporter({
+    directory: dir, exporter: async () => assert.fail("unknown acceptance replayed"),
+    onInterrupted: async () => { interruptions++; },
+  });
+  assert.equal((await observer.drain({ limit: 1 }))[0].outbox_status, "claimed");
+  assert.equal((await observer.retry(event.event_id)).outbox_status, "claimed");
+  assert.equal(interruptions, 0);
+  assert.equal(JSON.parse(await readFile(file, "utf8")).state, "in_flight");
+  assert.equal(await readFile(claim, "utf8"), "99999999");
+});
+
+
+test("interrupted rows stop occupying bounded drain slots and retain evidence", async (t) => {
+  const dir = await directory(t);
+  const first = turnEvent({ runtime: "fixture", runId: "earlier", ...timing });
+  const second = turnEvent({ runtime: "fixture", runId: "later", startedMs: timing.startedMs + 1, endedMs: timing.endedMs + 1 });
+  const blocked = createDurableExporter({
+    directory: dir, exporter: async () => assert.fail("blocked delivery"),
+    beforeAttempt: async () => ({ delivery_status: "capacity_blocked" }),
+  });
+  await blocked(first);
+  await blocked(second);
+  const file = path.join(dir, `${first.event_id}.json`);
+  const row = JSON.parse(await readFile(file, "utf8"));
+  row.state = "in_flight";
+  row.attempts = 1;
+  await writeFile(file, JSON.stringify(row));
+  let interruptions = 0, calls = 0;
+  const resumed = createDurableExporter({
+    directory: dir,
+    exporter: async (event) => { calls++; assert.equal(event.event_id, second.event_id); return result(event); },
+    onInterrupted: async () => { interruptions++; },
+  });
+  assert.equal((await resumed.drain({ limit: 1 }))[0].outbox_status, "interrupted");
+  assert.equal((await resumed.drain({ limit: 1 }))[0].outbox_status, "recorded");
+  assert.equal(calls, 1);
+  assert.equal(interruptions, 1);
+  assert.equal(JSON.parse(await readFile(file, "utf8")).state, "interrupted");
+});
+test("an interrupted row cannot be evicted even when its old receipts were accepted", async (t) => {
+  const dir = await directory(t);
+  const first = turnEvent({ runtime: "fixture", runId: "accepted-before-crash", ...timing });
+  const second = turnEvent({ runtime: "fixture", runId: "new", startedMs: timing.startedMs + 1, endedMs: timing.endedMs + 1 });
+  const queue = createDurableExporter({ directory: dir, maxEntries: 1, exporter: async (event) => result(event) });
+  await queue(first);
+  const file = path.join(dir, `${first.event_id}.json`);
+  const row = JSON.parse(await readFile(file, "utf8"));
+  row.state = "in_flight";
+  row.attempts = 2;
+  await writeFile(file, JSON.stringify(row));
+  await queue.drain();
+  await assert.rejects(queue(second), /capacity/);
+  assert.equal(JSON.parse(await readFile(file, "utf8")).state, "interrupted");
+});
+
+
+test("delivery and claim-release failures preserve both causes without deleting a replacement claim", async (t) => {
+  const dir = await directory(t);
+  const event = turnEvent({ runtime: "fixture", runId: "claim-release", ...timing });
+  const claim = path.join(dir, `${event.event_id}.claim`);
+  const failure = new Error("capacity store unavailable");
+  const queue = createDurableExporter({
+    directory: dir,
+    exporter: async () => assert.fail("network called"),
+    beforeAttempt: async () => {
+      await rm(claim);
+      await writeFile(claim, "replacement owner", { mode: 0o600 });
+      throw failure;
+    },
+  });
+  await assert.rejects(queue(event), error => error instanceof AggregateError &&
+    error.errors[0] === failure && error.errors[1].message === "Outbox claim ownership changed");
+  assert.equal(await readFile(claim, "utf8"), "replacement owner");
+  assert.equal((await queue(event)).delivery_status, "uncertain");
+});
+
+test("invalid outbox retry IDs reject through the Promise API", async (t) => {
+  const queue = createDurableExporter({ directory: await directory(t), exporter: async () => assert.fail("network called") });
+  await assert.rejects(queue.retry("invalid"), /Invalid outbox event ID/);
 });
 test("bounded queue evicts delivered entries, retains blocked evidence and rejects overflow", async (t) => {
   const dir = await directory(t),

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, rmdir, writeFile, readFile, chmod, symlink, unlink, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { routeTask, validateTask, loadPolicy, resolveProfile, cleanEnvironment, digest, executableIdentity, VERSION } from '../../runtime/execution-router/policy.mjs';
@@ -10,7 +11,7 @@ import { prepare, runPrepared, inspect, requestCancel, acceptResult } from '../.
 const exec = promisify(execFile);
 const fixtureRoots=new Set();
 after(async()=>Promise.all([...fixtureRoots].map(root=>rm(root,{recursive:true,force:true}))));
-const packet = (workspace, overrides={}) => ({ schema_version:1, task_id:'router-test', project:'AGENT', objective:'Inspect the fixture without changes.', workspace, profile:'codex-readonly', actions:['read'], source_write_authorized:false, delegation_reason:'execution-lifecycle', delegation_detail:'Independent bounded repository loop is needed.', acceptance_criteria:['Report the fixture result.'], references:[], ...overrides });
+const packet = (workspace, overrides={}) => ({ schema_version:2, task_id:'router-test', project:'AGENT', objective:'Inspect the fixture without changes.', workspace, profile:'codex-readonly', actions:['read'], source_write_authorized:false, delegation_reason:'execution-lifecycle', delegation_detail:'Independent bounded repository loop is needed.', acceptance_criteria:['Report the fixture result.'], references:[], review_context:{schema_version:1,kind:'general'}, ...overrides });
 async function fixture(mode='success') {
  const root=await mkdtemp(path.join(tmpdir(),'execution-router-'));
  fixtureRoots.add(root);
@@ -36,7 +37,7 @@ test('route capability flags require actual booleans rather than truthy values',
  assert.equal(routeTask({authority_blocked:false,native_available:false,local_available:true}).route,'chatgpt-local');
 });
 test('route CLI refuses string flags instead of granting a false capability',async()=>{
- const f=await fixture(),facts=path.join(f.root,'facts.json'),cli=new URL('../../scripts/execution/router.mjs',import.meta.url).pathname;
+ const f=await fixture(),facts=path.join(f.root,'facts.json'),cli=fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url));
  await writeFile(facts,JSON.stringify({native_available:false,local_available:true}));
  assert.equal(JSON.parse((await exec(process.execPath,[cli,'route','--facts',facts])).stdout).route,'chatgpt-local');
  await writeFile(facts,JSON.stringify({native_available:'false',local_available:true}));
@@ -53,7 +54,133 @@ test('mocked surface capability and authorization outcomes do not bypass denied 
   ];
   for(const {label,facts,route} of cases)assert.equal(routeTask(facts).route,route,label);
 });
+test('routing contract v1 remains the default and accepts explicit version 1',()=>{
+ const facts={native_available:true,local_available:true,delegate_reason:'execution-lifecycle',delegate_detail:'Independent bounded loop'};
+ assert.equal(routeTask(facts).route,'local-agent');
+ assert.deepEqual(routeTask({...facts,contract_version:1}),routeTask(facts));
+ assert.equal(routeTask({contract_version:1,native_available:true}).route,'chatgpt-native');
+});
+test('routing contract v2 uses neutral direct and delegated labels',()=>{
+ assert.equal(routeTask({contract_version:2,native_available:true,local_available:true}).route,'owner-tool');
+ assert.equal(routeTask({contract_version:2,local_available:true}).route,'direct-local');
+ assert.equal(routeTask({contract_version:2,delegate_available:true,local_available:false,delegate_reason:'execution-lifecycle',delegate_detail:'Independent remote loop'}).route,'delegated-agent');
+ assert.equal(routeTask({contract_version:2,delegate_available:false,local_available:true,delegate_reason:'local-harness',delegate_detail:'Local tooling'}).route,'direct-local');
+});
+test('routing contract v2 host-required handoff cannot downgrade to direct execution',()=>{
+ const facts={contract_version:2,host_delegation_required:true,native_available:true,local_available:true,delegate_reason:'execution-lifecycle',delegate_detail:'Host must perform the task'};
+ assert.equal(routeTask({...facts,delegate_available:false}).route,'needs-user');
+ assert.equal(routeTask({...facts,delegate_available:true}).route,'delegated-agent');
+ assert.equal(routeTask({contract_version:2,host_delegation_required:true,delegate_available:true}).route,'delegated-agent');
+ assert.equal(routeTask({...facts,delegate_available:true,authority_blocked:true}).route,'needs-user');
+});
+test('routing contract v2 refuses delegation without a real executor and concrete reason',()=>{
+ const facts={contract_version:2,native_available:true,local_available:false,delegate_reason:'execution-lifecycle',delegate_detail:'Independent remote loop'};
+ assert.equal(routeTask(facts).route,'owner-tool');
+ assert.equal(routeTask({...facts,delegate_available:false}).route,'owner-tool');
+ assert.equal(routeTask({...facts,delegate_available:true,delegate_detail:' '}).route,'owner-tool');
+ assert.equal(routeTask({...facts,delegate_available:true,delegate_reason:'code-is-hard'}).route,'owner-tool');
+ assert.equal(routeTask({...facts,delegate_available:true,authority_blocked:true}).route,'needs-user');
+});
+test('routing contract versions and capabilities fail closed before route selection',()=>{
+ for(const version of [null,0,3,'1','2',true,1.5])assert.throws(()=>routeTask({contract_version:version,native_available:true}),/contract_version/);
+ assert.throws(()=>routeTask({contract_version:undefined,native_available:true}),/contract_version/);
+ for(const key of ['delegate_available','host_delegation_required']) {
+  assert.throws(()=>routeTask({[key]:false,native_available:true}),/contract_version 2/);
+  assert.throws(()=>routeTask({contract_version:1,[key]:false,authority_blocked:true}),/contract_version 2/);
+  for(const value of ['false',1,null])assert.throws(()=>routeTask({contract_version:2,[key]:value,authority_blocked:true}),new RegExp(`${key} must be boolean`));
+ }
+ assert.throws(()=>routeTask({contract_version:2,authority_blocked:true,native_available:'false'}),/native_available must be boolean/);
+});
+test('route CLI emits versioned labels and refuses legacy host-boundary facts',async()=>{
+ const f=await fixture(),facts=path.join(f.root,'facts.json'),cli=fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url));
+ await writeFile(facts,JSON.stringify({native_available:true}));
+ assert.equal(JSON.parse((await exec(process.execPath,[cli,'route','--facts',facts])).stdout).route,'chatgpt-native');
+ await writeFile(facts,JSON.stringify({contract_version:2,delegate_available:true,local_available:false,delegate_reason:'execution-lifecycle',delegate_detail:'Remote executor available'}));
+ assert.equal(JSON.parse((await exec(process.execPath,[cli,'route','--facts',facts])).stdout).route,'delegated-agent');
+ await writeFile(facts,JSON.stringify({contract_version:1,host_delegation_required:true,native_available:true}));
+ await assert.rejects(()=>exec(process.execPath,[cli,'route','--facts',facts]),/contract_version 2/);
+});
 
+test('legacy task schema cannot omit the mandatory typed review contract',()=>{
+ assert.throws(()=>validateTask(packet('/tmp/repo',{schema_version:1})),/schema_version/);
+});
+test('dispatch requires typed review intent rather than relying on skill prose',()=>{
+ const task=packet('/tmp/repo');
+ delete task.review_context;
+ assert.throws(()=>validateTask(task),/review_context/);
+ assert.throws(()=>validateTask(packet('/tmp/repo',{review_context:{schema_version:1,kind:'pr-review'}})),/PR review/);
+});
+test('pre-dispatch review gate denies missing Q coverage, stale heads and untriaged findings',async()=>{
+ const f=await fixture();
+ const context={schema_version:1,kind:'pr-review',repository:'owner/repo',pr:42,head_sha:'a'.repeat(40),
+   acceptance:{verifier:'independent-controller',summary:'Reviewed current diff and Q findings',findings:[],review_bodies:[]}};
+ const task=packet(f.workspace,{review_context:context});
+ const q={repository:'owner/repo',pr:42,head_sha:'a'.repeat(40),state:'OPEN',q_review_observed:false,
+   q_review_covers_head:null,review_history_truncated:false,q_review_body_list_truncated:false,
+   q_review_body_count:0,findings:[],q_review_bodies_unverified:[]};
+ const {validateReviewSnapshot}=await import('../../runtime/execution-router/dispatch.mjs');
+ assert.throws(()=>validateReviewSnapshot(context,q),/Q-first review/);
+ q.q_review_observed=true;q.q_review_covers_head=true;q.head_sha='b'.repeat(40);
+ assert.throws(()=>validateReviewSnapshot(context,q),/exact PR head/);
+ q.head_sha='a'.repeat(40);q.findings=[{thread_id:'thread-1'}];
+ assert.throws(()=>validateReviewSnapshot(context,q),/finding/);
+ context.acceptance.findings=[{thread_id:'thread-1',disposition:'escalate',evidence:'Current code needs repair.'}];
+ assert.doesNotThrow(()=>validateTask(task));
+ assert.doesNotThrow(()=>validateReviewSnapshot(context,q));
+});
+test('PR review dispatch refuses a policy without pinned Q executables',async()=>{
+ const f=await fixture(),task=packet(f.workspace,{review_context:{schema_version:1,kind:'pr-review',
+  repository:'owner/repo',pr:42,head_sha:(await exec('git',['-C',f.workspace,'rev-parse','HEAD'])).stdout.trim(),
+  acceptance:{verifier:'controller',summary:'Inspected review',findings:[],review_bodies:[]}}});
+ await assert.rejects(()=>prepare(f.policy,task),/review_tools/);
+});
+test('real Q helper and CLI deny unreviewed dispatch and stale Q head before Codex',async()=>{
+ const f=await fixture(),cli=new URL('../../scripts/execution/router.mjs',import.meta.url).pathname;
+ const binDir=path.join(f.root,'bin');await mkdir(binDir);
+ const responseFile=path.join(f.root,'q-response.json'),gh=path.join(binDir,'gh');
+ await writeFile(gh,`#!/bin/sh\nexec /bin/cat '${responseFile}'\n`);await chmod(gh,0o700);
+ const python=(await exec('which',['python3'])).stdout.trim();
+ f.data.review_tools={python,gh};await writeFile(f.policyPath,JSON.stringify(f.data));f.policy=await loadPolicy(f.policyPath);
+ const marker=path.join(f.root,'codex-dispatched');
+ const codex=f.data.profiles['codex-readonly'].executable;
+ await writeFile(codex,(await readFile(codex,'utf8')).replace("let prompt='';",
+  `require('node:fs').writeFileSync(${JSON.stringify(marker)},'dispatched');let prompt='';`));
+ const head=(await exec('git',['-C',f.workspace,'rev-parse','HEAD'])).stdout.trim(),review={schema_version:1,kind:'pr-review',repository:'owner/repo',pr:42,head_sha:head,
+  acceptance:{verifier:'independent-controller',summary:'Examined current Q findings and diff',findings:[],review_bodies:[]}};
+ const data={number:42,state:'OPEN',isDraft:false,url:'https://github.com/owner/repo/pull/42',headRefOid:head,
+  reviews:{nodes:[],pageInfo:{hasPreviousPage:false}},reviewThreads:{nodes:[],pageInfo:{hasNextPage:false,endCursor:null}}};
+ const response=()=>writeFile(responseFile,JSON.stringify({data:{repository:{pullRequest:data}}}));
+ const taskFile=path.join(f.root,'task.json');await writeFile(taskFile,JSON.stringify(packet(f.workspace,{review_context:review})));
+ const originalPath=process.env.PATH;process.env.PATH=`${binDir}:${originalPath}`;
+ try {
+  await response();
+  await assert.rejects(()=>exec(process.execPath,[cli,'prepare','--policy',f.policyPath,'--task',taskFile]),/Q-first review/);
+  await writeFile(responseFile,'not-json');
+  await assert.rejects(()=>exec(process.execPath,[cli,'prepare','--policy',f.policyPath,'--task',taskFile]),/Q-first review snapshot unavailable/);
+  await assert.rejects(()=>readFile(marker),/ENOENT/);
+  data.reviews.nodes=[{author:{login:'amazon-q-developer'},submittedAt:'2026-11-10T00:00:00Z',commit:{oid:head},body:''}];
+  const otherHead='b'.repeat(40);data.headRefOid=otherHead;data.reviews.nodes[0].commit.oid=otherHead;
+  review.head_sha=otherHead;await writeFile(taskFile,JSON.stringify(packet(f.workspace,{review_context:review})));await response();
+  await assert.rejects(()=>exec(process.execPath,[cli,'prepare','--policy',f.policyPath,'--task',taskFile]),/workspace HEAD/);
+  await assert.rejects(()=>readFile(marker),/ENOENT/);
+  data.headRefOid=head;data.reviews.nodes[0].commit.oid=head;review.head_sha=head;
+  await writeFile(taskFile,JSON.stringify(packet(f.workspace,{review_context:review})));
+  await response();
+  const prepared=JSON.parse((await exec(process.execPath,[cli,'prepare','--policy',f.policyPath,'--task',taskFile])).stdout);
+  assert.equal(prepared.status,'prepared');
+  data.headRefOid='b'.repeat(40);await response();
+  await assert.rejects(()=>exec(process.execPath,[cli,'run','--policy',f.policyPath,'--task-id','router-test',
+   '--approved-digest',prepared.approval_digest,'--approval-ref','fixture reviewed current head']),/exact PR head/);
+  assert.equal((await inspect(f.policy,'router-test')).status,'prepared');
+  await assert.rejects(()=>readFile(marker),/ENOENT/);
+  data.headRefOid=head;await response();
+  const returned=JSON.parse((await exec(process.execPath,[cli,'run','--policy',f.policyPath,'--task-id','router-test',
+   '--approved-digest',prepared.approval_digest,'--approval-ref','fixture reviewed current head'])).stdout);
+  assert.equal(returned.status,'returned');
+  assert.equal(returned.verified,false);
+  assert.equal(await readFile(marker,'utf8'),'dispatched');
+ } finally {process.env.PATH=originalPath;}
+});
 test('unknown future projects keep write authorization required',()=>assert.throws(()=>validateTask(packet('/tmp/repo',{project:'NEW',actions:['edit']})),/write authorization/));
 test('SEARCH research cannot silently mutate source',()=>assert.throws(()=>validateTask(packet('/tmp/repo',{project:'SEARCH',actions:['edit']})),/write authorization/));
 test('explicit SEARCH action may be scoped',()=>assert.equal(validateTask(packet('/tmp/repo',{project:'SEARCH',actions:['edit'],source_write_authorized:true})).project,'SEARCH'));
@@ -218,6 +345,34 @@ test('wall-clock limit terminates owned process',async()=>{const f=await fixture
 test('cancellation works through supervisor, not arbitrary PID',async()=>{const f=await fixture('slow');f.data.profiles['codex-readonly'].max_seconds=10;await writeFile(f.policyPath,JSON.stringify(f.data));const policy=await loadPolicy(f.policyPath);const p=await prepare(policy,packet(f.workspace));const running=runPrepared(policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'});for(let i=0;i<1500;i++){if((await inspect(policy,'router-test')).status==='running')break;await new Promise(r=>setTimeout(r,20));}await requestCancel(policy,'router-test');assert.equal((await running).status,'cancelled');});
 test('no automatic retry after a completed launch',async()=>{const f=await fixture();const p=await prepare(f.policy,packet(f.workspace));await runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'});await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/not prepared/);});
 test('verification records controller evidence and digest',async()=>{const f=await fixture();const p=await prepare(f.policy,packet(f.workspace));await runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'});const artifact=path.join(f.policy.state_dir,'runs','router-test','agent-final.txt');const evidence={verifier:'chatgpt-controller',summary:'Read back expected fixture output.',criteria:[{criterion:'Report the fixture result.',passed:true,evidence:'Fixture return inspected.'}],artifacts:[artifact]};const r=await acceptResult(f.policy,'router-test',evidence);assert.equal(r.status,'verified-complete');assert.equal(r.verified,true);assert.match(r.verification.artifacts[0].sha256,/^[a-f0-9]{64}$/);});
+test('returned v1 task verifies unchanged while new v1 dispatch and unfinished results stay denied',async()=>{
+ const f=await fixture(),cli=new URL('../../scripts/execution/router.mjs',import.meta.url).pathname;
+ const prepared=await prepare(f.policy,packet(f.workspace));
+ const returned=await runPrepared(f.policy,'router-test',{approved_digest:prepared.approval_digest,approval_ref:'fixture approval'});
+ const dir=path.join(f.policy.state_dir,'runs','router-test'),packetPath=path.join(dir,'packet.json'),statePath=path.join(dir,'status.json');
+ const legacy={...JSON.parse(await readFile(packetPath,'utf8')),schema_version:1};
+ delete legacy.review_context;
+ const taskFile=path.join(f.root,'legacy-task.json');await writeFile(taskFile,JSON.stringify(legacy));
+ await assert.rejects(()=>exec(process.execPath,[cli,'prepare','--policy',f.policyPath,'--task',taskFile]),/Unsupported task schema_version/);
+ const packetBytes=JSON.stringify(legacy);
+ await writeFile(packetPath,packetBytes);
+ const historical={...returned,router_version:'1.0.6',packet_digest:digest(legacy)};
+ delete historical.review_snapshot_digest;
+ const evidence={verifier:'independent-controller',summary:'Inspected historical result.',
+  criteria:[{criterion:'Report the fixture result.',passed:true,evidence:'Fixture output inspected.'}],
+  artifacts:[path.join(dir,'agent-final.txt')]};
+ const evidenceFile=path.join(f.root,'evidence.json');await writeFile(evidenceFile,JSON.stringify(evidence));
+ const verify=()=>exec(process.execPath,[cli,'verify','--policy',f.policyPath,'--task-id','router-test','--evidence',evidenceFile]);
+ await writeFile(statePath,JSON.stringify({...historical,status:'running'}));
+ await assert.rejects(verify(),/Only a returned run can be accepted/);
+ await writeFile(statePath,JSON.stringify({...historical,packet_digest:'0'.repeat(64)}));
+ await assert.rejects(verify(),/Packet digest changed/);
+ await writeFile(statePath,JSON.stringify(historical));
+ await assert.rejects(()=>exec(process.execPath,[cli,'run','--policy',f.policyPath,'--task-id','router-test',
+  '--approved-digest',prepared.approval_digest,'--approval-ref','fixture approval']),/not prepared/);
+ assert.equal(JSON.parse((await verify()).stdout).status,'verified-complete');
+ assert.equal(await readFile(packetPath,'utf8'),packetBytes);
+});
 test('acceptance refuses workspace drift after return and releases its verification lock',async()=>{
  const f=await fixture(),p=await prepare(f.policy,packet(f.workspace));
  const returned=await runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'});
@@ -242,7 +397,7 @@ test('doctor-time handoff edits cannot alter launched instructions',async()=>{
  const statePath=path.join(f.policy.state_dir,'runs','router-test','status.json'),packetPath=path.join(f.policy.state_dir,'runs','router-test','packet.json');
  const state=JSON.parse(await readFile(statePath,'utf8')),savedPacket=JSON.parse(await readFile(packetPath,'utf8'));
  state.executable_identity=await executableIdentity(f.policy.profiles['codex-readonly']);
- state.approval_digest=digest({router_version:VERSION,packet:savedPacket,policy:state.policy_digest,workspace:state.workspace_fingerprint,executable:state.executable_identity,expires_at:state.expires_at});
+ state.approval_digest=digest({router_version:VERSION,packet:savedPacket,policy:state.policy_digest,workspace:state.workspace_fingerprint,executable:state.executable_identity,review_snapshot_digest:state.review_snapshot_digest,expires_at:state.expires_at});
  await writeFile(statePath,JSON.stringify(state));
  const result=await runPrepared(f.policy,'router-test',{approved_digest:state.approval_digest,approval_ref:'user approved fixture'});
  assert.equal(result.status,'returned');assert.equal(await readFile(handOff,'utf8'),'MUTATED AFTER APPROVAL');
@@ -294,9 +449,9 @@ process.exit(0);
 test('source test actions require write authority because tests execute code',()=>assert.throws(()=>validateTask(packet('/tmp/repo',{actions:['test']})),/write authorization/));
 test('detached process-group descendants cannot outlive release of a workspace',async()=>{const f=await fixture('orphan');const p=await prepare(f.policy,packet(f.workspace));const r=await runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'});assert.equal(r.status,'needs-review');await new Promise(resolve=>setTimeout(resolve,1200));await assert.rejects(()=>readFile(path.join(f.root,'orphan-marker')),{code:'ENOENT'});});
 test('manual profiles produce handoff but do not launch an unvalidated adapter',async()=>{const f=await fixture();f.data.profiles.manual={adapter:'manual',sandbox:'read-only',actions:['read'],max_seconds:60};await writeFile(f.policyPath,JSON.stringify(f.data));const policy=await loadPolicy(f.policyPath);const p=await prepare(policy,packet(f.workspace,{profile:'manual'}));assert.equal(p.handoff_only,true);await assert.rejects(()=>runPrepared(policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/Handoff-only/);});
-test('CLI help is available without machine policy',async()=>{const r=await exec(process.execPath,[new URL('../../scripts/execution/router.mjs',import.meta.url).pathname,'--help']);assert.match(r.stdout,/prepare/);assert.match(r.stdout,/approved-digest/);});
-test('CLI refuses unrecognized flags',async()=>{await assert.rejects(()=>exec(process.execPath,[new URL('../../scripts/execution/router.mjs',import.meta.url).pathname,'route','--unsafe','yes']),/Unknown option/);});
-test('CLI doctor serializes a configured __proto__ profile rather than losing its result',async()=>{const f=await fixture();f.data.profiles=JSON.parse('{"__proto__":{"adapter":"manual","sandbox":"read-only","actions":["read"],"max_seconds":60}}');await writeFile(f.policyPath,JSON.stringify(f.data));const {stdout}=await exec(process.execPath,[new URL('../../scripts/execution/router.mjs',import.meta.url).pathname,'doctor','--policy',f.policyPath,'--profile','__proto__']);const result=JSON.parse(stdout);assert.deepEqual(result.profiles['__proto__'],{status:'handoff-only'});});
+test('CLI help is available without machine policy',async()=>{const r=await exec(process.execPath,[fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url)),'--help']);assert.match(r.stdout,/prepare/);assert.match(r.stdout,/approved-digest/);});
+test('CLI refuses unrecognized flags',async()=>{await assert.rejects(()=>exec(process.execPath,[fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url)),'route','--unsafe','yes']),/Unknown option/);});
+test('CLI doctor serializes a configured __proto__ profile rather than losing its result',async()=>{const f=await fixture();f.data.profiles=JSON.parse('{"__proto__":{"adapter":"manual","sandbox":"read-only","actions":["read"],"max_seconds":60}}');await writeFile(f.policyPath,JSON.stringify(f.data));const {stdout}=await exec(process.execPath,[fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url)),'doctor','--policy',f.policyPath,'--profile','__proto__']);const result=JSON.parse(stdout);assert.deepEqual(result.profiles['__proto__'],{status:'handoff-only'});});
 test('verification accepts artifacts through a symlinked state path',async()=>{const f=await fixture();const p=await prepare(f.policy,packet(f.workspace));await runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'});const alias=path.join(f.root,'state-alias');await symlink(f.policy.state_dir,alias);const linked={...f.policy,state_dir:alias};const artifact=path.join(alias,'runs','router-test','agent-final.txt');const result=await acceptResult(linked,'router-test',{verifier:'controller',summary:'Read the expected fixture output through its canonical path.',criteria:[{criterion:'Report the fixture result.',passed:true,evidence:'Expected fixture response inspected.'}],artifacts:[artifact]});assert.equal(result.status,'verified-complete');});
 test('Codex requires a usable executable while manual handoffs do not',async()=>{const f=await fixture();f.data.profiles['codex-readonly'].executable='';f.data.profiles.manual={adapter:'manual',sandbox:'read-only',actions:['read'],max_seconds:60};await writeFile(f.policyPath,JSON.stringify(f.data));await assert.rejects(()=>loadPolicy(f.policyPath),/executable for Codex/);delete f.data.profiles['codex-readonly'];await writeFile(f.policyPath,JSON.stringify(f.data));assert.equal((await loadPolicy(f.policyPath)).profiles.manual.executable,undefined);});
 test('moving relative executable policy invalidates an already prepared approval',async()=>{const f=await fixture();f.data.profiles['codex-readonly'].executable='./codex';await writeFile(f.policyPath,JSON.stringify(f.data));const policy=await loadPolicy(f.policyPath),p=await prepare(policy,packet(f.workspace));const other=path.join(f.root,'other');await mkdir(other);const relocated=path.join(other,'policy.json');await writeFile(relocated,JSON.stringify(f.data));const changed=await loadPolicy(relocated);assert.notEqual(changed.config_digest,policy.config_digest);await assert.rejects(()=>runPrepared(changed,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/policy changed/);});
@@ -367,7 +522,7 @@ test('approval expiry is rechecked after slow doctor work and before launch',asy
  const f=await fixture('slow-doctor'),p=await prepare(f.policy,packet(f.workspace));
  const statePath=path.join(f.policy.state_dir,'runs','router-test','status.json'),packetPath=path.join(f.policy.state_dir,'runs','router-test','packet.json'),state=JSON.parse(await readFile(path.join(f.policy.state_dir,'runs','router-test','status.json'),'utf8'));
  state.expires_at=new Date(Date.now()+700).toISOString();
- state.approval_digest=digest({router_version:VERSION,packet:JSON.parse(await readFile(packetPath,'utf8')),policy:f.policy.config_digest,workspace:p.workspace_fingerprint,executable:p.executable_identity,expires_at:state.expires_at});
+ state.approval_digest=digest({router_version:VERSION,packet:JSON.parse(await readFile(packetPath,'utf8')),policy:f.policy.config_digest,workspace:p.workspace_fingerprint,executable:p.executable_identity,review_snapshot_digest:state.review_snapshot_digest,expires_at:state.expires_at});
  await writeFile(statePath,JSON.stringify(state));
  await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:state.approval_digest,approval_ref:'user approved fixture'}),/approval expired before launch/i);
 });
@@ -470,7 +625,7 @@ test('Unicode whitespace in protected branch names is preserved',async()=>{
 });
 
 test('CLI rejects irrelevant command options and fails stale status queries',async()=>{
- const f=await fixture(),cli=new URL('../../scripts/execution/router.mjs',import.meta.url).pathname;
+ const f=await fixture(),cli=fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url));
  await assert.rejects(()=>exec(process.execPath,[cli,'doctor','--policy',f.policyPath,'--facts','ignored']),/Unknown option/);
  await prepare(f.policy,packet(f.workspace));
  const stateFile=path.join(f.policy.state_dir,'runs','router-test','status.json');
@@ -554,4 +709,23 @@ test('retargeting a tracked link through Git metadata invalidates approval',asyn
  await unlink(metadataLink);await symlink('../second.txt',metadataLink);
  await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/workspace changed/);
  await assert.rejects(()=>readFile(path.join(f.policy.state_dir,'runs','router-test','agent-final.txt')),{code:'ENOENT'});
+});
+
+test('Codex launch adapter retains fixed sandbox, network and configuration restrictions',async()=>{
+ const f=await fixture(),prepared=await prepare(f.policy,packet(f.workspace));
+ const result=await runPrepared(f.policy,'router-test',{approved_digest:prepared.approval_digest,approval_ref:'user approved fixture'});
+ assert.equal(result.status,'returned');
+ const record=JSON.parse((await readFile(path.join(f.policy.state_dir,'runs','router-test','stdout.jsonl'),'utf8')).trim().split('\n')[0]);
+ assert.deepEqual(record.args,['exec','--ignore-user-config','--sandbox','read-only','--ephemeral','--json','--color','never','-c','approval_policy="never"','-c','sandbox_workspace_write.network_access=false','--cd',f.policy.workspace_roots[0],'--output-last-message',path.join(f.policy.state_dir,'runs','router-test','agent-final.txt'),'-']);
+});
+test('Codex subscription guard cannot be disabled while manual profile stays handoff-only',async()=>{
+ const f=await fixture();
+ f.data.profiles['codex-readonly'].requires_chatgpt_login=false;
+ await writeFile(f.policyPath,JSON.stringify(f.data));
+ await assert.rejects(()=>loadPolicy(f.policyPath),/subscription login/);
+ delete f.data.profiles['codex-readonly'];
+ f.data.profiles.manual={adapter:'manual',sandbox:'read-only',actions:['read'],max_seconds:60};
+ await writeFile(f.policyPath,JSON.stringify(f.data));
+ const policy=await loadPolicy(f.policyPath);
+ assert.equal((await prepare(policy,packet(f.workspace,{profile:'manual'}))).handoff_only,true);
 });

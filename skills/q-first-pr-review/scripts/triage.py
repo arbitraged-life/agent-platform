@@ -6,11 +6,13 @@ starts a runner. It leaves finding validity to the PR owner/coding agent.
 """
 
 import argparse
+import hashlib
 import json
 import re
 # qlty-ignore(bandit:B404): Required GitHub CLI invocation uses fixed argv, never a shell.
 import subprocess
 import sys
+import time
 
 Q_AUTHORS = frozenset({"amazon-q-developer", "amazon-q-developer[bot]"})
 COMMAND_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
@@ -18,6 +20,7 @@ REPO_PATTERN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-
 COMMAND_PATTERN = re.compile(r"^\s*/q(?:\s|$)", re.I)
 THREAD_REVIEW_PATTERN = re.compile(r"^\s*/q\s+review(?:\s|$)", re.I)
 PAGE_LIMIT = 20
+TOTAL_TIMEOUT = 55
 REVIEW_BODY_LIMIT = 20
 
 QUERY = """query($owner:String!,$name:String!,$number:Int!,$after:String) {
@@ -47,7 +50,7 @@ def is_q(login):
     return isinstance(login, str) and login.lower() in Q_AUTHORS
 
 
-def _read_pr_page(owner, name, number, cursor):
+def _read_pr_page(owner, name, number, cursor, timeout=45):
     # All caller input remains an argv VALUE after a fixed key; no shell interpretation.
     command = ["gh", "api", "graphql", "-f", "query=" + QUERY,
                "-f", "owner=" + owner, "-f", "name=" + name,
@@ -57,7 +60,7 @@ def _read_pr_page(owner, name, number, cursor):
     # qlty-ignore(bandit:B603): A fixed gh executable, explicit argv, and shell=False prevent shell injection.
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
     response = subprocess.run(command, shell=False, text=True,
-                              capture_output=True, check=True, timeout=45)
+                              capture_output=True, check=True, timeout=timeout)
     payload = json.loads(response.stdout)
     # Fail closed rather than printing provider errors that may contain private data.
     if payload.get("errors"):
@@ -84,8 +87,12 @@ def review_snapshot(repo, number):
     cursor = None
     head = None
     threads = []
+    deadline = time.monotonic() + TOTAL_TIMEOUT
     for _ in range(PAGE_LIMIT):
-        pr = _read_pr_page(owner, name, number, cursor)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired("gh", TOTAL_TIMEOUT)
+        pr = _read_pr_page(owner, name, number, cursor, min(45, remaining))
         if head is not None and pr["headRefOid"] != head:
             raise ValueError("PR head moved during paginated review read; retry once")
         head = pr["headRefOid"]
@@ -123,6 +130,7 @@ def _thread_status(comments):
 
 def _thread_finding(thread, comments):
     return {
+        "thread_sha256": hashlib.sha256(json.dumps(comments, sort_keys=True).encode("utf-8")).hexdigest(),
         "thread_id": thread.get("id"),
         "comment_id": comments[0].get("databaseId"),
         "path": thread.get("path"),
@@ -141,6 +149,7 @@ def _review_body_candidate(review):
         "submitted_at": review.get("submittedAt"),
         "review_sha": (review.get("commit") or {}).get("oid"),
         "body_excerpt": body.strip()[:500],
+        "body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
     }
 
 

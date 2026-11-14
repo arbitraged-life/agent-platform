@@ -99,8 +99,7 @@ export function acceptedReceipt(eventId, acceptedRecords = []) {
 const DELIVERY_FIELDS = ["delivery_status", "readback_status", "reason_code", "failure_stage", "retryable"];
 export function deliveryRecord(event, receipt) {
   const destinations = {};
-  for (const name of ["opik", "posthog"]) {
-    const value = receipt.destinations[name];
+  for (const [name, value] of Object.entries(receipt.destinations).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) {
     destinations[name] = Object.fromEntries(
       DELIVERY_FIELDS.map((key) => [key, value[key] ?? (key === "retryable" ? false : null)]),
     );
@@ -111,8 +110,8 @@ export function deliveryRecord(event, receipt) {
     event_id: stableEvidenceId(event.event_id, "delivery:" + JSON.stringify(destinations)),
     source_event_id: event.event_id,
     trace_id: event.trace_id ?? event.event_id,
-    runtime: event.runtime,
-    run_id: event.run_id,
+    runtime: event.runtime ?? event.records?.[0]?.runtime,
+    run_id: event.run_id ?? event.records?.[0]?.run_id,
     observed_at: receipt.observed_at,
     recorded_at: receipt.recorded_at,
     destinations,
@@ -152,9 +151,14 @@ export function validateDeliveryRecord(record) {
       new Date(Date.parse(record[name])).toISOString() !== record[name]
     )
       throw new Error("Invalid delivery time");
+  const destinationNames = Object.keys(record.destinations ?? {});
   if (!record.destinations || typeof record.destinations !== "object" ||
-      Array.isArray(record.destinations) || Object.keys(record.destinations).length !== 2 ||
-      !Object.hasOwn(record.destinations, "opik") || !Object.hasOwn(record.destinations, "posthog"))
+      Array.isArray(record.destinations) ||
+      ![1, 2].includes(destinationNames.length) ||
+      !(
+        (destinationNames.includes("opik") && destinationNames.includes("posthog")) ||
+        destinationNames.every(name => ["honeycomb", "logfire"].includes(name))
+      ))
     throw new Error("Invalid delivery destinations");
   for (const value of Object.values(record.destinations)) {
     if (
@@ -163,13 +167,13 @@ export function validateDeliveryRecord(record) {
     )
       throw new Error("Invalid destination fields");
     if (
-      !["accepted", "failed", "uncertain", "denied", "disabled", "misconfigured"].includes(
+      !["accepted", "failed", "uncertain", "denied", "disabled", "misconfigured", "capacity_blocked"].includes(
         value.delivery_status,
       ) ||
       !["not_checked", "verified", "pending", null].includes(value.readback_status) ||
       typeof value.retryable !== "boolean" ||
       (value.reason_code !== null &&
-        !/^(HTTP_[1-5][0-9]{2}|EXPORT_FAILED|TRANSPORT_UNCERTAIN|CONFIGURATION_UNAVAILABLE)$/.test(
+        !/^(HTTP_[1-5][0-9]{2}|EXPORT_FAILED|TRANSPORT_UNCERTAIN|CONFIGURATION_UNAVAILABLE|CAPACITY_BLOCKED)$/.test(
           value.reason_code,
         )) ||
       ![null, "none", "input_validation", "connector_authentication", "telemetry_export"].includes(

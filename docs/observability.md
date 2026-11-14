@@ -1,5 +1,10 @@
 # Observability contract v1
 
+The destination-neutral OTLP path below supersedes the Opik/PostHog agent fanout
+when a consuming deployment explicitly activates it. Legacy exporters remain
+available for the staged cutover/rollback boundary; source availability is not
+destination or native-producer acceptance.
+
 `runtime/observability/records.mjs` normalizes OMP and OpenCode/Kilo turns into the same
 schema: `schemas/telemetry-event.schema.json`. A run identifies a runtime session;
 a task is an optional caller-supplied work identifier. An agent is distinct from
@@ -63,8 +68,8 @@ Opik requires [UUIDv7 ingestion IDs](https://www.comet.com/docs/opik/self-host/c
 
 ## Operational control-plane export
 
-Opik remains the detailed AI trace and evaluation destination. PostHog is a separate,
-privacy-safe operational projection intended for cross-system dashboards and trend
+The legacy fanout uses Opik as the detailed AI trace/evaluation destination and
+PostHog as a separate privacy-safe operational projection for dashboards and trend
 analysis. `runtime/observability/posthog.mjs` validates the same canonical
 `agent.turn.completed` event, then emits one `personal_os_agent_turn_completed`
 event containing only normalized metadata.
@@ -132,7 +137,9 @@ improvement, or a measured baseline.
 `schemas/telemetry-evidence.schema.json` is a separate versioned contract. It permits
 lifecycle timestamps, tool names, opaque action/attempt references, explicit
 failure boundary, provenance and verification status. It rejects arbitrary fields.
-Arguments, raw errors, outputs, filesystem paths and credentials remain excluded.
+Unrestricted arguments, raw errors, outputs, filesystem paths and credentials
+remain excluded. The OTLP path permits only the bounded, sanitized capture
+objects described below; private content policy is still authoritative.
 `evidence_origin=mechanically_captured` means the adapter observed the exposed hook
 payload; middleware may have modified that payload. It is not an independent host
 audit. A successful tool result has `verification_status=not_verified` until an
@@ -181,3 +188,175 @@ Native OMP payload references (inspected 2026-10-12):
 [message stop reasons](https://github.com/can1357/oh-my-pi/blob/main/packages/ai/src/types.ts).
 The consuming deployment must verify its installed version before claiming native
 runtime acceptance. Synthetic hook fixtures demonstrate adapter behavior only.
+
+## OTLP mapping and quota routing
+
+`otlp.mjs` exports `mapOtlpRecord`, `otelTraceId`, `otelSpanId`, and
+`createOtlpExporter`. The mapper returns completed spans, explicit logs, and
+destination-specific `units`. UUIDv7 source identities map deterministically to
+valid OTel trace/span IDs; retries preserve IDs, not an exactly-once promise.
+Start evidence emits no pending span. Terminal evidence emits the completed
+root with aggregate model usage as attributes, not invented model calls.
+Timed tool observations become child spans; unavailable start/end timing becomes
+a related log with explicit unknown timing. A lone MCPProxy request is one root
+tool observation, not two spans duplicating one measurement.
+
+`gen_ai.conversation.id`, `gen_ai.agent.name`, `gen_ai.operation.name`,
+tool/server/call identity, task/run identity, outcome and controlled failure
+metadata are shared across destinations. Missing source fields stay unknown.
+Both root and tool span/log attributes retain the canonical evidence origin,
+verification status, production eligibility, reason availability/provenance and
+handling outcome; absence is not silently reclassified as verified capture.
+An `agent.trace` bundle contains one trace's canonical events and exactly one
+terminal event; the bundle preserves stable event IDs and parent references.
+
+The standard OTLP/HTTP transport uses JSON for Honeycomb and protobuf for Logfire, with explicit regional endpoints,
+credential environment-variable names and service name. No credentials are
+discovered by the public runtime. Honeycomb uses `x-honeycomb-team`; Logfire uses
+its project token in `Authorization`, per the destination recipe. Redirects use
+manual mode and non-2xx responses are rejected without forwarding credentials;
+this also supports workerd, which rejects Fetch's `error` redirect mode.
+This workerd support applies to the OTLP exporters; the legacy Node Opik/PostHog
+exporters still use `redirect: "error"` and are not the Worker transport.
+Payload/response sizes and time are bounded, and raw response bodies are not
+receipts. HTTP success with OTLP partial rejection is not full acceptance.
+Partial/uncertain requests are not replayed; only known nonacceptance is eligible
+for the existing bounded retry policy. Independent resource acknowledgements
+prevent resending an accepted signal or destination because another failed.
+
+The implemented mapping produces one Honeycomb event and one Logfire combined
+record per emitted span/log. It emits no attached span events or links,
+automatic metrics, Logfire pending placeholders, or recursive delivery exports.
+Consumers must nevertheless measure their real vendor usage; local unit counts
+are not billing readback.
+
+`routing.mjs` provides `createTelemetryDelivery({directory,configuration,exporters,now})`
+using built-in SQLite (Node 24+) and the existing durable outbox. Configuration:
+
+```json
+{
+  "schema_version": 1,
+  "mode": "mirror",
+  "sinks": {
+    "honeycomb": {
+      "period_start": "2026-10-01T00:00:00.000Z",
+      "period_end": "2026-11-01T00:00:00.000Z",
+      "allowance": 1000,
+      "other_usage": 0
+    },
+    "logfire": {
+      "period_start": "2026-10-01T00:00:00.000Z",
+      "period_end": "2026-11-01T00:00:00.000Z",
+      "allowance": 1000,
+      "other_usage": 0
+    }
+  }
+}
+```
+
+Those are illustrative allocated budgets, not vendor account configuration.
+`allowance` is a gross allocation, not an already-net remaining-usage number.
+Subtract the external baseline and durable reservations exactly once. Allocations
+across independent local, Apps Script and Worker state owners must be disjoint.
+An expired/unknown period makes that destination unavailable. Mirror requires both
+periods; split can use an active peer for a new trace, never move an assigned trace.
+Insufficient capacity blocks visibly; there is no paid or sampling fallback.
+
+Mirror sends the same logical trace/log evidence to both sinks. Split selects a
+destination only when the complete trace fits, persists that assignment, and
+keeps later related logs on it. Traces are not divided by span hash or silently
+rerouted after partial acceptance. Source demand and network attempts are distinct:
+quota-blocked demand must remain visible, and retries must not inflate logical
+observations. Monthly counters survive delivered-outbox eviction.
+Per-sink `shortfall` reports missing usable units. `combined_shortfall` expresses
+the normalized additional capacity at the limiting mirror sink, the best single
+split destination, or the already assigned route. It does not pool partial
+capacity across destinations to divide one trace.
+
+Call `send(record)` in producer order without waiting for earlier network receipts.
+`flushPersistence()` waits durable admission independently of slow network work.
+For polling bridges, `send.admit(record)` persists without starting network work;
+commit the source cursor only after its durable admission acknowledgement.
+`drain({limit})` resumes eligible durable delivery; uncertain outcomes require
+operator reconciliation, not blind replay. `getUsage()` and read-only
+`readTelemetryUsage()` expose local counters without claiming remote visibility
+or vendor billing. Attempt counters cover dispatched signals, not unsent peers.
+Each sink acknowledgement is checkpointed before advancing to the next request.
+An abandoned file claim is recovered only with matching host/boot/PID-namespace
+identity and proof that its owning PID no longer exists. Legacy PID-only, foreign,
+active, or ambiguous claims require operator reconciliation. Interrupted rows
+remain non-replayable and non-evictable, without starving later drain candidates.
+Recovery callbacks must be idempotent; routing's durable uncertain markers provide
+that accounting barrier.
+Claim release verifies ownership and closes the descriptor even after delivery
+failure. If delivery and cleanup both fail, an `AggregateError` preserves every
+cause instead of replacing the original error; a replacement claim is not removed.
+`drain({limit})` limits actionable outcomes so an active/ambiguous claim cannot
+starve later records. It returns one claimed outcome only when no actionable
+outcome was produced; otherwise claimed rows are omitted from that return list,
+not deleted or treated as accepted. Their durable evidence remains for inspection.
+URI credential redaction starts at `://`, avoiding repeated scheme-prefix scans
+without excluding long valid schemes from sanitization.
+The read-only queue view counts unfinished or admitted-but-not-yet-routed traces
+as pending, excluding capacity-blocked traces. A trace is blocked only after a
+capacity check records a block; initial admission is not quota exhaustion.
+These are distinct trace counts, not billable records or in-flight HTTP requests.
+
+### Other runtime hosts
+
+`worker-delivery.mjs` exposes callable `createWorkerTelemetryDelivery()` over
+Durable Object SQLite `storage.sql.exec` and `transactionSync`. It shares the
+canonical mapper/exporters but does not import Node filesystem or SQLite APIs.
+The callable has `drain({limit})`, `nextAttemptAt()`, and `usage()` methods. Only
+confirmed deliveries release payload storage; route/receipt tombstones and
+period counters remain. The private host owns bindings, alarms, and credentials.
+If admission finds the payload buffer full and a persisted attempt is due, the
+callable tries distinct eligible rows within a four-second admission wait before
+retrying admission. A timed-out export retains its live claim and completes its
+durable receipt asynchronously; the Worker host must pass `keepAlive(promise)`
+through `DurableObjectState.waitUntil` so the request can return without evicting
+that still-active claim. Neither timeout nor a quota-blocked peer permits replay
+or evicts unresolved, uncertain or not-yet-due evidence. Admission still fails
+explicitly if no payload slot becomes available.
+The Node pending-byte limit and Worker payload-entry limit do not bound total
+SQLite size. Completed payloads are compacted, but terminal metadata, reservations,
+and replay identities intentionally remain. Do not delete them as a shortcut to
+reclaim storage or replenish capacity.
+
+`apps-script.mjs` exposes `createAppsScriptObservability()` with injected native
+`Utilities`, `PropertiesService`, `LockService`, and `UrlFetchApp`. It offers
+`capture(options)`, bounded operator-invoked `drain()`, and credential-free
+`getUsage()`. Each observed generation yields one completed span, or one log
+when its timing is unknown. Explicit operations add their own records; aggregate
+token counts do not invent model calls. Content remains metadata-only.
+
+Apps Script stores sanitized unresolved evidence before quota selection and
+keys independent destination periods by both exact endpoints. Its journal
+recovers interrupted demand-counter updates. Admission stops visibly at 64
+unresolved receipts, 300 KiB pending payload, or 380 KiB total telemetry properties.
+Compact accepted receipt tombstones are not automatically deleted. There is no
+archive/compaction API that preserves deduplication outside this store; reaching
+the total property bound stops new admission visibly. Do not delete receipts to
+reclaim capacity: doing so removes the replay barrier. This is not a monthly archive.
+Private consumers must install this portable source from a reviewed release
+artifact, not a mutable sibling checkout.
+
+## Bounded tool content
+
+Operation evidence optionally includes `server_name`, `task_id`, `conversation_id`,
+`parent_event_id`, `tool_arguments`, and `tool_result`. Constructors normalize and
+sanitize before fanout. Content capture is disabled by default; omission remains
+explicit. Enabled capture uses a bounded UTF-8 preview, sanitized byte count and
+SHA-256, plus truncation/redaction/omission markers. Sensitive keys and recognizable
+credentials/raw-error forms are removed. This is not permission to capture
+arbitrary prompts, medical/employer content, or secrets that a source policy
+forbids. Handcrafted evidence still passes validation before export.
+Capture traversal is also limited to 64 Ki UTF-16 source units, 2,048 values, and
+32 nesting levels before serialization. Oversized or accessor-bearing content is
+explicitly omitted with unknown byte count/digest; the operation remains captured.
+
+Destination acceptance requires real producer hooks, successful and failing
+canaries, destination readback of IDs/hierarchy/timing/sanitized fields, and actual
+usage reconciliation. Unit fixtures and an HTTP acknowledgement do not establish
+that acceptance. Native hidden ChatGPT operations remain outside this contract
+unless a supported source exposes them.
