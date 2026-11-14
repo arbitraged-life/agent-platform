@@ -93,30 +93,43 @@ launcher approval mechanism on them.
 ## Connected coding-agent services
 
 A connected coding-agent service is a separate peer executor, **not** a local
-launcher. Check that the host allows its workflow and that the originating
-request or an approved profile actually authorizes this task. Discover the
-connected instance's tools and schemas; inspect account, selected project,
-repository/revision, environment and machine, applicable provider/limits,
-permissions, and existing active work. Unknown fields are not safe defaults.
-Honor a selected environment; reuse a matching task when appropriate. Do not
-create a new machine, broaden permission modes, or change a billed provider as
-a convenience. A remote connection alone does not prove the target machine is
-online or move execution into the cloud.
+launcher. Check that the host permits its workflow. Before launch, establish
+task-specific authorization for the selected service, account, project,
+repository, environment, machine, provider, permission mode, data boundary,
+and material cost. An approved **local-launcher** profile does not authorize
+another service; a connected-service profile counts only when it explicitly
+covers this same deployment and task. If any authority is missing, stop and
+ask rather than treating reachability, OAuth, or a prior approval as consent.
+Discover the connected instance's tools and schemas; inspect its actual
+repository/revision, limits, permissions, and existing work. Unknown fields
+are not safe defaults. Honor a selected environment; do not create a new
+machine, broaden permissions, or switch billed providers for convenience.
+A remote connection alone does not prove the target machine is online.
 
+Keep service identifiers, account/project/environment choices, approval
+evidence, and runtime metadata in the consuming deployment's **private
+operational state**, not this reusable public source or public runtime files.
 Send a bounded objective, unique correlation ID, acceptance criteria, permitted
 actions, relevant evidence and decisions, selected executor, limits, and stop
-conditions. If the selected route is authorized, use the **discovered** task
+conditions. Before creation, require an **existing exclusive owner or atomic
+reservation** for that correlation ID across every controller that could launch
+the task; hold ownership across launch and ambiguous-result reconciliation.
+A list-then-create check is not atomic. If ownership cannot be established,
+stop and surface the blocker rather than launching.
+
+With authority and exclusive ownership established, use the **discovered**
 creation operation and retain its real task/environment IDs; do not stop at a
-copy-paste prompt or ask for approval already granted. After an ambiguous launch,
-inspect existing tasks for the matching ID and scope before another creation.
-Use the service's actual inspection, continuation, interaction, and stop
-operations. A separate permission request remains separate; do not approve it
-merely because task creation was authorized. Inspect returned artifacts and
-independently verify acceptance in the owning system; a submitted or idle task
-is not verified completion. For the concrete BB service, read
-[BB MCP](references/bb-mcp.md) and confirm commands against the live instance.
-Its reference is a provider procedure, not a new generic executor or approval
-profile.
+copy-paste prompt or ask for approval already granted. On an ambiguous launch,
+inspect an actual, complete readback for the matching correlation ID and scope;
+if it cannot establish whether creation occurred, keep ownership and stop.
+Never retry solely because a list appears empty. Use the service's actual
+inspection, continuation, interaction, and stop operations. A separate
+permission request remains separate; do not approve it merely because task
+creation was authorized. Inspect returned artifacts and independently verify
+acceptance in the owning system; a submitted or idle task is not verified
+completion. For BB, read [BB MCP](references/bb-mcp.md) and confirm commands
+against the connected instance. This is a provider procedure, not a new
+generic executor or approval profile.
 
 ## Configured local launcher
 
