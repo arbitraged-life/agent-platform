@@ -196,6 +196,84 @@ Revert safely.
             [],
         )
 
+    def test_thematic_breaks_cannot_create_false_list_fences(self):
+        for rule in ("- - -", " *\t*\t* ", "_ _ _"):
+            with self.subTest(rule=rule):
+                body = rule + "\n  ~~~markdown\n" + self._valid_body()
+                self.assertEqual(
+                    self.m.validate("fix(pr): respect Markdown block precedence", body, self.m.DEFAULT),
+                    [
+                        f"missing required section: ## {heading}"
+                        for heading in self.m.DEFAULT["required_sections"]
+                    ],
+                )
+
+    def test_thematic_break_in_list_preserves_only_the_outer_container(self):
+        body = (
+            "- Example\n  - - -\n  ~~~markdown\n  <!-- literal code comment\n"
+            + self._valid_body()
+        )
+        self.assertEqual(
+            self.m.validate("fix(pr): respect Markdown block precedence", body, self.m.DEFAULT),
+            [],
+        )
+
+    def test_noninterrupting_ordered_markers_do_not_hide_comments(self):
+        for prefix, marker, indent in (
+            ("Paragraph\n", "2.", 0),
+            ("Paragraph\n", "0)", 0),
+            ("- Example\n", "2.", 2),
+            ("===\n", "2.", 0),
+            ("Paragraph\n+\n", "2.", 0),
+        ):
+            with self.subTest(prefix=prefix, marker=marker, indent=indent):
+                body = (
+                    prefix + " " * indent + marker + " ~~~\n"
+                    + " " * (indent + len(marker) + 1) + "<!--\n"
+                    + self._valid_body() + "-->\n"
+                )
+                self.assertEqual(
+                    self.m.validate("fix(pr): respect paragraph boundaries", body, self.m.DEFAULT),
+                    [
+                        f"missing required section: ## {heading}"
+                        for heading in self.m.DEFAULT["required_sections"]
+                    ],
+                )
+
+    def test_ordered_list_fences_can_start_above_one_at_block_boundaries(self):
+        for prefix in (
+            "",
+            "Paragraph\n\n",
+            "# Example\n",
+            "Example\n===\n",
+            "- - -\n",
+            "~~~\ncode\n~~~\n",
+            "    code\n",
+            "<!-- example -->\n",
+            "1. Example\n",
+            "- Example\n",
+            "- Example\ncontinuation\n",
+        ):
+            with self.subTest(prefix=prefix):
+                body = prefix + "2. ~~~\n   <!-- literal code comment\n" + self._valid_body()
+                self.assertEqual(
+                    self.m.validate("fix(pr): preserve ordered list examples", body, self.m.DEFAULT),
+                    [],
+                )
+
+    def test_ordered_list_start_one_can_interrupt_paragraph(self):
+        for marker in ("1.", "1)", "0001.", "1. 2."):
+            with self.subTest(marker=marker):
+                body = (
+                    "Paragraph\n" + marker + " ~~~\n"
+                    + " " * (len(marker) + 1) + "<!-- literal code comment\n"
+                    + self._valid_body()
+                )
+                self.assertEqual(
+                    self.m.validate("fix(pr): preserve ordered list examples", body, self.m.DEFAULT),
+                    [],
+                )
+
     def test_list_fences_keep_literal_comments_out_of_section_masking(self):
         for marker in ("-", "1.", "12."):
             for fence in ("````", "~~~~"):

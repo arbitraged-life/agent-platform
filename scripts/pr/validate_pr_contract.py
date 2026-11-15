@@ -40,26 +40,46 @@ def _closes_fence(marker: tuple[str, int, str] | None, fence: tuple[str, int]) -
     return marker[0] == fence[0] and marker[1] >= fence[1] and not marker[2]
 
 
-_LIST_ITEM = re.compile(r" {0,3}(?:[-+*]|[0-9]{1,9}[.)])(?P<padding> +|$)")
+_LIST_ITEM = re.compile(r" {0,3}(?:[-+*]|(?P<number>[0-9]{1,9})[.)])(?P<padding> +|$)")
+_THEMATIC_BREAK = re.compile(r" {0,3}(?P<rule>[-_*])(?:[ \t]*(?P=rule)){2,}[ \t]*")
 
 
-def _opening_fence(line: str, list_indents: list[int]) -> tuple[str, int, int] | None:
-    """Track list containers, then apply the fence rule relative to their content."""
+def _list_item(content: str, interrupting: bool) -> re.Match[str] | None:
+    if _THEMATIC_BREAK.fullmatch(content):
+        return None
+    item = _LIST_ITEM.match(content)
+    if item is None or not interrupting:
+        return item
+    number = item.group("number")
+    if not content[item.end():].strip() or (number is not None and int(number) != 1):
+        return None
+    return item
+
+
+def _opening_fence(line: str, list_indents: list[int], paragraph_indent: int | None
+                   ) -> tuple[tuple[str, int, int] | None, int | None]:
+    """Track list prefixes and the owning container of an open paragraph."""
     expanded = line.expandtabs(4)
     if line.strip():
         while list_indents and not expanded.startswith(" " * list_indents[-1]):
             list_indents.pop()
     indent = list_indents[-1] if list_indents else 0
-    while item := _LIST_ITEM.match(expanded[indent:].rstrip("\r\n")):
+    content = expanded[indent:].rstrip("\r\n")
+    while item := _list_item(content, paragraph_indent is not None and paragraph_indent <= indent):
         padding = len(item.group("padding"))
         width = item.end() - padding + (padding if 1 <= padding <= 4 else 1)
         indent += width
         list_indents.append(indent)
+        paragraph_indent = None
+        content = expanded[indent:].rstrip("\r\n")
     # Tabs are expanded only while removing a list container, never to relax
     # the top-level 0–3-space fence rule.
-    content = expanded[indent:] if indent else line
-    marker = _fence_marker(content)
-    return (marker[0], marker[1], indent) if marker is not None else None
+    marker = _fence_marker(expanded[indent:] if indent else line)
+    if marker is not None:
+        return (marker[0], marker[1], indent), None
+    if not _paragraph_continues(content, paragraph_indent is not None):
+        return None, None
+    return None, indent if paragraph_indent is None else paragraph_indent
 
 
 def _consume_fenced_line(line: str, fence: tuple[str, int, int]
@@ -73,9 +93,22 @@ def _consume_fenced_line(line: str, fence: tuple[str, int, int]
 
 
 _BLOCK_START = re.compile(
-    r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|(?:[-+*]|1[.)])[ \t]+|<!--"
-    r"|(?:=+|-+)[ \t]*$|(?P<rule>[_*])(?:[ \t]*(?P=rule)){2,}[ \t]*$)"
+    r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|(?P<list>(?:[-+*]|1[.)])[ \t]+)|<!--"
+    r"|(?P<setext>(?:=+|-+)[ \t]*$)|(?P<rule>[_*])(?:[ \t]*(?P=rule)){2,}[ \t]*$)"
 )
+
+
+def _paragraph_continues(content: str, paragraph: bool) -> bool:
+    if not content.strip() or _THEMATIC_BREAK.fullmatch(content):
+        return False
+    if content.startswith("    "):
+        return paragraph  # Indented code cannot interrupt an existing paragraph.
+    block = _BLOCK_START.match(content)
+    # A list marker left after prefix parsing did not interrupt the paragraph;
+    # a Setext underline needs an existing paragraph to form a heading.
+    return block is None or block.group("list") is not None or (
+        not paragraph and block.group("setext") is not None
+    )
 
 
 def _ends_code_span_block(line: str, heading: bool) -> bool:
@@ -152,6 +185,7 @@ def _mask_html_comments(body: str) -> str:
     output: list[str] = []
     fenced: tuple[str, int, int] | None = None
     list_indents: list[int] = []
+    paragraph_indent: int | None = None
     code_end: tuple[int, int] | None = None
     commented = False
     for index, line in enumerate(lines):
@@ -169,7 +203,7 @@ def _mask_html_comments(body: str) -> str:
                 output.append(line)
                 continue
         if not commented and not position:
-            fenced = _opening_fence(line, list_indents)
+            fenced, paragraph_indent = _opening_fence(line, list_indents, paragraph_indent)
             if fenced is not None:
                 output.append(line)
                 continue
@@ -181,6 +215,7 @@ def _document_lines(body: str) -> list[tuple[int, str]]:
     out: list[tuple[int, str]] = []
     fenced: tuple[str, int, int] | None = None
     list_indents: list[int] = []
+    paragraph_indent: int | None = None
     offset = 0
     for line in body.splitlines(keepends=True):
         start = offset
@@ -189,7 +224,7 @@ def _document_lines(body: str) -> list[tuple[int, str]]:
             consumed, fenced = _consume_fenced_line(line, fenced)
             if consumed:
                 continue
-        fenced = _opening_fence(line, list_indents)
+        fenced, paragraph_indent = _opening_fence(line, list_indents, paragraph_indent)
         if fenced is None:
             out.append((start, line.rstrip("\r\n")))
     return out
