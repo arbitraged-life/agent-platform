@@ -31,7 +31,7 @@ def unique_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
 def completed_verdict(message: object) -> dict | None:
     if not isinstance(message, dict) or message.get("stopReason") != "stop":
         return None
-    if "errorMessage" in message and message["errorMessage"] is not None:
+    if "errorMessage" in message:
         return None
     content = message.get("content")
     if not isinstance(content, list):
@@ -52,7 +52,7 @@ def completed_verdict(message: object) -> dict | None:
         return None
     try:
         candidate = json.loads("".join(text), object_pairs_hook=unique_fields)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return None
     return candidate if valid_verdict(candidate) else None
 
@@ -110,7 +110,7 @@ while time.monotonic() < deadline:
         continue
     try:
         evt = json.loads(line, object_pairs_hook=unique_fields)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         invalid_final = True
         break
     if not isinstance(evt, dict) or evt.get("type") != "message_end":

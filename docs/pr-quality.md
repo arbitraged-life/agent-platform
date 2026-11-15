@@ -33,6 +33,8 @@ The tool-free review gate waits for the completed assistant `message_end`, not
 an intermediate `text_end` block. It validates the complete text, rejects
 duplicate JSON fields and trailing non-JSON content, and fails closed on an
 invalid completed response even if a later message contains a valid PASS.
+Error-bearing completions are rejected even when their error field is null.
+JSON decoder failures follow the same rejection and child-cleanup path.
 
 ## Intended work-repository rollout
 

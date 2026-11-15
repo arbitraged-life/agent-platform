@@ -132,6 +132,15 @@ class ReviewStreamTests(unittest.TestCase):
         self.assertEqual(result.returncode, 125, result.stderr)
         self.assertEqual(result.stdout, "")
 
+    def test_deeply_nested_event_and_candidate_json_fail_closed(self):
+        nested = "[" * 2000 + "0" + "]" * 2000
+        envelope = '{"type":"message_end","message":' + nested + '}'
+        for payload in (envelope, self.event(nested)):
+            with self.subTest(envelope=isinstance(payload, str)):
+                result = self.stream(payload)
+                self.assertEqual(result.returncode, 125, result.stderr)
+                self.assertEqual(result.stdout, "")
+
     def test_malformed_final_candidates_fail_closed(self):
         candidates = (
             {"verdict": "PASS", "findings": ["critical defect"]},
@@ -198,6 +207,7 @@ class ReviewStreamTests(unittest.TestCase):
             message_with(stopReason=None),
             message_with(errorMessage="provider failure"),
             message_with(errorMessage=0),
+            message_with(errorMessage=None),
             {"type": "message_end", "message": None},
         )
         for case in cases:
