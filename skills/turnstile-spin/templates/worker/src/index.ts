@@ -91,8 +91,10 @@ function jsonResponse(body: unknown, status: number, env: Env): Response {
 
 async function parseBody(request: Request): Promise<SiteverifyRequest> {
 	const contentType = request.headers.get('content-type') || '';
-	const isJson = contentType.includes('application/json');
-	const isForm = contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data');
+	const parameterStart = contentType.indexOf(';');
+	const mediaType = (parameterStart < 0 ? contentType : contentType.slice(0, parameterStart)).trim().toLowerCase();
+	const isJson = mediaType === 'application/json';
+	const isForm = mediaType === 'application/x-www-form-urlencoded' || mediaType === 'multipart/form-data';
 	if (!isJson && !isForm) {
 		throw new SiteverifyError(
 			415,

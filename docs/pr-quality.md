@@ -21,10 +21,18 @@ An unterminated comment hides the remaining body. Matched inline-code spans and
 escaped comment delimiters remain literal; code spans do not cross paragraph or
 block boundaries. Fenced examples do not create sections, and only a matching
 fence character of sufficient length closes them. Fence markers permit zero to
-three leading spaces; four-space and tab-indented pseudo-closers remain code
-content and cannot expose hidden section headings.
-The purity checker also rejects standard, diff3, and longer Git conflict markers;
-that rule cannot be bypassed with an ignore tag.
+three leading spaces relative to their list container. A nested fence ends when
+its list container ends; literal comments inside it do not hide later sections.
+At document level, four-space and tab-indented pseudo-closers remain code content
+and cannot expose hidden section headings.
+The purity checker rejects standard, diff3, and longer Git conflict blocks
+without an ignore-tag bypass. A standalone equals run in Markdown may be a
+Setext heading underline; opening, base, and closing conflict markers still fail.
+
+The tool-free review gate waits for the completed assistant `message_end`, not
+an intermediate `text_end` block. It validates the complete text, rejects
+duplicate JSON fields and trailing non-JSON content, and fails closed on an
+invalid completed response even if a later message contains a valid PASS.
 
 ## Intended work-repository rollout
 

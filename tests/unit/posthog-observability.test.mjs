@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { turnEvent } from '../../runtime/observability/records.mjs';
 import { createPosthogExporter, posthogOperationalRecord, validatePosthogConfig } from '../../runtime/observability/posthog.mjs';
-import { evidenceRecord } from '../../runtime/observability/evidence.mjs';
+import { evidenceRecord, validateObservabilityRecord } from '../../runtime/observability/evidence.mjs';
 
 const timing={startedMs:1700000000000,endedMs:1700000001500};
 const config={schema_version:1,endpoint:'https://example.invalid',credential_env:'POSTHOG_PROJECT_TOKEN',distinct_id:'personal-os-test'};
@@ -71,7 +71,10 @@ test('PostHog projection and exporter reject every credential-shaped completed-t
   }
   assert.equal(calls,0);
   assert.equal(posthogOperationalRecord(event).properties.run_id,'run');
-  assert.throws(()=>posthogOperationalRecord({record_type:'agent.trace'}));
+  const bundle=validateObservabilityRecord({
+    schema_version:1,record_type:'agent.trace',event_id:event.event_id,trace_id:event.event_id,records:[event],
+  });
+  assert.throws(()=>posthogOperationalRecord(bundle),/PostHog projection requires one record/);
 });
 
 test('PostHog discards unused success and HTTP rejection bodies without changing receipts',async()=>{

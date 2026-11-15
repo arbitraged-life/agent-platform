@@ -129,8 +129,11 @@ def audit_line(filepath, line_num, line_content, line_strip, on_bypass_callback=
         elif on_bypass_callback:
             on_bypass_callback(filepath, line_num, "AI-SLOP", "ai-purity-ignore: placeholders", line_strip)
 
-    # Check rule 4b: Merge Conflict Markers (cannot be bypassed)
-    if MERGE_CONFLICT_RE.search(line_strip):
+    # A standalone equals run is also a Markdown Setext heading underline. With
+    # only one line, the separator itself is ambiguous; opening/closing markers
+    # still reject an actual conflict hunk in Markdown.
+    if MERGE_CONFLICT_RE.search(line_strip) and not (
+            ext == ".md" and re.fullmatch(r"={7,}", line_strip)):
         return {
             "rule": "MERGE-CONFLICT",
             "message": "Unresolved git merge conflict marker detected.",

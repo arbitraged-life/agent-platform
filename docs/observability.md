@@ -19,9 +19,11 @@ tool names, raw exceptions, credentials, and arbitrary metadata. Identifiers are
 caller-provided opaque identifiers; private policy controls their values. Content
 capture from older adapters is intentionally not part of this structured event
 contract. Private opt-in content pipelines require separate redaction and review.
-All exporter boundaries, including legacy Opik/PostHog projections and delivery
-records, reject credential-shaped identifiers with the shared sensitive-value
-validator before transport. Schema validation alone does not enforce that policy.
+Canonical event/evidence exporters, including legacy Opik/PostHog projections,
+and delivery records reject credential-shaped identifiers with the shared
+sensitive-value validator before transport. Schema validation alone does not
+enforce that policy. The standalone Apps Script exporter uses its own
+metadata-only mapping and checks rather than this shared validator.
 
 `openAgentEvent` and `ompEvent` adapt existing runtime records. `turnEvent` constructs
 records for other adapters. `createOpikExporter` uses one shared trace/span mapping,

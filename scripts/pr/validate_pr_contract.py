@@ -40,6 +40,38 @@ def _closes_fence(marker: tuple[str, int, str] | None, fence: tuple[str, int]) -
     return marker[0] == fence[0] and marker[1] >= fence[1] and not marker[2]
 
 
+_LIST_ITEM = re.compile(r" {0,3}(?:[-+*]|[0-9]{1,9}[.)])(?P<padding> +|$)")
+
+
+def _opening_fence(line: str, list_indents: list[int]) -> tuple[str, int, int] | None:
+    """Track list containers, then apply the fence rule relative to their content."""
+    expanded = line.expandtabs(4)
+    if line.strip():
+        while list_indents and not expanded.startswith(" " * list_indents[-1]):
+            list_indents.pop()
+    indent = list_indents[-1] if list_indents else 0
+    while item := _LIST_ITEM.match(expanded[indent:].rstrip("\r\n")):
+        padding = len(item.group("padding"))
+        width = item.end() - padding + (padding if 1 <= padding <= 4 else 1)
+        indent += width
+        list_indents.append(indent)
+    # Tabs are expanded only while removing a list container, never to relax
+    # the top-level 0–3-space fence rule.
+    content = expanded[indent:] if indent else line
+    marker = _fence_marker(content)
+    return (marker[0], marker[1], indent) if marker is not None else None
+
+
+def _consume_fenced_line(line: str, fence: tuple[str, int, int]
+                         ) -> tuple[bool, tuple[str, int, int] | None]:
+    indent = fence[2]
+    expanded = line.expandtabs(4) if indent else line
+    if indent and line.strip() and not expanded.startswith(" " * indent):
+        return False, None  # A fenced block cannot outlive its list container.
+    marker = _fence_marker(expanded[indent:])
+    return True, None if _closes_fence(marker, fence[:2]) else fence
+
+
 _BLOCK_START = re.compile(
     r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|(?:[-+*]|1[.)])[ \t]+|<!--"
     r"|(?:=+|-+)[ \t]*$|(?P<rule>[_*])(?:[ \t]*(?P=rule)){2,}[ \t]*$)"
@@ -118,7 +150,8 @@ def _mask_line_comments(lines: list[str], index: int, position: int,
 def _mask_html_comments(body: str) -> str:
     lines = body.splitlines(keepends=True)
     output: list[str] = []
-    fenced: tuple[str, int] | None = None
+    fenced: tuple[str, int, int] | None = None
+    list_indents: list[int] = []
     code_end: tuple[int, int] | None = None
     commented = False
     for index, line in enumerate(lines):
@@ -130,34 +163,35 @@ def _mask_html_comments(body: str) -> str:
             position = code_end[1]
             output.append(line[:position])
             code_end = None
-        marker = _fence_marker(line)
         if fenced is not None:
-            if _closes_fence(marker, fenced):
-                fenced = None
-            output.append(line)
-            continue
-        if not commented and not position and marker is not None:
-            fenced = marker[:2]
-            output.append(line)
-            continue
+            consumed, fenced = _consume_fenced_line(line, fenced)
+            if consumed:
+                output.append(line)
+                continue
+        if not commented and not position:
+            fenced = _opening_fence(line, list_indents)
+            if fenced is not None:
+                output.append(line)
+                continue
         commented, code_end = _mask_line_comments(lines, index, position, commented, output)
     return "".join(output)
 
 
 def _document_lines(body: str) -> list[tuple[int, str]]:
     out: list[tuple[int, str]] = []
-    fenced: tuple[str, int] | None = None
+    fenced: tuple[str, int, int] | None = None
+    list_indents: list[int] = []
     offset = 0
     for line in body.splitlines(keepends=True):
-        marker = _fence_marker(line)
-        if fenced is not None:
-            if _closes_fence(marker, fenced):
-                fenced = None
-        elif marker is not None:
-            fenced = marker[:2]
-        else:
-            out.append((offset, line.rstrip("\r\n")))
+        start = offset
         offset += len(line)
+        if fenced is not None:
+            consumed, fenced = _consume_fenced_line(line, fenced)
+            if consumed:
+                continue
+        fenced = _opening_fence(line, list_indents)
+        if fenced is None:
+            out.append((start, line.rstrip("\r\n")))
     return out
 
 

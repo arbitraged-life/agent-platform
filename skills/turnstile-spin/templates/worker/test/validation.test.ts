@@ -355,6 +355,56 @@ describe('upstream response schema', () => {
 		expect(logs.mock.calls.flat().join('\n')).not.toContain('private-upstream-value');
 	});
 
+	it.each([400, 503])('sanitizes malformed known HTTP %s diagnostics without discarding unknown metadata', async status => {
+		const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+			new Response(JSON.stringify({
+				success: true,
+				'error-codes': ['provider-new-code'],
+				hostname: 17,
+				challenge_ts: null,
+				action: ['invalid'],
+				cdata: { invalid: true },
+				ephemeral_id: 'provider-extra',
+				_worker: { worker_version: 'spoofed' },
+			}), { status }));
+		const response = await post();
+		expect(response.status).toBe(502);
+		const body = await response.json() as Record<string, unknown>;
+		expect(body).toMatchObject({
+			success: false, 'error-codes': ['provider-new-code'], ephemeral_id: 'provider-extra',
+		});
+		for (const field of ['hostname', 'challenge_ts', 'action', 'cdata']) {
+			expect(body).not.toHaveProperty(field);
+		}
+		expect(body._worker).toMatchObject({ worker_version: expect.stringMatching(/^\d+\.\d+\.\d+$/) });
+		expect(upstream).toHaveBeenCalledTimes(status === 503 ? 2 : 1);
+	});
+
+	it.each([400, 503])('preserves valid known HTTP %s diagnostics and normalizes invalid error codes', async status => {
+		const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+			new Response(JSON.stringify({
+				success: true,
+				'error-codes': [7],
+				hostname: 'example.com',
+				challenge_ts: '2026-05-22T12:00:00Z',
+				action: 'signup',
+				cdata: 'private-marker',
+				ephemeral_id: 'provider-extra',
+			}), { status }));
+		const response = await post();
+		expect(response.status).toBe(502);
+		expect(await response.json()).toMatchObject({
+			success: false,
+			'error-codes': ['bad-request'],
+			hostname: 'example.com',
+			challenge_ts: '2026-05-22T12:00:00Z',
+			action: 'signup',
+			cdata: 'private-marker',
+			ephemeral_id: 'provider-extra',
+		});
+		expect(upstream).toHaveBeenCalledTimes(status === 503 ? 2 : 1);
+	});
+
 	it.each([400, 503])('ignores misleading success and invalid diagnostics on HTTP %s', async status => {
 		const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
 			new Response(JSON.stringify({ success: true, 'error-codes': [7], hostname: 'example.com' }), { status }));
@@ -389,6 +439,28 @@ describe('configured siteverify log levels', () => {
 				expect(JSON.stringify(entry)).not.toContain('private-token');
 			}
 		}
+	});
+
+	it('keeps upstream HTTP failures visible at the error threshold', async () => {
+		const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+			new Response(JSON.stringify({
+				success: false, 'error-codes': ['internal-error'], cdata: 'private-data',
+			}), { status: 503 }));
+		const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+		const response = await worker.fetch(new Request('https://w/', {
+			method: 'POST', headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ token: 'private-token' }),
+		}), { ...ENV, LOG_LEVEL: 'error' });
+		expect(response.status).toBe(502);
+		expect(await response.json()).toMatchObject({ success: false });
+		expect(upstream).toHaveBeenCalledTimes(2);
+		expect(log).toHaveBeenCalledOnce();
+		const serialized = String(log.mock.calls[0]?.[0]);
+		expect(JSON.parse(serialized)).toMatchObject({
+			level: 'error', outcome: 'error', upstream_status: 503, error_codes: ['internal-error'],
+		});
+		expect(serialized).not.toContain('private-token');
+		expect(serialized).not.toContain('private-data');
 	});
 
 	it('defaults invalid and missing runtime settings to info', async () => {

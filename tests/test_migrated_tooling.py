@@ -45,14 +45,28 @@ class SkillPathTests(unittest.TestCase):
 
 class ReviewStreamTests(unittest.TestCase):
     @staticmethod
-    def event(content):
+    def event(content, *, stop_reason="stop"):
+        return {
+            "type": "message_end",
+            "message": {
+                "role": "assistant",
+                "stopReason": stop_reason,
+                "content": [{"type": "text", "text": content}],
+            },
+        }
+
+    @staticmethod
+    def text_update(content):
         return {
             "type": "message_update",
             "assistantMessageEvent": {"type": "text_end", "content": content},
         }
 
     def stream(self, *events):
-        producer = "import json; events = " + repr(events) + "; [print(json.dumps(event), flush=True) for event in events]"
+        producer = (
+            "import json; events = " + repr(events)
+            + "; [print(event if isinstance(event, str) else json.dumps(event), flush=True) for event in events]"
+        )
         # qlty-ignore(bandit:B603): Current interpreter runs repository code and test-owned producer source without a shell.
         return subprocess.run(
             [sys.executable, str(STREAM), "5", sys.executable, "-c", producer],
@@ -66,6 +80,57 @@ class ReviewStreamTests(unittest.TestCase):
                 result = self.stream(self.event(json.dumps(candidate)))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(json.loads(result.stdout), candidate)
+
+    def test_waits_for_completed_message_after_text_blocks(self):
+        candidate = {"verdict": "PASS", "findings": []}
+        content = json.dumps(candidate)
+        result = self.stream(
+            self.text_update(content),
+            self.text_update(""),
+            self.event(content),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), candidate)
+
+    def test_joins_all_text_blocks_in_completed_message(self):
+        candidate = {"verdict": "FAIL", "findings": ["critical defect"]}
+        content = json.dumps(candidate)
+        message = self.event(content)
+        message["message"]["content"] = [
+            {"type": "thinking", "thinking": "internal reasoning"},
+            {"type": "text", "text": content[:18]},
+            {"type": "text", "text": content[18:]},
+        ]
+        result = self.stream(message)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), candidate)
+
+    def test_rejects_trailing_text_after_initial_valid_block(self):
+        message = self.event(json.dumps({"verdict": "PASS", "findings": []}))
+        message["message"]["content"].append({"type": "text", "text": " extra"})
+        result = self.stream(self.text_update(message["message"]["content"][0]["text"]), message)
+        self.assertEqual(result.returncode, 125, result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_rejects_duplicate_verdict_fields_in_completed_message(self):
+        content = '{"verdict":"FAIL","findings":[],"verdict":"PASS"}'
+        result = self.stream(self.event(content))
+        self.assertEqual(result.returncode, 125, result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_rejects_duplicate_findings_fields_in_completed_message(self):
+        content = '{"verdict":"PASS","findings":["critical defect"],"findings":[]}'
+        result = self.stream(self.event(content))
+        self.assertEqual(result.returncode, 125, result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_rejects_duplicate_authoritative_envelope_fields(self):
+        candidate = json.dumps({"verdict": "PASS", "findings": []})
+        message = json.dumps(self.event(candidate))
+        duplicate = message.replace('"stopReason": "stop"', '"stopReason": "error", "stopReason": "stop"')
+        result = self.stream(duplicate)
+        self.assertEqual(result.returncode, 125, result.stderr)
+        self.assertEqual(result.stdout, "")
 
     def test_malformed_final_candidates_fail_closed(self):
         candidates = (
@@ -100,10 +165,52 @@ class ReviewStreamTests(unittest.TestCase):
         self.assertEqual(result.returncode, 125, result.stderr)
         self.assertEqual(result.stdout, "")
 
+    def test_invalid_completed_message_cannot_be_followed_by_pass(self):
+        result = self.stream(
+            self.event(json.dumps({"verdict": "PASS", "findings": []}), stop_reason="error"),
+            self.event(json.dumps({"verdict": "PASS", "findings": []})),
+        )
+        self.assertEqual(result.returncode, 125, result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_rejects_non_text_outcomes_and_malformed_completed_messages(self):
+        valid = json.dumps({"verdict": "PASS", "findings": []})
+        def message_with(**fields):
+            event = self.event(valid)
+            event["message"].update(fields)
+            return event
+
+        cases = (
+            self.event(valid, stop_reason="toolUse"),
+            self.event(valid, stop_reason="length"),
+            self.event(valid, stop_reason="aborted"),
+            message_with(content=[
+                {"type": "toolCall", "name": "bash"},
+                {"type": "text", "text": valid},
+            ]),
+            message_with(content=[None]),
+            message_with(content=valid),
+            message_with(content=[{"type": "thinking", "thinking": "no verdict"}]),
+            message_with(content=[
+                {"type": "thinking", "thinking": 42},
+                {"type": "text", "text": valid},
+            ]),
+            message_with(stopReason=None),
+            message_with(errorMessage="provider failure"),
+            message_with(errorMessage=0),
+            {"type": "message_end", "message": None},
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                result = self.stream(case)
+                self.assertEqual(result.returncode, 125, result.stderr)
+                self.assertEqual(result.stdout, "")
+
     def test_non_object_event_envelopes_and_progress_do_not_crash(self):
         result = self.stream(
             [], None, {"type": "message_update", "assistantMessageEvent": []},
-            {"type": "progress"}, self.event(json.dumps({"verdict": "PASS", "findings": []})),
+            {"type": "progress"}, self.text_update('{"verdict":"PASS","findings":[]}'),
+            self.event(json.dumps({"verdict": "PASS", "findings": []})),
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), {"verdict": "PASS", "findings": []})
@@ -114,6 +221,11 @@ class ReviewStreamTests(unittest.TestCase):
             text=True, capture_output=True,
         )
         self.assertEqual(result.returncode, 125)
+
+    def test_text_only_stream_without_completed_message_fails_closed(self):
+        result = self.stream(self.text_update('{"verdict":"PASS","findings":[]}'))
+        self.assertEqual(result.returncode, 125, result.stderr)
+        self.assertEqual(result.stdout, "")
 
     def test_process_without_verdict_times_out(self):
         # qlty-ignore(bandit:B603): Current interpreter and literal sleeping fixture; bounded process timeout, no shell.
@@ -163,7 +275,7 @@ class ReviewStreamTests(unittest.TestCase):
             bin_dir = root / "bin"
             bin_dir.mkdir()
             invocation = root / "omp-arguments"
-            payload = json.dumps(self.event(json.dumps({"verdict": "PASS", "findings": ["critical defect"]})))
+            payload = json.dumps(self.event('{"verdict":"FAIL","findings":["critical defect"],"verdict":"PASS","findings":[]}'))
             omp = bin_dir / "omp"
             omp.write_text(
                 "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$OMP_ARGUMENTS\"\n"

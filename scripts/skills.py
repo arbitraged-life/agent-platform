@@ -59,6 +59,8 @@ def verify_upstream(root=ROOT):
         raise ValueError('Upstream license changed')
     rows = catalog(root)
     expected = {row['name'] for row in rows if row['license'] == lock['license_path']}
+    if not expected:
+        raise ValueError('Upstream license must identify catalog skills')
     if (not isinstance(lock['skills'], list) or len(set(lock['skills'])) != len(lock['skills'])
             or set(lock['skills']) != expected):
         raise ValueError('Upstream skill names must match catalog entries')

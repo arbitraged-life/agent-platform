@@ -196,6 +196,42 @@ Revert safely.
             [],
         )
 
+    def test_list_fences_keep_literal_comments_out_of_section_masking(self):
+        for marker in ("-", "1.", "12."):
+            for fence in ("````", "~~~~"):
+                with self.subTest(marker=marker, fence=fence):
+                    indent = " " * (len(marker) + 1)
+                    body = (
+                        marker + " Example\n\n"
+                        + indent + "  " + fence + "markdown\n"
+                        + indent + "<!-- literal code comment\n"
+                        + indent + fence + fence[0] + "\n\n"
+                        + self._valid_body()
+                    )
+                    self.assertEqual(
+                        self.m.validate("fix(pr): preserve list code examples", body, self.m.DEFAULT),
+                        [],
+                    )
+
+    def test_list_fences_end_when_their_container_ends(self):
+        for opening, content in (
+            ("- ```markdown\n", "  <!-- literal code comment\n"),
+            ("1. Example\n\n    ~~~markdown\n", "   <!-- literal code comment\n"),
+            ("- Outer\n  - Inner\n\n    ```markdown\n", "    <!-- literal code comment\n"),
+        ):
+            with self.subTest(opening=opening):
+                self.assertEqual(
+                    self.m.validate(
+                        "fix(pr): preserve list code examples",
+                        opening + content + "\n" + self._valid_body(), self.m.DEFAULT,
+                    ),
+                    [],
+                )
+
+    def test_list_like_text_inside_comments_cannot_hide_the_comment_state(self):
+        body = "<!--\n- ```markdown\n-->\n<!--\n" + self._valid_body() + "-->\n"
+        self.assertEqual(self.m.parse_sections(body), ({}, set()))
+
     def test_unclosed_comment_example_inside_fence_keeps_later_sections_visible(self):
         body = self._valid_body().replace(
             "## What", "````markdown\n<!-- example starts\n````\n\n## What", 1

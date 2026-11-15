@@ -227,6 +227,51 @@ describe('Content-Type handling', () => {
 	beforeEach(() => vi.restoreAllMocks());
 	afterEach(() => vi.restoreAllMocks());
 
+	it.each([
+		['ApPlIcAtIoN/JsOn; charset=UTF-8', JSON.stringify({ token: 'json-token' }), 'json-token'],
+		['APPLICATION/X-WWW-FORM-URLENCODED; charset=UTF-8', 'token=form-token', 'form-token'],
+	])('accepts mixed-case supported media type %s', async (contentType, body, token) => {
+		const upstream = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ success: true })));
+		const res = await worker.fetch(new Request('https://w/', {
+			method: 'POST', headers: { 'Content-Type': contentType }, body,
+		}), TEST_ENV);
+		expect(res.status).toBe(200);
+		expect((await res.json() as { success: boolean }).success).toBe(true);
+		expect(upstream).toHaveBeenCalledOnce();
+		const forwarded = upstream.mock.calls[0]?.[1]?.body as FormData;
+		expect(forwarded.get('response')).toBe(token);
+	});
+
+	it('accepts mixed-case multipart essence without changing boundary bytes', async () => {
+		const form = new FormData();
+		form.set('token', 'multipart-token');
+		const encoded = new Request('https://w/', { method: 'POST', body: form });
+		const originalBoundary = encoded.headers.get('Content-Type')?.match(/boundary=([^;]+)/)?.[1];
+		if (!originalBoundary) throw new Error('FormData fixture missing boundary');
+		const boundary = 'MiXeD-Boundary-Case-123';
+		const contentType = `MuLtIpArT/FoRm-DaTa; boundary=${boundary}`;
+		const body = (await encoded.text()).replaceAll(originalBoundary, boundary);
+		const upstream = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ success: true })));
+		const res = await worker.fetch(new Request('https://w/', {
+			method: 'POST', headers: { 'Content-Type': contentType }, body,
+		}), TEST_ENV);
+		expect(res.status).toBe(200);
+		expect(upstream).toHaveBeenCalledOnce();
+		const forwarded = upstream.mock.calls[0]?.[1]?.body as FormData;
+		expect(forwarded.get('response')).toBe('multipart-token');
+	});
+
+	it.each(['text/application/json', 'application/json-extra', 'application/json, text/plain'])(
+		'rejects a non-exact media type %s before upstream verification', async contentType => {
+			const upstream = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('unexpected upstream call'));
+			const res = await worker.fetch(new Request('https://w/', {
+				method: 'POST', headers: { 'Content-Type': contentType }, body: '{"token":"abc"}',
+			}), TEST_ENV);
+			expect(res.status).toBe(415);
+			expect(upstream).not.toHaveBeenCalled();
+		},
+	);
+
 	it('returns 415 for unsupported content type', async () => {
 		const res = await worker.fetch(
 			new Request('https://w/', {

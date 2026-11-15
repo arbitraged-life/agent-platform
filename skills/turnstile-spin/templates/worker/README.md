@@ -63,6 +63,8 @@ JSON, URL-encoded, and multipart bodies are limited to 16 KiB, including form
 framing. The Worker counts streamed bytes before parsing, even when Content-Length
 is absent or understated. An oversized body returns HTTP 413 without calling
 Siteverify; a body exactly at the limit remains admissible.
+Supported media types are matched exactly and case-insensitively. Parameter
+values, including multipart boundary bytes, retain their original case.
 
 ### Response
 
@@ -81,6 +83,9 @@ Siteverify; a body exactly at the limit remains admissible.
 ```
 
 On token rejection, `success` is the boolean `false` and `error-codes` lists the reasons. A valid upstream 2xx verification result returns HTTP `200` regardless of token outcome; callers must check `response.success`. Worker failures return 400 for bad input, 413 for an oversized body, 415 for unsupported content type, 500 for a missing secret, or 502/504 for upstream issues. Malformed upstream 2xx JSON or response fields return 502 with `invalid-upstream-response`, without retrying that malformed result. Transport interruptions retain the bounded retry policy.
+HTTP-error diagnostics always return `success: false` and string-array error
+codes. Known optional diagnostic fields are retained only when they are strings;
+other provider metadata remains available for existing callers.
 
 #### Error codes
 
@@ -112,8 +117,10 @@ On token rejection, `success` is the boolean `false` and `error-codes` lists the
 Set vars in `wrangler.toml` (`[vars]` block) or via `wrangler deploy --var KEY:value`. Secrets only via `wrangler secret put`.
 
 `LOG_LEVEL` is a minimum severity: `warn` suppresses successful verification logs;
-`error` emits only Worker errors. Missing or invalid values use `info`. Logs do
-not include the token, secret, visitor IP, idempotency key, or cdata value.
+`error` retains Worker errors and non-2xx upstream HTTP failures. Ordinary token
+rejection on upstream HTTP 200 remains `warn` and is filtered at the `error`
+threshold. Missing or invalid values use `info`. Logs do not include the token,
+secret, visitor IP, idempotency key, or cdata value.
 
 ## Frontend snippet
 

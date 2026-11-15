@@ -42,6 +42,22 @@ class PurityCheckerTests(unittest.TestCase):
                 self.assertEqual(result["rule"], "MERGE-CONFLICT")
                 self.assertIsNone(result["ignore_tag"])
 
+    def test_markdown_setext_headings_are_not_merge_separators(self):
+        for underline in ("=======", "==========", "  =======  "):
+            with self.subTest(underline=underline):
+                self.assertIsNone(self.audit("README.md", underline))
+
+    def test_markdown_conflict_hunk_still_fails_closed(self):
+        hunk = ("<<<<<<< HEAD", "Local paragraph", "=======",
+                "Incoming paragraph", ">>>>>>> feature/topic")
+        violations = [self.audit("README.md", line) for line in hunk]
+        self.assertEqual([result["rule"] for result in violations if result],
+                         ["MERGE-CONFLICT", "MERGE-CONFLICT"])
+        for marker in ("||||||| base", "<<<<<<<<< configured", "========= with context"):
+            with self.subTest(marker=marker):
+                self.assertEqual(self.audit("README.md", marker)["rule"], "MERGE-CONFLICT")
+
+
     def test_ordinary_text_and_inline_operators_are_not_markers(self):
         for text in ("use <<<<<<< as an example", "a ======= b", "=======literal",
                      ">>>>>>>feature", "|||||||base", "some ordinary text"):

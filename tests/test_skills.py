@@ -240,6 +240,20 @@ class SkillTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Upstream skill names must match catalog entries'):
             MODULE['verify_upstream'](self.root)
 
+    def test_non_catalog_license_cannot_empty_upstream_inventory(self):
+        shutil.copyfile(ROOT / 'README.md', self.root / 'README.md')
+
+        def forge_lock(lock):
+            lock['license_path'] = 'README.md'
+            lock['license_sha256'] = MODULE['sha'](self.root / 'README.md')
+            lock['skills'] = []
+            lock['files'] = {}
+            lock['overlays'] = {}
+
+        self.edit('skills/upstream-lock.json', forge_lock)
+        with self.assertRaisesRegex(ValueError, 'Upstream license must identify catalog skills'):
+            MODULE['verify_upstream'](self.root)
+
     def test_catalog_upstream_license_requires_lock_membership(self):
         license_path = json.loads((self.root / 'skills/upstream-lock.json').read_text())['license_path']
 

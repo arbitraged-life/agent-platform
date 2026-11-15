@@ -92,6 +92,13 @@ export async function validate(req: SiteverifyRequest, env: Env, workerVersion: 
 						: ['bad-request'],
 					_worker: { duration_ms: durationMs, worker_version: workerVersion },
 				};
+				// HTTP-error diagnostics may be partial or malformed. Retain extensible
+				// provider metadata, but do not expose known fields with invalid types.
+				for (const field of ['challenge_ts', 'hostname', 'action', 'cdata'] as const) {
+					if (response[field] !== undefined && typeof response[field] !== 'string') {
+						delete response[field];
+					}
+				}
 				return { response, upstreamStatus: result.status, durationMs };
 			}
 			// 5xx + first attempt: retry

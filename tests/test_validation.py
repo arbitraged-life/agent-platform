@@ -159,7 +159,7 @@ class BoundaryTests(unittest.TestCase):
         publish = next(step for step in uploader['steps']
                        if step.get('uses', '').startswith('Mergifyio/gha-mergify-ci@'))
 
-        for step in (artifact, download, publish):
+        for step in (artifact, *uploader['steps']):
             self.assertRegex(step['uses'], r'^[^@]+@[0-9a-f]{40}$')
         self.assertRegex(artifact['with']['path'], r'^[A-Za-z0-9_-]+-\*\.xml$')
         self.assertTrue(download['with']['path'].startswith('${{ runner.temp }}/'))
@@ -173,7 +173,10 @@ class BoundaryTests(unittest.TestCase):
         self.assertEqual(str(uploader).count('secrets.'), 1)
         self.assertFalse(any('run' in step or 'env' in step or 'checkout@' in step.get('uses', '')
                              or 'cache@' in step.get('uses', '') for step in uploader['steps']))
-        self.assertTrue(all(step['uses'] in {download['uses'], publish['uses']}
+        allowed_actions = {
+            'actions/download-artifact', 'Mergifyio/gha-mergify-ci', 'step-security/harden-runner'
+        }
+        self.assertTrue(all(step['uses'].split('@', 1)[0] in allowed_actions
                             for step in uploader['steps']))
 
     def test_test_insights_gate_matrix_keeps_advisories_and_failed_tests(self):
@@ -191,28 +194,30 @@ class BoundaryTests(unittest.TestCase):
         uploader = jobs['upload-test-insights']
         self.assertTrue(run_tests['continue-on-error'])
 
-        for event, credential, test_result, prior_ok in product(
-            ('schedule', 'pull_request'), (False, True), ('success', 'failure'), (False, True)
+        for event, credential, test_result, prior_ok, upstream_ok in product(
+            ('schedule', 'pull_request'), (False, True), ('success', 'failure'),
+            (False, True), (False, True)
         ):
-            with self.subTest(event=event, credential=credential,
-                              test_result=test_result, prior_ok=prior_ok):
+            with self.subTest(event=event, credential=credential, test_result=test_result,
+                              prior_ok=prior_ok, upstream_ok=upstream_ok):
+                expected_job = upstream_ok and (event == 'schedule' or credential)
+                tests_ran = expected_job and credential
                 values = {
                     'github.event_name': event,
                     'needs.insights-config.outputs.available': str(credential).lower(),
-                    'steps.tests.outcome': test_result if credential else 'skipped',
-                    'needs.node-tests.outputs.test-outcome': test_result if credential else '',
+                    'steps.tests.outcome': test_result if tests_ran else 'skipped',
+                    'needs.node-tests.outputs.test-outcome': test_result if tests_ran else '',
                 }
-                expected_job = event == 'schedule' or credential
-                self.assertEqual(workflow_condition(tests['if'], values), expected_job)
+                self.assertEqual(workflow_condition(tests['if'], values, upstream_ok), expected_job)
                 self.assertEqual(workflow_condition(run_tests['if'], values) and expected_job,
-                                 credential)
+                                 tests_ran)
                 self.assertEqual(workflow_condition(artifact['if'], values, prior_ok) and expected_job,
-                                 credential)
+                                 tests_ran)
                 self.assertEqual(workflow_condition(audit['if'], values, prior_ok) and expected_job,
-                                 event == 'schedule')
+                                 expected_job and event == 'schedule')
                 self.assertEqual(workflow_condition(failure['if'], values, prior_ok) and expected_job,
-                                 credential and test_result == 'failure')
-                self.assertEqual(workflow_condition(uploader['if'], values, prior_ok), credential)
+                                 tests_ran and test_result == 'failure')
+                self.assertEqual(workflow_condition(uploader['if'], values, prior_ok), tests_ran)
 
     def test_validator_dispatches_advisory_gate_only_for_ci_and_security(self):
         for command in ['ci', 'security', 'lint', 'test']:
