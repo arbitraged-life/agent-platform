@@ -98,6 +98,25 @@ _BLOCK_START = re.compile(
 )
 
 
+_RAW_HTML_START = re.compile(
+    r" {0,3}<(?:pre|script|style|textarea)(?=[\s>]|$)", re.IGNORECASE | re.ASCII
+)
+_RAW_HTML_END = re.compile(r"</(?:pre|script|style|textarea)>", re.IGNORECASE | re.ASCII)
+
+
+def _raw_html_block_end(lines: list[str], index: int, indent: int) -> int | None:
+    content = lines[index].expandtabs(4)[indent:] if indent else lines[index]
+    if _RAW_HTML_START.match(content.rstrip("\r\n")) is None:
+        return None
+    for end in range(index, len(lines)):
+        line = lines[end]
+        if end > index and indent and line.strip() and not line.expandtabs(4).startswith(" " * indent):
+            return end - 1
+        if _RAW_HTML_END.search(line):
+            return end
+    return len(lines) - 1
+
+
 def _paragraph_continues(content: str, paragraph: bool) -> bool:
     if not content.strip() or _THEMATIC_BREAK.fullmatch(content):
         return False
@@ -114,7 +133,11 @@ def _paragraph_continues(content: str, paragraph: bool) -> bool:
 def _ends_code_span_block(line: str, heading: bool) -> bool:
     if heading or not line.strip():
         return True
-    return _BLOCK_START.match(line.rstrip("\r\n")) is not None or _fence_marker(line) is not None
+    return (
+        _BLOCK_START.match(line.rstrip("\r\n")) is not None
+        or _fence_marker(line) is not None
+        or _RAW_HTML_START.match(line.rstrip("\r\n")) is not None
+    )
 
 
 def _code_span_end(lines: list[str], line_index: int, position: int,
@@ -147,19 +170,20 @@ def _mask_comment_tail(line: str, position: int, output: list[str]) -> tuple[int
 
 
 def _mask_line_comments(lines: list[str], index: int, position: int,
-                        commented: bool, output: list[str]) -> tuple[bool, tuple[int, int] | None]:
+                        commented: bool, output: list[str], raw_html: bool = False
+                        ) -> tuple[bool, tuple[int, int] | None]:
     line = lines[index]
     while position < len(line):
         if commented:
             position, commented = _mask_comment_tail(line, position, output)
             continue
-        token = re.search(r"<!--|`+", line[position:])
+        token = re.search(r"<!--" if raw_html else r"<!--|`+", line[position:])
         if token is None:
             output.append(line[position:])
             break
         start = position + token.start()
         output.append(line[position:start])
-        if _is_escaped(line, start):
+        if not raw_html and _is_escaped(line, start):
             output.append(line[start:start + 1])
             position = start + 1
             continue
@@ -187,6 +211,7 @@ def _mask_html_comments(body: str) -> str:
     list_indents: list[int] = []
     paragraph_indent: int | None = None
     code_end: tuple[int, int] | None = None
+    html_end = -1
     commented = False
     for index, line in enumerate(lines):
         position = 0
@@ -202,12 +227,17 @@ def _mask_html_comments(body: str) -> str:
             if consumed:
                 output.append(line)
                 continue
-        if not commented and not position:
+        if not commented and not position and index > html_end:
             fenced, paragraph_indent = _opening_fence(line, list_indents, paragraph_indent)
             if fenced is not None:
                 output.append(line)
                 continue
-        commented, code_end = _mask_line_comments(lines, index, position, commented, output)
+            end = _raw_html_block_end(lines, index, list_indents[-1] if list_indents else 0)
+            if end is not None:
+                html_end, paragraph_indent = end, None
+        commented, code_end = _mask_line_comments(
+            lines, index, position, commented, output, raw_html=index <= html_end
+        )
     return "".join(output)
 
 
@@ -216,17 +246,26 @@ def _document_lines(body: str) -> list[tuple[int, str]]:
     fenced: tuple[str, int, int] | None = None
     list_indents: list[int] = []
     paragraph_indent: int | None = None
+    html_end = -1
     offset = 0
-    for line in body.splitlines(keepends=True):
+    lines = body.splitlines(keepends=True)
+    for index, line in enumerate(lines):
         start = offset
         offset += len(line)
+        if index <= html_end:
+            continue
         if fenced is not None:
             consumed, fenced = _consume_fenced_line(line, fenced)
             if consumed:
                 continue
         fenced, paragraph_indent = _opening_fence(line, list_indents, paragraph_indent)
-        if fenced is None:
-            out.append((start, line.rstrip("\r\n")))
+        if fenced is not None:
+            continue
+        end = _raw_html_block_end(lines, index, list_indents[-1] if list_indents else 0)
+        if end is not None:
+            html_end, paragraph_indent = end, None
+            continue
+        out.append((start, line.rstrip("\r\n")))
     return out
 
 

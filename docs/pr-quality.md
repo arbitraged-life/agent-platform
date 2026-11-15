@@ -26,6 +26,9 @@ its list container ends; literal comments inside it do not hide later sections.
 Thematic breaks take precedence over list prefixes. An ordered list may interrupt
 a paragraph only when it starts at 1; other start numbers remain valid after
 block boundaries and for subsequent list items.
+Closed raw HTML blocks (`pre`, `script`, `style`, and `textarea`) also end the
+paragraph context. Their contents do not open Markdown lists or fences; inline
+or escaped tags are not block boundaries.
 At document level, four-space and tab-indented pseudo-closers remain code content
 and cannot expose hidden section headings.
 The purity checker rejects standard, diff3, and longer Git conflict blocks

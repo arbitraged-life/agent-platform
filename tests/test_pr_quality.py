@@ -261,6 +261,62 @@ Revert safely.
                     [],
                 )
 
+    def test_closed_raw_html_blocks_allow_following_ordered_list_fences(self):
+        prefixes = [
+            f"<{tag}>\nexample\n</{tag}>\n"
+            for tag in ("pre", "script", "style", "textarea")
+        ] + [
+            "Paragraph\n  <PrE class=\"example\">\nexample\n  </pRe>\n",
+            "<pre>example</pre>\n",
+            "<pre>\n2. ~~~\n</pre>\n",
+            "Example with `no closing delimiter.\n<pre>\n`\n</pre>\n",
+        ]
+        for prefix in prefixes:
+            with self.subTest(prefix=prefix):
+                body = prefix + "2. ~~~\n   <!-- literal code comment\n" + self._valid_body()
+                self.assertEqual(
+                    self.m.validate("fix(pr): preserve closed HTML boundaries", body, self.m.DEFAULT),
+                    [],
+                )
+
+    def test_raw_html_does_not_create_boundaries_inside_paragraphs(self):
+        for prefix in (
+            "Paragraph with <pre>example</pre>\n",
+            "\\<pre>\nexample\n\\</pre>\n",
+            "<pre>\nexample\n</pre>\nParagraph\n",
+        ):
+            with self.subTest(prefix=prefix):
+                body = prefix + "2. ~~~\n   <!--\n" + self._valid_body() + "-->\n"
+                self.assertEqual(
+                    self.m.validate("fix(pr): preserve real paragraph boundaries", body, self.m.DEFAULT),
+                    [
+                        f"missing required section: ## {heading}"
+                        for heading in self.m.DEFAULT["required_sections"]
+                    ],
+                )
+
+    def test_raw_html_content_cannot_supply_required_sections(self):
+        for body in (
+            "<pre>\n" + self._valid_body(),
+            "<pre>\n`<!--\n</pre>\n" + self._valid_body() + "-->\n",
+            "<pre>\n\\<!--\n</pre>\n" + self._valid_body() + "-->\n",
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(
+                    self.m.validate("fix(pr): preserve raw HTML boundaries", body, self.m.DEFAULT),
+                    [
+                        f"missing required section: ## {heading}"
+                        for heading in self.m.DEFAULT["required_sections"]
+                    ],
+                )
+
+    def test_raw_html_cannot_outlive_its_list_container(self):
+        body = "- <pre>\n  example\n" + self._valid_body()
+        self.assertEqual(
+            self.m.validate("fix(pr): preserve HTML container boundaries", body, self.m.DEFAULT),
+            [],
+        )
+
     def test_ordered_list_start_one_can_interrupt_paragraph(self):
         for marker in ("1.", "1)", "0001.", "1. 2."):
             with self.subTest(marker=marker):
