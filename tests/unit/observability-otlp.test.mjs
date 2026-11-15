@@ -477,3 +477,41 @@ test("transport and malformed successful responses remain uncertain, never expos
   }
   assert.throws(() => createOtlpExporter({ ...configurations.logfire, endpoint: "https://evil.example" }, { environment: { TOKEN: "secret" } }), /endpoint/i);
 });
+
+test("oversized OTLP acknowledgement cancels the reader and remains uncertain without retry", async () => {
+  let cancellations = 0, calls = 0;
+  const checkpoints = [];
+  const exporter = createOtlpExporter(configurations.honeycomb, {
+    environment: { TOKEN: "synthetic" },
+    fetcher: async () => {
+      calls++;
+      return new Response(new ReadableStream({
+        start(controller) { controller.enqueue(new Uint8Array(64 * 1024 + 1)); },
+        cancel() { cancellations++; },
+      }));
+    },
+  });
+  await assert.rejects(() => exporter(bundle([finish()]), {
+    onSignal: async (checkpoint) => checkpoints.push(checkpoint),
+  }), error => error.receipt.delivery_status === "uncertain" && error.receipt.retryable === false &&
+    error.receipt.accepted_records.length === 0 && error.receipt.billable_counts.accepted_spans === 0);
+  assert.equal(calls, 1);
+  assert.equal(cancellations, 1);
+  assert.equal(checkpoints.length, 1);
+  assert.equal(checkpoints[0].status, "uncertain");
+});
+
+test("OTLP reader failure preserves uncertain classification when stream cancellation fails", async () => {
+  let cancellations = 0;
+  const exporter = createOtlpExporter(configurations.honeycomb, {
+    environment: { TOKEN: "synthetic" },
+    fetcher: async () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(64 * 1024 + 1)); },
+      cancel() { cancellations++; throw new Error("private cancellation body"); },
+    })),
+  });
+  await assert.rejects(() => exporter(bundle([finish()])), error =>
+    error.receipt.delivery_status === "uncertain" && error.receipt.retryable === false &&
+    !error.message.includes("private"));
+  assert.equal(cancellations, 1);
+});

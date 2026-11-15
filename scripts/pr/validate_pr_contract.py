@@ -26,21 +26,251 @@ def normalize_heading(value: str) -> str:
     return " ".join(value.strip().split()).casefold()
 
 
+def _fence_marker(line: str) -> tuple[str, int, str] | None:
+    marker = re.match(r" {0,3}(`{3,}|~{3,})", line)
+    if marker is None:
+        return None
+    fence = marker.group(1)
+    return fence[0], len(fence), line[marker.end():].strip()
+
+
+def _closes_fence(marker: tuple[str, int, str] | None, fence: tuple[str, int]) -> bool:
+    if marker is None:
+        return False
+    return marker[0] == fence[0] and marker[1] >= fence[1] and not marker[2]
+
+
+_LIST_ITEM = re.compile(r" {0,3}(?:[-+*]|(?P<number>[0-9]{1,9})[.)])(?P<padding> +|$)")
+_THEMATIC_BREAK = re.compile(r" {0,3}(?P<rule>[-_*])(?:[ \t]*(?P=rule)){2,}[ \t]*")
+
+
+def _list_item(content: str, interrupting: bool) -> re.Match[str] | None:
+    if _THEMATIC_BREAK.fullmatch(content):
+        return None
+    item = _LIST_ITEM.match(content)
+    if item is None or not interrupting:
+        return item
+    number = item.group("number")
+    if not content[item.end():].strip() or (number is not None and int(number) != 1):
+        return None
+    return item
+
+
+def _opening_fence(line: str, list_indents: list[int], paragraph_indent: int | None
+                   ) -> tuple[tuple[str, int, int] | None, int | None]:
+    """Track list prefixes and the owning container of an open paragraph."""
+    expanded = line.expandtabs(4)
+    if line.strip():
+        while list_indents and not expanded.startswith(" " * list_indents[-1]):
+            list_indents.pop()
+    indent = list_indents[-1] if list_indents else 0
+    content = expanded[indent:].rstrip("\r\n")
+    while item := _list_item(content, paragraph_indent is not None and paragraph_indent <= indent):
+        padding = len(item.group("padding"))
+        width = item.end() - padding + (padding if 1 <= padding <= 4 else 1)
+        indent += width
+        list_indents.append(indent)
+        paragraph_indent = None
+        content = expanded[indent:].rstrip("\r\n")
+    # Tabs are expanded only while removing a list container, never to relax
+    # the top-level 0–3-space fence rule.
+    marker = _fence_marker(expanded[indent:] if indent else line)
+    if marker is not None:
+        return (marker[0], marker[1], indent), None
+    if not _paragraph_continues(content, paragraph_indent is not None):
+        return None, None
+    return None, indent if paragraph_indent is None else paragraph_indent
+
+
+def _consume_fenced_line(line: str, fence: tuple[str, int, int]
+                         ) -> tuple[bool, tuple[str, int, int] | None]:
+    indent = fence[2]
+    expanded = line.expandtabs(4) if indent else line
+    if indent and line.strip() and not expanded.startswith(" " * indent):
+        return False, None  # A fenced block cannot outlive its list container.
+    marker = _fence_marker(expanded[indent:])
+    return True, None if _closes_fence(marker, fence[:2]) else fence
+
+
+_BLOCK_START = re.compile(
+    r" {0,3}(?:#{1,6}(?:[ \t]|$)|>|(?P<list>(?:[-+*]|1[.)])[ \t]+)|<!--"
+    r"|(?P<setext>(?:=+|-+)[ \t]*$)|(?P<rule>[_*])(?:[ \t]*(?P=rule)){2,}[ \t]*$)"
+)
+
+
+_RAW_HTML_START = re.compile(
+    r" {0,3}<(?:pre|script|style|textarea)(?=[\s>]|$)", re.IGNORECASE | re.ASCII
+)
+_RAW_HTML_END = re.compile(r"</(?:pre|script|style|textarea)>", re.IGNORECASE | re.ASCII)
+
+
+def _raw_html_block_end(lines: list[str], index: int, indent: int) -> int | None:
+    content = lines[index].expandtabs(4)[indent:] if indent else lines[index]
+    if _RAW_HTML_START.match(content.rstrip("\r\n")) is None:
+        return None
+    for end in range(index, len(lines)):
+        line = lines[end]
+        if end > index and indent and line.strip() and not line.expandtabs(4).startswith(" " * indent):
+            return end - 1
+        if _RAW_HTML_END.search(line):
+            return end
+    return len(lines) - 1
+
+
+def _paragraph_continues(content: str, paragraph: bool) -> bool:
+    if not content.strip() or _THEMATIC_BREAK.fullmatch(content):
+        return False
+    if content.startswith("    "):
+        return paragraph  # Indented code cannot interrupt an existing paragraph.
+    block = _BLOCK_START.match(content)
+    # A list marker left after prefix parsing did not interrupt the paragraph;
+    # a Setext underline needs an existing paragraph to form a heading.
+    return block is None or block.group("list") is not None or (
+        not paragraph and block.group("setext") is not None
+    )
+
+
+def _ends_code_span_block(line: str, heading: bool) -> bool:
+    if heading or not line.strip():
+        return True
+    return (
+        _BLOCK_START.match(line.rstrip("\r\n")) is not None
+        or _fence_marker(line) is not None
+        or _RAW_HTML_START.match(line.rstrip("\r\n")) is not None
+    )
+
+
+def _code_span_end(lines: list[str], line_index: int, position: int,
+                   delimiter: str) -> tuple[int, int] | None:
+    heading = re.match(r" {0,3}#{1,6}(?:[ \t]|$)", lines[line_index]) is not None
+    for index in range(line_index, len(lines)):
+        candidate = lines[index]
+        if index > line_index and _ends_code_span_block(candidate, heading):
+            break
+        start = position if index == line_index else 0
+        for closing in re.finditer(r"`+", candidate[start:]):
+            if closing.group() == delimiter:
+                return index, start + closing.end()
+    return None
+
+
+def _is_escaped(line: str, start: int) -> bool:
+    escape_start = start
+    while escape_start > 0 and line[escape_start - 1] == "\\":
+        escape_start -= 1
+    return (start - escape_start) % 2 != 0
+
+
+def _mask_comment_tail(line: str, position: int, output: list[str]) -> tuple[int, bool]:
+    end = line.find("-->", position)
+    closed = end != -1
+    stop = end + 3 if closed else len(line)
+    output.append(re.sub(r"[^\r\n]", " ", line[position:stop]))
+    return stop, not closed
+
+
+def _mask_line_comments(lines: list[str], index: int, position: int,
+                        commented: bool, output: list[str], raw_html: bool = False
+                        ) -> tuple[bool, tuple[int, int] | None]:
+    line = lines[index]
+    while position < len(line):
+        if commented:
+            position, commented = _mask_comment_tail(line, position, output)
+            continue
+        token = re.search(r"<!--" if raw_html else r"<!--|`+", line[position:])
+        if token is None:
+            output.append(line[position:])
+            break
+        start = position + token.start()
+        output.append(line[position:start])
+        if not raw_html and _is_escaped(line, start):
+            output.append(line[start:start + 1])
+            position = start + 1
+            continue
+        if token.group() == "<!--":
+            position = start
+            commented = True
+            continue
+        position = start + len(token.group())
+        end = _code_span_end(lines, index, position, token.group())
+        if end is None:
+            output.append(token.group())
+            continue
+        if end[0] != index:
+            output.append(line[start:])
+            return commented, end
+        output.append(line[start:end[1]])
+        position = end[1]
+    return commented, None
+
+
+def _mask_html_comments(body: str) -> str:
+    lines = body.splitlines(keepends=True)
+    output: list[str] = []
+    fenced: tuple[str, int, int] | None = None
+    list_indents: list[int] = []
+    paragraph_indent: int | None = None
+    code_end: tuple[int, int] | None = None
+    html_end = -1
+    commented = False
+    for index, line in enumerate(lines):
+        position = 0
+        if code_end is not None:
+            if index < code_end[0]:
+                output.append(line)
+                continue
+            position = code_end[1]
+            output.append(line[:position])
+            code_end = None
+        if fenced is not None:
+            consumed, fenced = _consume_fenced_line(line, fenced)
+            if consumed:
+                output.append(line)
+                continue
+        if not commented and not position and index > html_end:
+            fenced, paragraph_indent = _opening_fence(line, list_indents, paragraph_indent)
+            if fenced is not None:
+                output.append(line)
+                continue
+            end = _raw_html_block_end(lines, index, list_indents[-1] if list_indents else 0)
+            if end is not None:
+                html_end, paragraph_indent = end, None
+        commented, code_end = _mask_line_comments(
+            lines, index, position, commented, output, raw_html=index <= html_end
+        )
+    return "".join(output)
+
+
 def _document_lines(body: str) -> list[tuple[int, str]]:
     out: list[tuple[int, str]] = []
-    fenced = False
+    fenced: tuple[str, int, int] | None = None
+    list_indents: list[int] = []
+    paragraph_indent: int | None = None
+    html_end = -1
     offset = 0
-    for line in body.splitlines(keepends=True):
-        stripped = line.lstrip()
-        if stripped.startswith((chr(96) * 3, "~~~")):
-            fenced = not fenced
-        elif not fenced:
-            out.append((offset, line.rstrip("\r\n")))
+    lines = body.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        start = offset
         offset += len(line)
+        if index <= html_end:
+            continue
+        if fenced is not None:
+            consumed, fenced = _consume_fenced_line(line, fenced)
+            if consumed:
+                continue
+        fenced, paragraph_indent = _opening_fence(line, list_indents, paragraph_indent)
+        if fenced is not None:
+            continue
+        end = _raw_html_block_end(lines, index, list_indents[-1] if list_indents else 0)
+        if end is not None:
+            html_end, paragraph_indent = end, None
+            continue
+        out.append((start, line.rstrip("\r\n")))
     return out
 
 
 def parse_sections(body: str) -> tuple[dict[str, str], set[str]]:
+    body = _mask_html_comments(body)
     headings: list[tuple[int, int, str]] = []
     for offset, line in _document_lines(body):
         if not line.startswith("## "):
@@ -62,7 +292,6 @@ def parse_sections(body: str) -> tuple[dict[str, str], set[str]]:
 
 
 def meaningful_length(text: str) -> int:
-    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
     text = re.sub(r"(?m)^\s*[-*+]\s*", "", text)
     return len(" ".join(text.split()))
 
