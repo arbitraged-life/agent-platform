@@ -92,6 +92,330 @@ Revert safely.
         errors = self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT)
         self.assertTrue(any("missing required section: ## Why" in error for error in errors))
 
+    def test_indented_pseudo_closers_cannot_expose_fenced_sections(self):
+        for fence in ("```", "~~~"):
+            for indent in ("    ", "\t", " \t"):
+                with self.subTest(fence=fence, indent=indent):
+                    body = f"{fence}markdown\n{indent}{fence}\n" + self._valid_body()
+                    self.assertEqual(self.m.parse_sections(body), ({}, set()))
+                    errors = self.m.validate(
+                        "fix(pr): enforce Markdown fence indentation", body, self.m.DEFAULT
+                    )
+                    self.assertEqual(len(errors), len(self.m.DEFAULT["required_sections"]))
+                    for heading in self.m.DEFAULT["required_sections"]:
+                        self.assertTrue(any(f"## {heading}" in error for error in errors))
+
+    def test_valid_indented_closers_expose_only_following_sections(self):
+        for fence in ("```", "~~~"):
+            for spaces in range(4):
+                with self.subTest(fence=fence, spaces=spaces):
+                    body = (
+                        f"   {fence}markdown\n## Hidden\nExample content.\n"
+                        + " " * spaces + fence + "\n" + self._valid_body()
+                    )
+                    self.assertEqual(
+                        self.m.validate(
+                            "fix(pr): enforce Markdown fence indentation", body, self.m.DEFAULT
+                        ),
+                        [],
+                    )
+                    sections, _ = self.m.parse_sections(body)
+                    self.assertNotIn("hidden", sections)
+
+    def test_indented_pseudo_openers_do_not_hide_visible_sections(self):
+        for indent in ("    ", "\t"):
+            with self.subTest(indent=indent):
+                body = indent + "```markdown\n" + self._valid_body()
+                self.assertEqual(
+                    self.m.validate(
+                        "fix(pr): enforce Markdown fence indentation", body, self.m.DEFAULT
+                    ),
+                    [],
+                )
+
+    def test_all_required_headings_inside_comment_are_missing(self):
+        body = "<!--\n" + self._valid_body() + "-->\n"
+        errors = self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT)
+        self.assertEqual(errors, [
+            f"missing required section: ## {heading}"
+            for heading in self.m.DEFAULT["required_sections"]
+        ])
+        self.assertEqual(self.m.parse_sections(body), ({}, set()))
+
+    def test_multiline_comment_cannot_supply_heading_or_visible_content(self):
+        body = (
+            "## Why\n<!-- hidden description is sufficiently long to pass the minimum\n"
+            "## What\nThis text is hidden too.\n-->\n"
+        )
+        sections, duplicates = self.m.parse_sections(body)
+        self.assertEqual(set(sections), {"why"})
+        self.assertFalse(duplicates)
+        errors = self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT)
+        self.assertIn("section ## Why has 0 meaningful characters; minimum is 20", errors)
+        self.assertIn("missing required section: ## What", errors)
+
+    def test_unterminated_comment_hides_remaining_headings(self):
+        body = "## Why\n\nVisible rationale of sufficient length.\n<!--\n" + self._valid_body()
+        errors = self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT)
+        self.assertEqual(errors, [
+            f"missing required section: ## {heading}"
+            for heading in self.m.DEFAULT["required_sections"][1:]
+        ])
+
+    def test_inline_comment_cannot_change_heading_or_supply_section_content(self):
+        body = (
+            "## Why <!-- hidden heading suffix -->\r\n"
+            "<!-- hidden rationale of enough length -->\r\n"
+            + "## What" + self._valid_body().split("## What", 1)[1]
+        )
+        errors = self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT)
+        self.assertEqual(errors, ["section ## Why has 0 meaningful characters; minimum is 20"])
+
+    def test_mixed_and_shorter_fences_do_not_close_open_fence(self):
+        body = (
+            "````markdown\n~~~\n```\n"
+            + self._valid_body()
+            + "````\n"
+            + self._valid_body()
+        )
+        errors = self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT)
+        self.assertEqual(errors, [])
+        sections, duplicates = self.m.parse_sections(body)
+        self.assertEqual(set(sections), {"why", "what", "verification", "risk / rollback"})
+        self.assertFalse(duplicates)
+
+    def test_fenced_comment_examples_do_not_hide_visible_sections(self):
+        body = (
+            "````markdown\n<!--\n## Why\n```\n~~~\n"
+            "````\n"
+            + self._valid_body()
+            + "\n~~~markdown\n<!--\n## What\n~~~\n"
+        )
+        self.assertEqual(
+            self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT),
+            [],
+        )
+
+    def test_thematic_breaks_cannot_create_false_list_fences(self):
+        for rule in ("- - -", " *\t*\t* ", "_ _ _"):
+            with self.subTest(rule=rule):
+                body = rule + "\n  ~~~markdown\n" + self._valid_body()
+                self.assertEqual(
+                    self.m.validate("fix(pr): respect Markdown block precedence", body, self.m.DEFAULT),
+                    [
+                        f"missing required section: ## {heading}"
+                        for heading in self.m.DEFAULT["required_sections"]
+                    ],
+                )
+
+    def test_thematic_break_in_list_preserves_only_the_outer_container(self):
+        body = (
+            "- Example\n  - - -\n  ~~~markdown\n  <!-- literal code comment\n"
+            + self._valid_body()
+        )
+        self.assertEqual(
+            self.m.validate("fix(pr): respect Markdown block precedence", body, self.m.DEFAULT),
+            [],
+        )
+
+    def test_noninterrupting_ordered_markers_do_not_hide_comments(self):
+        for prefix, marker, indent in (
+            ("Paragraph\n", "2.", 0),
+            ("Paragraph\n", "0)", 0),
+            ("- Example\n", "2.", 2),
+            ("===\n", "2.", 0),
+            ("Paragraph\n+\n", "2.", 0),
+        ):
+            with self.subTest(prefix=prefix, marker=marker, indent=indent):
+                body = (
+                    prefix + " " * indent + marker + " ~~~\n"
+                    + " " * (indent + len(marker) + 1) + "<!--\n"
+                    + self._valid_body() + "-->\n"
+                )
+                self.assertEqual(
+                    self.m.validate("fix(pr): respect paragraph boundaries", body, self.m.DEFAULT),
+                    [
+                        f"missing required section: ## {heading}"
+                        for heading in self.m.DEFAULT["required_sections"]
+                    ],
+                )
+
+    def test_ordered_list_fences_can_start_above_one_at_block_boundaries(self):
+        for prefix in (
+            "",
+            "Paragraph\n\n",
+            "# Example\n",
+            "Example\n===\n",
+            "- - -\n",
+            "~~~\ncode\n~~~\n",
+            "    code\n",
+            "<!-- example -->\n",
+            "1. Example\n",
+            "- Example\n",
+            "- Example\ncontinuation\n",
+        ):
+            with self.subTest(prefix=prefix):
+                body = prefix + "2. ~~~\n   <!-- literal code comment\n" + self._valid_body()
+                self.assertEqual(
+                    self.m.validate("fix(pr): preserve ordered list examples", body, self.m.DEFAULT),
+                    [],
+                )
+
+    def test_closed_raw_html_blocks_allow_following_ordered_list_fences(self):
+        prefixes = [
+            f"<{tag}>\nexample\n</{tag}>\n"
+            for tag in ("pre", "script", "style", "textarea")
+        ] + [
+            "Paragraph\n  <PrE class=\"example\">\nexample\n  </pRe>\n",
+            "<pre>example</pre>\n",
+            "<pre>\n2. ~~~\n</pre>\n",
+            "Example with `no closing delimiter.\n<pre>\n`\n</pre>\n",
+        ]
+        for prefix in prefixes:
+            with self.subTest(prefix=prefix):
+                body = prefix + "2. ~~~\n   <!-- literal code comment\n" + self._valid_body()
+                self.assertEqual(
+                    self.m.validate("fix(pr): preserve closed HTML boundaries", body, self.m.DEFAULT),
+                    [],
+                )
+
+    def test_raw_html_does_not_create_boundaries_inside_paragraphs(self):
+        for prefix in (
+            "Paragraph with <pre>example</pre>\n",
+            "\\<pre>\nexample\n\\</pre>\n",
+            "<pre>\nexample\n</pre>\nParagraph\n",
+        ):
+            with self.subTest(prefix=prefix):
+                body = prefix + "2. ~~~\n   <!--\n" + self._valid_body() + "-->\n"
+                self.assertEqual(
+                    self.m.validate("fix(pr): preserve real paragraph boundaries", body, self.m.DEFAULT),
+                    [
+                        f"missing required section: ## {heading}"
+                        for heading in self.m.DEFAULT["required_sections"]
+                    ],
+                )
+
+    def test_raw_html_content_cannot_supply_required_sections(self):
+        for body in (
+            "<pre>\n" + self._valid_body(),
+            "<pre>\n`<!--\n</pre>\n" + self._valid_body() + "-->\n",
+            "<pre>\n\\<!--\n</pre>\n" + self._valid_body() + "-->\n",
+        ):
+            with self.subTest(body=body):
+                self.assertEqual(
+                    self.m.validate("fix(pr): preserve raw HTML boundaries", body, self.m.DEFAULT),
+                    [
+                        f"missing required section: ## {heading}"
+                        for heading in self.m.DEFAULT["required_sections"]
+                    ],
+                )
+
+    def test_raw_html_cannot_outlive_its_list_container(self):
+        body = "- <pre>\n  example\n" + self._valid_body()
+        self.assertEqual(
+            self.m.validate("fix(pr): preserve HTML container boundaries", body, self.m.DEFAULT),
+            [],
+        )
+
+    def test_ordered_list_start_one_can_interrupt_paragraph(self):
+        for marker in ("1.", "1)", "0001.", "1. 2."):
+            with self.subTest(marker=marker):
+                body = (
+                    "Paragraph\n" + marker + " ~~~\n"
+                    + " " * (len(marker) + 1) + "<!-- literal code comment\n"
+                    + self._valid_body()
+                )
+                self.assertEqual(
+                    self.m.validate("fix(pr): preserve ordered list examples", body, self.m.DEFAULT),
+                    [],
+                )
+
+    def test_list_fences_keep_literal_comments_out_of_section_masking(self):
+        for marker in ("-", "1.", "12."):
+            for fence in ("````", "~~~~"):
+                with self.subTest(marker=marker, fence=fence):
+                    indent = " " * (len(marker) + 1)
+                    body = (
+                        marker + " Example\n\n"
+                        + indent + "  " + fence + "markdown\n"
+                        + indent + "<!-- literal code comment\n"
+                        + indent + fence + fence[0] + "\n\n"
+                        + self._valid_body()
+                    )
+                    self.assertEqual(
+                        self.m.validate("fix(pr): preserve list code examples", body, self.m.DEFAULT),
+                        [],
+                    )
+
+    def test_list_fences_end_when_their_container_ends(self):
+        for opening, content in (
+            ("- ```markdown\n", "  <!-- literal code comment\n"),
+            ("1. Example\n\n    ~~~markdown\n", "   <!-- literal code comment\n"),
+            ("- Outer\n  - Inner\n\n    ```markdown\n", "    <!-- literal code comment\n"),
+        ):
+            with self.subTest(opening=opening):
+                self.assertEqual(
+                    self.m.validate(
+                        "fix(pr): preserve list code examples",
+                        opening + content + "\n" + self._valid_body(), self.m.DEFAULT,
+                    ),
+                    [],
+                )
+
+    def test_list_like_text_inside_comments_cannot_hide_the_comment_state(self):
+        body = "<!--\n- ```markdown\n-->\n<!--\n" + self._valid_body() + "-->\n"
+        self.assertEqual(self.m.parse_sections(body), ({}, set()))
+
+    def test_unclosed_comment_example_inside_fence_keeps_later_sections_visible(self):
+        body = self._valid_body().replace(
+            "## What", "````markdown\n<!-- example starts\n````\n\n## What", 1
+        )
+        self.assertEqual(
+            self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT),
+            [],
+        )
+
+    def test_inline_code_comment_examples_keep_visible_sections(self):
+        for example in (
+            "The literal `<!--` starts an HTML comment.",
+            "The literal `` ` <!-- `` includes a backtick.",
+            "The code span `continues\nwith <!-- on another line`.",
+            "The escaped delimiter \\<!-- is literal.",
+        ):
+            with self.subTest(example=example):
+                body = self._valid_body().replace(
+                    "This fixes a repeated failure that blocks reliable releases.",
+                    "This fixes a repeated failure that blocks reliable releases. " + example,
+                )
+                self.assertEqual(
+                    self.m.validate("fix(pr): preserve literal comment examples", body, self.m.DEFAULT),
+                    [],
+                )
+
+    def test_inline_comment_examples_count_as_visible_content(self):
+        body = self._valid_body().replace(
+            "This fixes a repeated failure that blocks reliable releases.",
+            "`<!-- a literal comment with substantial visible detail -->`",
+        )
+        self.assertEqual(
+            self.m.validate("fix(pr): preserve literal comment examples", body, self.m.DEFAULT),
+            [],
+        )
+
+    def test_unmatched_or_escaped_backticks_do_not_hide_comments(self):
+        for opening, closing in (("`", "`"), ("``", "``"), ("\\`", "`")):
+            with self.subTest(opening=opening):
+                body = (
+                    f"A literal {opening} before <!--\n"
+                    + self._valid_body()
+                    + f"-->\n\nA separate paragraph with {closing}.\n"
+                )
+                self.assertEqual(self.m.parse_sections(body), ({}, set()))
+
+    def test_code_spans_cannot_cross_html_comment_block_boundaries(self):
+        body = "An unmatched ` before a block\n<!-- literal close `\n" + self._valid_body() + "-->\n"
+        self.assertEqual(self.m.parse_sections(body), ({}, set()))
+
     def test_duplicate_required_heading_fails(self):
         body = self._valid_body() + "\n## Why\n\nAnother sufficiently long rationale.\n"
         errors = self.m.validate("feat(pr): add deterministic PR checks", body, self.m.DEFAULT)

@@ -1,4 +1,8 @@
+import ast
+import re
+from collections.abc import Mapping
 from importlib.machinery import SourceFileLoader
+from itertools import product
 from importlib.util import spec_from_loader, module_from_spec
 from pathlib import Path
 # qlty-ignore(bandit:B404): Git fixture operations use argv without a shell.
@@ -15,6 +19,48 @@ SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/validate'
 SPEC = spec_from_loader('validation', SourceFileLoader('validation', str(SCRIPT)))
 validation = module_from_spec(SPEC)
 SPEC.loader.exec_module(validation)
+
+
+def condition_lexeme(lexeme: str, values: Mapping[str, str], prior_success: bool) -> str:
+    operators = {'&&': 'and', '||': 'or', '==': '==', '(': '(', ')': ')'}
+    if lexeme in operators:
+        return operators[lexeme]
+    if lexeme == 'always()':
+        return 'True'
+    if lexeme == 'success()':
+        return str(prior_success)
+    if lexeme.startswith("'"):
+        return lexeme
+    if lexeme in values:
+        return repr(values[lexeme])
+    raise AssertionError(f"Unexpected workflow condition symbol: {lexeme}")
+
+
+def condition_boolean(node, expression: str):
+    if isinstance(node, ast.Constant) and type(node.value) in (bool, str):
+        return node.value
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, (ast.And, ast.Or)):
+        operands = [condition_boolean(value, expression) for value in node.values]
+        return all(operands) if isinstance(node.op, ast.And) else any(operands)
+    if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], ast.Eq):
+        return condition_boolean(node.left, expression) == condition_boolean(node.comparators[0], expression)
+    raise AssertionError(f"Unsupported workflow condition: {expression}")
+
+
+def workflow_condition(expression: str, values: Mapping[str, str],
+                       prior_success: bool = True) -> bool:
+    """Evaluate only the boolean GitHub condition vocabulary used in this workflow."""
+    raw = expression.strip()
+    if raw.startswith('${{') and raw.endswith('}}'):
+        raw = raw[3:-2].strip()
+    lexemes = re.findall(r"'[^']*'|[A-Za-z_][\w.-]*(?:\(\))?|==|&&|\|\||[()]", raw)
+    if ''.join(lexemes) != ''.join(raw.split()):
+        raise AssertionError(f"Unrecognized workflow condition: {raw}")
+    converted = [condition_lexeme(lexeme, values, prior_success) for lexeme in lexemes]
+    tree = ast.parse(' '.join(converted), mode='eval')
+    return bool(condition_boolean(tree.body, raw)) and (
+        prior_success or 'always()' in lexemes or 'success()' in lexemes
+    )
 
 
 class BoundaryTests(unittest.TestCase):
@@ -68,24 +114,110 @@ class BoundaryTests(unittest.TestCase):
                 file.write_text(content)
                 self.assertTrue(validation.boundaries([file], root))
 
-    def test_scheduled_advisory_gate_runs_without_optional_test_insights_credential(self):
+    def test_test_insights_credentials_are_isolated_from_candidate_execution(self):
         root = Path(__file__).resolve().parents[1]
-        workflow = validation.yaml.safe_load((root / '.github/workflows/test-insights.yml').read_text())
-        steps = workflow['jobs']['node-tests']['steps']
-        audit = next(step for step in steps if step.get('name') == 'Check current dependency advisories (existing scheduled run)')
-        self.assertEqual(audit['if'], "github.event_name == 'schedule'")
-        self.assertEqual(audit['run'], 'python3 scripts/audit_dependencies.py')
-        names = [step.get('name') for step in steps]
-        # Registry outages must not prevent the independent test run or JUnit
-        # receipt; the scheduled advisory still fails the workflow afterward.
-        self.assertLess(names.index('Run Node tests with JUnit'),
-                        names.index('Check current dependency advisories (existing scheduled run)'))
-        self.assertLess(names.index('Check current dependency advisories (existing scheduled run)'),
-                        names.index('Upload test results to Mergify Test Insights'))
-        for step in steps:
-            if step.get('uses', '').startswith(('actions/checkout@', 'actions/setup-node@')):
-                self.assertEqual(step['if'],
-                                 "github.event_name == 'schedule' || steps.uploader.outputs.available == 'true'")
+        workflow = validation.yaml.safe_load(
+            (root / '.github/workflows/test-insights.yml').read_text())
+        jobs = workflow['jobs']
+        self.assertEqual(workflow['permissions'], {'contents': 'read'})
+        config = jobs['insights-config']
+        tests = jobs['node-tests']
+
+        self.assertNotIn('secrets.', str({key: value for key, value in config.items() if key != 'steps'}))
+        self.assertNotIn('env', config)
+        self.assertNotIn('secrets.', str(tests))
+        self.assertNotIn('MERGIFY_TOKEN', str(tests))
+        self.assertTrue(any(step.get('uses', '').startswith('actions/checkout@') for step in tests['steps']))
+        self.assertFalse(any('Mergifyio/' in step.get('uses', '') for step in tests['steps']))
+        self.assertTrue(all('uses' not in step for step in config['steps']))
+        secret_steps = [step for step in config['steps'] if 'secrets.' in str(step)]
+        self.assertEqual(secret_steps, config['steps'])
+        for step in secret_steps:
+            self.assertEqual(step.get('env'), {'MERGIFY_TOKEN': '${{ secrets.MERGIFY_TOKEN }}'})
+            for token in ('', 'synthetic-audit-credential'):
+                with self.subTest(credential=bool(token)), tempfile.TemporaryDirectory() as tmp:
+                    output = Path(tmp) / 'outputs'
+                    # qlty-ignore(bandit:B603): Repository workflow shell with synthetic credentials in an isolated fixture.
+                    result = subprocess.run(['/bin/sh', '-e', '-c', step['run']], cwd=tmp,
+                                            env={'MERGIFY_TOKEN': token, 'GITHUB_OUTPUT': str(output)},
+                                            text=True, capture_output=True, check=True, timeout=5)
+                    self.assertEqual(output.read_text().splitlines(),
+                                     ['available=' + str(bool(token)).lower()])
+                    if token:
+                        self.assertNotIn(token, result.stdout + result.stderr)
+
+    def test_test_insights_reports_cross_only_a_pinned_data_artifact_boundary(self):
+        root = Path(__file__).resolve().parents[1]
+        jobs = validation.yaml.safe_load(
+            (root / '.github/workflows/test-insights.yml').read_text())['jobs']
+        tests = jobs['node-tests']
+        uploader = jobs['upload-test-insights']
+        artifact = next(step for step in tests['steps']
+                        if step.get('uses', '').startswith('actions/upload-artifact@'))
+        download = next(step for step in uploader['steps']
+                        if step.get('uses', '').startswith('actions/download-artifact@'))
+        publish = next(step for step in uploader['steps']
+                       if step.get('uses', '').startswith('Mergifyio/gha-mergify-ci@'))
+
+        for step in (artifact, *uploader['steps']):
+            self.assertRegex(step['uses'], r'^[^@]+@[0-9a-f]{40}$')
+        self.assertRegex(artifact['with']['path'], r'^[A-Za-z0-9_-]+-\*\.xml$')
+        self.assertTrue(download['with']['path'].startswith('${{ runner.temp }}/'))
+        self.assertTrue(publish['with']['report_path'].endswith('.xml'))
+        for key in ('github-token', 'run-id', 'repository'):
+            self.assertNotIn(key, download['with'], 'Reports must come from the current workflow run')
+        self.assertEqual(artifact['with']['if-no-files-found'], 'error')
+        self.assertIs(artifact['with']['include-hidden-files'], False)
+        self.assertEqual(publish['with']['token'], '${{ secrets.MERGIFY_TOKEN }}')
+        self.assertEqual(publish['with']['action'], 'junit-process')
+        self.assertEqual(str(uploader).count('secrets.'), 1)
+        self.assertFalse(any('run' in step or 'env' in step or 'checkout@' in step.get('uses', '')
+                             or 'cache@' in step.get('uses', '') for step in uploader['steps']))
+        allowed_actions = {
+            'actions/download-artifact', 'Mergifyio/gha-mergify-ci', 'step-security/harden-runner'
+        }
+        self.assertTrue(all(step['uses'].split('@', 1)[0] in allowed_actions
+                            for step in uploader['steps']))
+
+    def test_test_insights_gate_matrix_keeps_advisories_and_failed_tests(self):
+        root = Path(__file__).resolve().parents[1]
+        jobs = validation.yaml.safe_load(
+            (root / '.github/workflows/test-insights.yml').read_text())['jobs']
+        tests = jobs['node-tests']
+        steps = tests['steps']
+        run_tests = next(step for step in steps if step.get('id') == 'tests')
+        artifact = next(step for step in steps
+                        if step.get('uses', '').startswith('actions/upload-artifact@'))
+        audit = next(step for step in steps
+                     if step.get('run') == 'python3 scripts/audit_dependencies.py')
+        failure = next(step for step in steps if step.get('run') == 'exit 1')
+        uploader = jobs['upload-test-insights']
+        self.assertTrue(run_tests['continue-on-error'])
+
+        for event, credential, test_result, prior_ok, upstream_ok in product(
+            ('schedule', 'pull_request'), (False, True), ('success', 'failure'),
+            (False, True), (False, True)
+        ):
+            with self.subTest(event=event, credential=credential, test_result=test_result,
+                              prior_ok=prior_ok, upstream_ok=upstream_ok):
+                expected_job = upstream_ok and (event == 'schedule' or credential)
+                tests_ran = expected_job and credential
+                values = {
+                    'github.event_name': event,
+                    'needs.insights-config.outputs.available': str(credential).lower(),
+                    'steps.tests.outcome': test_result if tests_ran else 'skipped',
+                    'needs.node-tests.outputs.test-outcome': test_result if tests_ran else '',
+                }
+                self.assertEqual(workflow_condition(tests['if'], values, upstream_ok), expected_job)
+                self.assertEqual(workflow_condition(run_tests['if'], values) and expected_job,
+                                 tests_ran)
+                self.assertEqual(workflow_condition(artifact['if'], values, prior_ok) and expected_job,
+                                 tests_ran)
+                self.assertEqual(workflow_condition(audit['if'], values, prior_ok) and expected_job,
+                                 expected_job and event == 'schedule')
+                self.assertEqual(workflow_condition(failure['if'], values, prior_ok) and expected_job,
+                                 tests_ran and test_result == 'failure')
+                self.assertEqual(workflow_condition(uploader['if'], values, prior_ok), tests_ran)
 
     def test_validator_dispatches_advisory_gate_only_for_ci_and_security(self):
         for command in ['ci', 'security', 'lint', 'test']:

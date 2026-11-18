@@ -21,6 +21,15 @@ The old reusable workflow had no active external default-branch consumers when
 retired. Migration provenance remains in `docs/MIGRATION_PROVENANCE.md` and
 `docs/migration/validation/reusable-lint.json`.
 
+## Reviewed fixture findings
+
+Shell-free subprocess fixtures still need review: use the current Python
+interpreter or a resolved tool executable, and trace every argument to
+repository-owned code or synthetic test input. The existing line-scoped
+`qlty-ignore(bandit:B603)` convention records that rationale for a reviewed call.
+It is not a file-wide or rule-wide exclusion. Changes to executable selection,
+argument provenance, or shell interpretation require a fresh review.
+
 ## Acceptance evidence
 
 A controlled PR seeded:

@@ -24,7 +24,50 @@ import { logSiteverify } from './observability.js';
 import { validate } from './validate.js';
 import type { Env, SiteverifyRequest } from './types.js';
 
-export const WORKER_VERSION = '1.0.0';
+const WORKER_VERSION = '1.0.0';
+const MAX_REQUEST_BYTES = 16 * 1024;
+
+async function readRequestBody(request: Request): Promise<Uint8Array> {
+	const declaredLength = request.headers.get('content-length');
+	if (declaredLength !== null && /^\d+$/.test(declaredLength) && Number(declaredLength) > MAX_REQUEST_BYTES) {
+		throw new SiteverifyError(413, 'request-too-large', 'Request body exceeds 16384 bytes');
+	}
+	if (!request.body) return new Uint8Array();
+
+	const reader = request.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let length = 0;
+	let overflow = false;
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			if (length + value.byteLength > MAX_REQUEST_BYTES) {
+				overflow = true;
+				break;
+			}
+			chunks.push(value);
+			length += value.byteLength;
+		}
+		if (overflow) {
+			try {
+				await reader.cancel();
+			} catch {
+				// The size error remains authoritative even if cancellation fails.
+			}
+			throw new SiteverifyError(413, 'request-too-large', 'Request body exceeds 16384 bytes');
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	const bytes = new Uint8Array(length);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return bytes;
+}
 
 function corsHeaders(env: Env): Record<string, string> {
 	return {
@@ -48,9 +91,21 @@ function jsonResponse(body: unknown, status: number, env: Env): Response {
 
 async function parseBody(request: Request): Promise<SiteverifyRequest> {
 	const contentType = request.headers.get('content-type') || '';
+	const parameterStart = contentType.indexOf(';');
+	const mediaType = (parameterStart < 0 ? contentType : contentType.slice(0, parameterStart)).trim().toLowerCase();
+	const isJson = mediaType === 'application/json';
+	const isForm = mediaType === 'application/x-www-form-urlencoded' || mediaType === 'multipart/form-data';
+	if (!isJson && !isForm) {
+		throw new SiteverifyError(
+			415,
+			'invalid-content-type',
+			`Unsupported Content-Type: ${contentType || '(missing)'}. Use application/json or application/x-www-form-urlencoded.`,
+		);
+	}
+	const bounded = new Response(await readRequestBody(request), { headers: { 'Content-Type': contentType } });
 
-	if (contentType.includes('application/json')) {
-		const body = (await request.json()) as Record<string, unknown>;
+	if (isJson) {
+		const body = (await bounded.json()) as Record<string, unknown>;
 		return {
 			// `response` is accepted for compatibility with code migrated from reCAPTCHA/hCaptcha,
 			// whose backends POST {secret, response, remoteip}. Spin's Worker holds the secret,
@@ -62,20 +117,12 @@ async function parseBody(request: Request): Promise<SiteverifyRequest> {
 		};
 	}
 
-	if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
-		const form = await request.formData();
-		return {
-			token: String(form.get('token') ?? form.get('cf-turnstile-response') ?? form.get('response') ?? ''),
-			remoteip: form.get('remoteip') ? String(form.get('remoteip')) : undefined,
-			idempotency_key: form.get('idempotency_key') ? String(form.get('idempotency_key')) : undefined,
-		};
-	}
-
-	throw new SiteverifyError(
-		415,
-		'invalid-content-type',
-		`Unsupported Content-Type: ${contentType || '(missing)'}. Use application/json or application/x-www-form-urlencoded.`,
-	);
+	const form = await bounded.formData();
+	return {
+		token: String(form.get('token') ?? form.get('cf-turnstile-response') ?? form.get('response') ?? ''),
+		remoteip: form.get('remoteip') ? String(form.get('remoteip')) : undefined,
+		idempotency_key: form.get('idempotency_key') ? String(form.get('idempotency_key')) : undefined,
+	};
 }
 
 async function handleSiteverify(request: Request, env: Env): Promise<Response> {
@@ -91,7 +138,7 @@ async function handleSiteverify(request: Request, env: Env): Promise<Response> {
 				errorCodes: [err.code],
 				remoteipPresent: false,
 				idempotencyKeyPresent: false,
-			});
+			}, env.LOG_LEVEL);
 			return jsonResponse(body, err.status, env);
 		}
 		// Body parse failure (malformed JSON, etc.)
@@ -101,7 +148,7 @@ async function handleSiteverify(request: Request, env: Env): Promise<Response> {
 			errorCodes: ['bad-request'],
 			remoteipPresent: false,
 			idempotencyKeyPresent: false,
-		});
+		}, env.LOG_LEVEL);
 		return jsonResponse(body, 400, env);
 	}
 
@@ -119,7 +166,7 @@ async function handleSiteverify(request: Request, env: Env): Promise<Response> {
 			cdataValue: response.cdata,
 			remoteipPresent: !!remoteip,
 			idempotencyKeyPresent: !!parsed.idempotency_key,
-		});
+		}, env.LOG_LEVEL);
 
 		// Token rejection is a successful verification request; upstream HTTP errors are not.
 		const status = upstreamStatus >= 200 && upstreamStatus < 300 ? 200 : upstreamStatus === 504 ? 504 : 502;
@@ -132,7 +179,7 @@ async function handleSiteverify(request: Request, env: Env): Promise<Response> {
 				errorCodes: [err.code],
 				remoteipPresent: !!remoteip,
 				idempotencyKeyPresent: !!parsed.idempotency_key,
-			});
+			}, env.LOG_LEVEL);
 			return jsonResponse(body, err.status, env);
 		}
 		const body = errorResponse('internal-error', Date.now() - startedAt, WORKER_VERSION);
@@ -141,7 +188,7 @@ async function handleSiteverify(request: Request, env: Env): Promise<Response> {
 			errorCodes: ['internal-error'],
 			remoteipPresent: !!remoteip,
 			idempotencyKeyPresent: !!parsed.idempotency_key,
-		});
+		}, env.LOG_LEVEL);
 		return jsonResponse(body, 500, env);
 	}
 }

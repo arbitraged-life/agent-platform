@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, rm, rmdir, writeFile, readFile, chmod, symlink, unlink, link } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { routeTask, validateTask, loadPolicy, resolveProfile, cleanEnvironment, digest, executableIdentity, VERSION } from '../../runtime/execution-router/policy.mjs';
@@ -36,7 +37,7 @@ test('route capability flags require actual booleans rather than truthy values',
  assert.equal(routeTask({authority_blocked:false,native_available:false,local_available:true}).route,'chatgpt-local');
 });
 test('route CLI refuses string flags instead of granting a false capability',async()=>{
- const f=await fixture(),facts=path.join(f.root,'facts.json'),cli=new URL('../../scripts/execution/router.mjs',import.meta.url).pathname;
+ const f=await fixture(),facts=path.join(f.root,'facts.json'),cli=fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url));
  await writeFile(facts,JSON.stringify({native_available:false,local_available:true}));
  assert.equal(JSON.parse((await exec(process.execPath,[cli,'route','--facts',facts])).stdout).route,'chatgpt-local');
  await writeFile(facts,JSON.stringify({native_available:'false',local_available:true}));
@@ -52,6 +53,52 @@ test('mocked surface capability and authorization outcomes do not bypass denied 
     {label:'unsupported delegation reason does not grant agent access',facts:{native_available:true,local_available:true,delegate_reason:'more-power',delegate_detail:'override'},route:'chatgpt-native'},
   ];
   for(const {label,facts,route} of cases)assert.equal(routeTask(facts).route,route,label);
+});
+test('routing contract v1 remains the default and accepts explicit version 1',()=>{
+ const facts={native_available:true,local_available:true,delegate_reason:'execution-lifecycle',delegate_detail:'Independent bounded loop'};
+ assert.equal(routeTask(facts).route,'local-agent');
+ assert.deepEqual(routeTask({...facts,contract_version:1}),routeTask(facts));
+ assert.equal(routeTask({contract_version:1,native_available:true}).route,'chatgpt-native');
+});
+test('routing contract v2 uses neutral direct and delegated labels',()=>{
+ assert.equal(routeTask({contract_version:2,native_available:true,local_available:true}).route,'owner-tool');
+ assert.equal(routeTask({contract_version:2,local_available:true}).route,'direct-local');
+ assert.equal(routeTask({contract_version:2,delegate_available:true,local_available:false,delegate_reason:'execution-lifecycle',delegate_detail:'Independent remote loop'}).route,'delegated-agent');
+ assert.equal(routeTask({contract_version:2,delegate_available:false,local_available:true,delegate_reason:'local-harness',delegate_detail:'Local tooling'}).route,'direct-local');
+});
+test('routing contract v2 host-required handoff cannot downgrade to direct execution',()=>{
+ const facts={contract_version:2,host_delegation_required:true,native_available:true,local_available:true,delegate_reason:'execution-lifecycle',delegate_detail:'Host must perform the task'};
+ assert.equal(routeTask({...facts,delegate_available:false}).route,'needs-user');
+ assert.equal(routeTask({...facts,delegate_available:true}).route,'delegated-agent');
+ assert.equal(routeTask({contract_version:2,host_delegation_required:true,delegate_available:true}).route,'delegated-agent');
+ assert.equal(routeTask({...facts,delegate_available:true,authority_blocked:true}).route,'needs-user');
+});
+test('routing contract v2 refuses delegation without a real executor and concrete reason',()=>{
+ const facts={contract_version:2,native_available:true,local_available:false,delegate_reason:'execution-lifecycle',delegate_detail:'Independent remote loop'};
+ assert.equal(routeTask(facts).route,'owner-tool');
+ assert.equal(routeTask({...facts,delegate_available:false}).route,'owner-tool');
+ assert.equal(routeTask({...facts,delegate_available:true,delegate_detail:' '}).route,'owner-tool');
+ assert.equal(routeTask({...facts,delegate_available:true,delegate_reason:'code-is-hard'}).route,'owner-tool');
+ assert.equal(routeTask({...facts,delegate_available:true,authority_blocked:true}).route,'needs-user');
+});
+test('routing contract versions and capabilities fail closed before route selection',()=>{
+ for(const version of [null,0,3,'1','2',true,1.5])assert.throws(()=>routeTask({contract_version:version,native_available:true}),/contract_version/);
+ assert.throws(()=>routeTask({contract_version:undefined,native_available:true}),/contract_version/);
+ for(const key of ['delegate_available','host_delegation_required']) {
+  assert.throws(()=>routeTask({[key]:false,native_available:true}),/contract_version 2/);
+  assert.throws(()=>routeTask({contract_version:1,[key]:false,authority_blocked:true}),/contract_version 2/);
+  for(const value of ['false',1,null])assert.throws(()=>routeTask({contract_version:2,[key]:value,authority_blocked:true}),new RegExp(`${key} must be boolean`));
+ }
+ assert.throws(()=>routeTask({contract_version:2,authority_blocked:true,native_available:'false'}),/native_available must be boolean/);
+});
+test('route CLI emits versioned labels and refuses legacy host-boundary facts',async()=>{
+ const f=await fixture(),facts=path.join(f.root,'facts.json'),cli=fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url));
+ await writeFile(facts,JSON.stringify({native_available:true}));
+ assert.equal(JSON.parse((await exec(process.execPath,[cli,'route','--facts',facts])).stdout).route,'chatgpt-native');
+ await writeFile(facts,JSON.stringify({contract_version:2,delegate_available:true,local_available:false,delegate_reason:'execution-lifecycle',delegate_detail:'Remote executor available'}));
+ assert.equal(JSON.parse((await exec(process.execPath,[cli,'route','--facts',facts])).stdout).route,'delegated-agent');
+ await writeFile(facts,JSON.stringify({contract_version:1,host_delegation_required:true,native_available:true}));
+ await assert.rejects(()=>exec(process.execPath,[cli,'route','--facts',facts]),/contract_version 2/);
 });
 
 test('legacy task schema cannot omit the mandatory typed review contract',()=>{
@@ -232,7 +279,118 @@ test('state above workspace does not exclude symlinked inputs inside workspace',
 test('policy does not accept dangerous sandbox',async()=>{const f=await fixture();f.data.profiles['codex-readonly'].sandbox='danger-full-access';await writeFile(f.policyPath,JSON.stringify(f.data));await assert.rejects(()=>loadPolicy(f.policyPath),/sandbox/);});
 test('prototype-keyed profiles bind approval and inherited names cannot select an executor',async()=>{const f=await fixture();f.data.profiles=JSON.parse(`{"codex-readonly":${JSON.stringify(f.data.profiles['codex-readonly'])},"__proto__":${JSON.stringify(f.data.profiles['codex-readonly'])}}`);await writeFile(f.policyPath,JSON.stringify(f.data));const loaded=await loadPolicy(f.policyPath);const approved=await prepare(loaded,packet(f.workspace,{profile:'__proto__'}));for(const profile of ['constructor','toString'])await assert.rejects(()=>resolveProfile(loaded,packet(f.workspace,{profile})),/Unknown profile/);f.data.profiles.__proto__.max_seconds++;await writeFile(f.policyPath,JSON.stringify(f.data));const changed=await loadPolicy(f.policyPath);await assert.rejects(()=>runPrepared(changed,'router-test',{approved_digest:approved.approval_digest,approval_ref:'user approved fixture'}),/policy changed/);});
 test('prepare produces a digest-bound approval packet but never launches',async()=>{const f=await fixture();const p=await prepare(f.policy,packet(f.workspace));assert.equal(p.status,'prepared');assert.match(p.approval_digest,/^[a-f0-9]{64}$/);assert.equal((await inspect(f.policy,'router-test')).status,'prepared');});
-test('duplicate task IDs are refused, not rerun',async()=>{const f=await fixture();await prepare(f.policy,packet(f.workspace));await assert.rejects(()=>prepare(f.policy,packet(f.workspace)),/already exists/);});
+test('duplicate task IDs are refused without changing the existing packet',async()=>{
+ const f=await fixture();await prepare(f.policy,packet(f.workspace));
+ const filename=path.join(f.policy.state_dir,'runs','router-test','packet.json');
+ const original=await readFile(filename,'utf8');
+ await assert.rejects(()=>prepare(f.policy,packet(f.workspace,{objective:'Different task'})),/already exists/);
+ assert.equal(await readFile(filename,'utf8'),original);
+});
+test('failed preparation rolls back only its owned state and preserves errors',async(t)=>{
+ for(const mode of ['write','replacement','cleanup','late-replacement','claim-replacement','claim-denied'])await t.test(mode,async()=>{
+  const f=await fixture();
+  const script=`
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {syncBuiltinESMExports} from 'node:module';
+import {loadPolicy} from ${JSON.stringify(new URL('../../runtime/execution-router/policy.mjs',import.meta.url).href)};
+const policy=await loadPolicy(${JSON.stringify(f.policyPath)});
+const task=${JSON.stringify(packet(f.workspace))};
+const mode=${JSON.stringify(mode)},dir=path.join(policy.state_dir,'runs',task.task_id);
+const originalWrite=fs.writeFile,originalRemove=fs.rm,originalRename=fs.rename;
+const failure=Object.assign(new Error('Injected preparation write failure'),{code:'EIO'});
+let injected=false;
+fs.rename=async(source,...args)=>{
+ if(source===dir&&mode==='claim-denied')throw Object.assign(new Error('Injected claim denial'),{code:'EACCES'});
+ if(source===dir&&mode==='claim-replacement') {
+  await originalRename(dir,dir+'.original');
+  await fs.mkdir(dir);
+  await originalWrite(path.join(dir,'owner'),'replacement');
+ }
+ return originalRename(source,...args);
+};
+fs.writeFile=async(filename,...args)=>{
+ const name=path.basename(filename);
+ if(!injected&&(mode==='replacement'?name==='HANDOFF.md':name.startsWith('status.json.'))) {
+  injected=true;
+  if(mode==='replacement') {
+   await fs.rename(dir,dir+'.original');
+   await fs.mkdir(dir);
+   await originalWrite(path.join(dir,'owner'),'replacement');
+  } else await originalWrite(filename,'partial',{mode:0o600});
+  throw failure;
+ }
+ return originalWrite(filename,...args);
+};
+fs.rm=async(filename,...args)=>{
+ if(mode==='cleanup'&&args[0]?.recursive)throw Object.assign(new Error('Injected cleanup denial'),{code:'EPERM'});
+ if(mode==='late-replacement'&&args[0]?.recursive) {
+  await fs.rename(dir,dir+'.original').catch(error=>{if(error.code!=='ENOENT')throw error;});
+  await fs.mkdir(dir);
+  await originalWrite(path.join(dir,'owner'),'replacement');
+ }
+ return originalRemove(filename,...args);
+};
+syncBuiltinESMExports();
+const {prepare}=await import(${JSON.stringify(new URL('../../runtime/execution-router/dispatch.mjs',import.meta.url).href)});
+let error;
+try {await prepare(policy,task);} catch(caught) {error=caught;}
+assert.ok(injected,'fault reached the preparation write');
+if(mode==='write') {
+ assert.equal(error,failure,'original write error must survive rollback');
+ await assert.rejects(()=>fs.stat(dir),{code:'ENOENT'});
+ assert.equal((await prepare(policy,task)).status,'prepared');
+ assert.equal(JSON.parse(await fs.readFile(path.join(dir,'packet.json'),'utf8')).task_id,task.task_id);
+ assert.deepEqual(await fs.readdir(path.dirname(dir)),[task.task_id]);
+} else if(mode==='late-replacement') {
+ assert.equal(error,failure);
+ assert.equal(await fs.readFile(path.join(dir,'owner'),'utf8'),'replacement');
+ assert.deepEqual(await fs.readdir(path.dirname(dir)),[task.task_id]);
+} else {
+ assert.ok(error instanceof AggregateError);
+ assert.equal(error.errors[0],failure);
+ assert.ok(error.message.includes(error.cleanup_path),'CLI diagnostic must expose the retained location');
+ if(mode==='replacement') {
+  assert.match(error.errors[1].message,/ownership changed/);
+  assert.equal(await fs.readFile(path.join(dir,'owner'),'utf8'),'replacement');
+  assert.equal(JSON.parse(await fs.readFile(path.join(dir+'.original','packet.json'),'utf8')).task_id,task.task_id);
+ } else if(mode==='claim-replacement') {
+  assert.match(error.errors[1].message,/ownership changed/);
+  assert.equal(await fs.readFile(path.join(error.cleanup_path,'task','owner'),'utf8'),'replacement');
+  assert.equal(JSON.parse(await fs.readFile(path.join(dir+'.original','packet.json'),'utf8')).task_id,task.task_id);
+  await assert.rejects(()=>fs.stat(dir),{code:'ENOENT'});
+ } else if(mode==='claim-denied') {
+  assert.equal(error.errors[1].code,'EACCES');
+  assert.deepEqual(await fs.readdir(path.dirname(dir)),[task.task_id]);
+  assert.equal(JSON.parse(await fs.readFile(path.join(dir,'packet.json'),'utf8')).task_id,task.task_id);
+ } else {
+  assert.equal(error.errors[1].code,'EPERM');
+  const retained=path.join(error.cleanup_path,'task');
+  assert.equal(JSON.parse(await fs.readFile(path.join(retained,'packet.json'),'utf8')).task_id,task.task_id);
+  assert.deepEqual((await fs.readdir(retained)).filter(name=>name.endsWith('.tmp')),[]);
+ }
+}
+console.log(JSON.stringify({failurePreserved:error===failure||error?.errors?.[0]===failure,
+ errorKind:error?.constructor.name,cleanupPath:error?.cleanup_path,message:error?.message}));
+`;
+  const {stdout}=await exec(process.execPath,['--input-type=module','-e',script],{timeout:15000});
+  const observed=JSON.parse(stdout.trim()),dir=path.join(f.policy.state_dir,'runs','router-test');
+  assert.equal(observed.failurePreserved,true,'the original write failure remains observable');
+  assert.equal(observed.errorKind,['write','late-replacement'].includes(mode)?'Error':'AggregateError');
+  if(observed.cleanupPath) {
+   assert.ok(observed.message.includes(observed.cleanupPath),'CLI-visible failure names the retained location');
+   if(['replacement','claim-denied'].includes(mode))assert.equal(observed.cleanupPath,dir);
+   else {
+    assert.equal(path.dirname(observed.cleanupPath),path.dirname(dir));
+    assert.match(path.basename(observed.cleanupPath),/^\.prepare-rollback-/);
+   }
+  }
+  if(['replacement','late-replacement'].includes(mode))assert.equal(await readFile(path.join(dir,'owner'),'utf8'),'replacement');
+  else if(mode==='claim-replacement')assert.equal(await readFile(path.join(observed.cleanupPath,'task','owner'),'utf8'),'replacement');
+  else assert.equal(JSON.parse(await readFile(path.join(mode==='cleanup'?path.join(observed.cleanupPath,'task'):dir,'packet.json'),'utf8')).task_id,'router-test');
+ });
+});
 test('run requires explicit approval evidence',async()=>{const f=await fixture();await prepare(f.policy,packet(f.workspace));await assert.rejects(()=>runPrepared(f.policy,'router-test',{}),/approval/);assert.equal((await inspect(f.policy,'router-test')).status,'prepared');});
 test('edited packet invalidates approval digest',async()=>{const f=await fixture();const p=await prepare(f.policy,packet(f.workspace));const file=path.join(f.policy.state_dir,'runs','router-test','packet.json');const changed=JSON.parse(await readFile(file,'utf8'));changed.objective='Different action';await writeFile(file,JSON.stringify(changed));await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/digest/);});
 test('workspace drift invalidates prepared approval',async()=>{const f=await fixture();const p=await prepare(f.policy,packet(f.workspace));await writeFile(path.join(f.workspace,'new.txt'),'drift');await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/workspace changed/);});
@@ -402,9 +560,9 @@ process.exit(0);
 test('source test actions require write authority because tests execute code',()=>assert.throws(()=>validateTask(packet('/tmp/repo',{actions:['test']})),/write authorization/));
 test('detached process-group descendants cannot outlive release of a workspace',async()=>{const f=await fixture('orphan');const p=await prepare(f.policy,packet(f.workspace));const r=await runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'});assert.equal(r.status,'needs-review');await new Promise(resolve=>setTimeout(resolve,1200));await assert.rejects(()=>readFile(path.join(f.root,'orphan-marker')),{code:'ENOENT'});});
 test('manual profiles produce handoff but do not launch an unvalidated adapter',async()=>{const f=await fixture();f.data.profiles.manual={adapter:'manual',sandbox:'read-only',actions:['read'],max_seconds:60};await writeFile(f.policyPath,JSON.stringify(f.data));const policy=await loadPolicy(f.policyPath);const p=await prepare(policy,packet(f.workspace,{profile:'manual'}));assert.equal(p.handoff_only,true);await assert.rejects(()=>runPrepared(policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/Handoff-only/);});
-test('CLI help is available without machine policy',async()=>{const r=await exec(process.execPath,[new URL('../../scripts/execution/router.mjs',import.meta.url).pathname,'--help']);assert.match(r.stdout,/prepare/);assert.match(r.stdout,/approved-digest/);});
-test('CLI refuses unrecognized flags',async()=>{await assert.rejects(()=>exec(process.execPath,[new URL('../../scripts/execution/router.mjs',import.meta.url).pathname,'route','--unsafe','yes']),/Unknown option/);});
-test('CLI doctor serializes a configured __proto__ profile rather than losing its result',async()=>{const f=await fixture();f.data.profiles=JSON.parse('{"__proto__":{"adapter":"manual","sandbox":"read-only","actions":["read"],"max_seconds":60}}');await writeFile(f.policyPath,JSON.stringify(f.data));const {stdout}=await exec(process.execPath,[new URL('../../scripts/execution/router.mjs',import.meta.url).pathname,'doctor','--policy',f.policyPath,'--profile','__proto__']);const result=JSON.parse(stdout);assert.deepEqual(result.profiles['__proto__'],{status:'handoff-only'});});
+test('CLI help is available without machine policy',async()=>{const r=await exec(process.execPath,[fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url)),'--help']);assert.match(r.stdout,/prepare/);assert.match(r.stdout,/approved-digest/);});
+test('CLI refuses unrecognized flags',async()=>{await assert.rejects(()=>exec(process.execPath,[fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url)),'route','--unsafe','yes']),/Unknown option/);});
+test('CLI doctor serializes a configured __proto__ profile rather than losing its result',async()=>{const f=await fixture();f.data.profiles=JSON.parse('{"__proto__":{"adapter":"manual","sandbox":"read-only","actions":["read"],"max_seconds":60}}');await writeFile(f.policyPath,JSON.stringify(f.data));const {stdout}=await exec(process.execPath,[fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url)),'doctor','--policy',f.policyPath,'--profile','__proto__']);const result=JSON.parse(stdout);assert.deepEqual(result.profiles['__proto__'],{status:'handoff-only'});});
 test('verification accepts artifacts through a symlinked state path',async()=>{const f=await fixture();const p=await prepare(f.policy,packet(f.workspace));await runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'});const alias=path.join(f.root,'state-alias');await symlink(f.policy.state_dir,alias);const linked={...f.policy,state_dir:alias};const artifact=path.join(alias,'runs','router-test','agent-final.txt');const result=await acceptResult(linked,'router-test',{verifier:'controller',summary:'Read the expected fixture output through its canonical path.',criteria:[{criterion:'Report the fixture result.',passed:true,evidence:'Expected fixture response inspected.'}],artifacts:[artifact]});assert.equal(result.status,'verified-complete');});
 test('Codex requires a usable executable while manual handoffs do not',async()=>{const f=await fixture();f.data.profiles['codex-readonly'].executable='';f.data.profiles.manual={adapter:'manual',sandbox:'read-only',actions:['read'],max_seconds:60};await writeFile(f.policyPath,JSON.stringify(f.data));await assert.rejects(()=>loadPolicy(f.policyPath),/executable for Codex/);delete f.data.profiles['codex-readonly'];await writeFile(f.policyPath,JSON.stringify(f.data));assert.equal((await loadPolicy(f.policyPath)).profiles.manual.executable,undefined);});
 test('moving relative executable policy invalidates an already prepared approval',async()=>{const f=await fixture();f.data.profiles['codex-readonly'].executable='./codex';await writeFile(f.policyPath,JSON.stringify(f.data));const policy=await loadPolicy(f.policyPath),p=await prepare(policy,packet(f.workspace));const other=path.join(f.root,'other');await mkdir(other);const relocated=path.join(other,'policy.json');await writeFile(relocated,JSON.stringify(f.data));const changed=await loadPolicy(relocated);assert.notEqual(changed.config_digest,policy.config_digest);await assert.rejects(()=>runPrepared(changed,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/policy changed/);});
@@ -541,6 +699,64 @@ test('exceptional supervision still kills a SIGTERM-ignoring descendant',async()
  }
 });
 
+test('Darwin denied group probes release a workspace only with identified zombie-only members',async(t)=>{
+ for(const scenario of [
+  {name:'zombie-only detached group',states:'Z\nZ+\n',status:'returned'},
+  {name:'live member',states:'Z\nS\n'},
+  {name:'unrelated zombie',states:'Z\n',otherGroup:true},
+  {name:'empty inspection',states:''},
+  {name:'unreadable inspection',states:'unreadable'},
+  {name:'zombie transition while polling',states:'Z\n',transition:'poll',status:'needs-review'},
+  {name:'zombie transition before SIGTERM',states:'Z\n',transition:'SIGTERM',status:'needs-review'},
+  {name:'zombie transition before SIGKILL',states:'Z\n',transition:'SIGKILL',status:'needs-review'},
+  {name:'denied SIGTERM with a live member',states:'Z\nS\n',transition:'SIGTERM'},
+  {name:'denied SIGKILL with unreadable inspection',states:'unreadable',transition:'SIGKILL'},
+ ])await t.test(scenario.name,async()=>{
+  const f=await fixture(),p=await prepare(f.policy,packet(f.workspace));
+  const script=`import assert from 'node:assert/strict';import cp from 'node:child_process';import {promisify} from 'node:util';import {syncBuiltinESMExports} from 'node:module';
+const realExec=promisify(cp.execFile),realKill=process.kill,{states,status,transition,otherGroup}=${JSON.stringify(scenario)};
+let groupPid,inspectionCount=0;
+cp.execFile=Object.assign((...args)=>realExec(...args),{[promisify.custom]:async(file,args,...rest)=>{
+ if(file!=='/bin/ps')return realExec(file,args,...rest);
+ assert.deepEqual(args,['-x','-g',String(groupPid),'-o','pgid=,state=']);
+ inspectionCount++;
+ if(states==='unreadable')throw new Error('process inspection unavailable');
+ return {stdout:states.trim().split('\\n').filter(Boolean).map(state=>\`\${groupPid+(otherGroup?1:0)} \${state}\`).join('\\n'),stderr:''};
+}});
+syncBuiltinESMExports();Object.defineProperty(process,'platform',{value:'darwin'});
+let dead=!transition;
+process.kill=(pid,signal)=>{
+ if(pid>=0)return realKill(pid,signal);
+ groupPid=-pid;
+ if(signal===0){if(!dead)return true;throw Object.assign(new Error('group probe denied'),{code:'EPERM'});}
+ if(transition){
+  if(signal===(transition==='poll'?'SIGTERM':transition)){
+   dead=true;
+   if(transition!=='poll')throw Object.assign(new Error('group signal denied'),{code:'EPERM'});
+  }
+  return true;
+ }
+ return realKill(pid,signal);
+};
+const {loadPolicy}=await import(${JSON.stringify(new URL('../../runtime/execution-router/policy.mjs',import.meta.url).href)});
+const {runPrepared,prepare,inspect}=await import(${JSON.stringify(new URL('../../runtime/execution-router/dispatch.mjs',import.meta.url).href)});
+const policy=await loadPolicy(${JSON.stringify(f.policyPath)}),approval={approved_digest:${JSON.stringify(p.approval_digest)},approval_ref:'user approved fixture'};
+if(status){const result=await runPrepared(policy,'router-test',approval);assert.equal(result.status,status);assert.equal(result.verified,false);}
+else{await assert.rejects(()=>runPrepared(policy,'router-test',approval),{code:'EPERM'});const state=await inspect(policy,'router-test');assert.equal(state.status,'cleanup-uncertain');assert.equal(state.lock_retained,true);}
+assert.ok(inspectionCount>0,'denied probes must inspect the detached group');
+const next=await prepare(policy,${JSON.stringify(packet(f.workspace,{task_id:'next-task'}))}),nextApproval={...approval,approved_digest:next.approval_digest};
+dead=!transition;
+if(status)assert.equal((await runPrepared(policy,'next-task',nextApproval)).status,status);
+else await assert.rejects(()=>runPrepared(policy,'next-task',nextApproval),/Workspace already has a run/);
+console.log(JSON.stringify({inspectionCount,runStatus:(await inspect(policy,'router-test')).status,lockRetained:(await inspect(policy,'router-test')).lock_retained??false}));`;
+  const {stdout}=await exec(process.execPath,['--input-type=module','-e',script],{timeout:10000});
+  const observed=JSON.parse(stdout.trim());
+  assert.ok(observed.inspectionCount>0);
+  assert.equal(observed.runStatus,scenario.status??'cleanup-uncertain');
+  assert.equal(observed.lockRetained,!scenario.status);
+ });
+});
+
 test('isolated read-only profiles allow omitted protected branches',async()=>{
  const f=await fixture(),linked=path.join(f.root,'read-only-linked');
  await exec('git',['-C',f.workspace,'worktree','add','-qb','readonly-feature',linked]);
@@ -578,7 +794,7 @@ test('Unicode whitespace in protected branch names is preserved',async()=>{
 });
 
 test('CLI rejects irrelevant command options and fails stale status queries',async()=>{
- const f=await fixture(),cli=new URL('../../scripts/execution/router.mjs',import.meta.url).pathname;
+ const f=await fixture(),cli=fileURLToPath(new URL('../../scripts/execution/router.mjs',import.meta.url));
  await assert.rejects(()=>exec(process.execPath,[cli,'doctor','--policy',f.policyPath,'--facts','ignored']),/Unknown option/);
  await prepare(f.policy,packet(f.workspace));
  const stateFile=path.join(f.policy.state_dir,'runs','router-test','status.json');
@@ -662,4 +878,23 @@ test('retargeting a tracked link through Git metadata invalidates approval',asyn
  await unlink(metadataLink);await symlink('../second.txt',metadataLink);
  await assert.rejects(()=>runPrepared(f.policy,'router-test',{approved_digest:p.approval_digest,approval_ref:'user approved fixture'}),/workspace changed/);
  await assert.rejects(()=>readFile(path.join(f.policy.state_dir,'runs','router-test','agent-final.txt')),{code:'ENOENT'});
+});
+
+test('Codex launch adapter retains fixed sandbox, network and configuration restrictions',async()=>{
+ const f=await fixture(),prepared=await prepare(f.policy,packet(f.workspace));
+ const result=await runPrepared(f.policy,'router-test',{approved_digest:prepared.approval_digest,approval_ref:'user approved fixture'});
+ assert.equal(result.status,'returned');
+ const record=JSON.parse((await readFile(path.join(f.policy.state_dir,'runs','router-test','stdout.jsonl'),'utf8')).trim().split('\n')[0]);
+ assert.deepEqual(record.args,['exec','--ignore-user-config','--sandbox','read-only','--ephemeral','--json','--color','never','-c','approval_policy="never"','-c','sandbox_workspace_write.network_access=false','--cd',f.policy.workspace_roots[0],'--output-last-message',path.join(f.policy.state_dir,'runs','router-test','agent-final.txt'),'-']);
+});
+test('Codex subscription guard cannot be disabled while manual profile stays handoff-only',async()=>{
+ const f=await fixture();
+ f.data.profiles['codex-readonly'].requires_chatgpt_login=false;
+ await writeFile(f.policyPath,JSON.stringify(f.data));
+ await assert.rejects(()=>loadPolicy(f.policyPath),/subscription login/);
+ delete f.data.profiles['codex-readonly'];
+ f.data.profiles.manual={adapter:'manual',sandbox:'read-only',actions:['read'],max_seconds:60};
+ await writeFile(f.policyPath,JSON.stringify(f.data));
+ const policy=await loadPolicy(f.policyPath);
+ assert.equal((await prepare(policy,packet(f.workspace,{profile:'manual'}))).handoff_only,true);
 });

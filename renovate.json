@@ -8,7 +8,9 @@
     ":separateMultipleMajorReleases",
     "security:minimumReleaseAgePypi"
   ],
-  "dependencyDashboard": true,
+  "dependencyDashboard": {
+    "enabled": true
+  },
   "timezone": "America/Cancun",
   "schedule": [
     "before 6am on monday"

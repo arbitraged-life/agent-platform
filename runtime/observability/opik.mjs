@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
-import { validateEvent } from "./records.mjs";
-import { validateEvidence } from "./evidence.mjs";
-import { sendTelemetry, acceptedReceipt } from "./delivery.mjs";
+import { validateEvidence, validateObservabilityRecord } from "./evidence.mjs";
+import { sendTelemetry, acceptedReceipt, discardTelemetryResponse } from "./delivery.mjs";
 import configSchema from "../../schemas/opik-config.schema.json" with { type: "json" };
 
 export function validateOpikConfig(config) {
@@ -54,7 +53,8 @@ export function opikRecords(event, project) {
   } catch {
     throw new Error("Invalid telemetry event snapshot");
   }
-  validateEvent(event);
+  validateObservabilityRecord(event);
+  if (event.event_name !== "agent.turn.completed") throw new Error("Opik projection requires a completed turn");
   const trace = {
     id: event.event_id,
     name: event.event_name,
@@ -162,10 +162,12 @@ export function createOpikExporter(configuration, { environment = process.env, f
       ])
         requests.push({ key: `${resource}:${record.id}`, resource, method: "POST", record });
     }
+    if (requests.length > 2) throw new Error("Unsupported telemetry request count");
     const accepted = [...acceptedRecords];
-    for (const { key, resource, method, record } of requests) {
-      if (accepted.includes(key)) continue;
-      await sendTelemetry(
+    async function sendRequest(request) {
+      const { key, resource, method, record } = request;
+      if (accepted.includes(key)) return;
+      const response = await sendTelemetry(
         fetcher,
         `${config.endpoint}/v1/private/${resource}`,
         {
@@ -181,8 +183,12 @@ export function createOpikExporter(configuration, { environment = process.env, f
         },
         accepted,
       );
+      await discardTelemetryResponse(response);
       accepted.push(key);
     }
+    // A completed turn produces at most a trace and its dependent span.
+    if (requests[0]) await sendRequest(requests[0]);
+    if (requests[1]) await sendRequest(requests[1]);
     return acceptedReceipt(snapshot.trace_id ?? snapshot.event_id, accepted);
   };
 }

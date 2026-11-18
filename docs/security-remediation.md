@@ -20,6 +20,11 @@ consumer owns deployment, credentials, approvals and merging policy.
    `scripts/validate security` invoke this check. The existing weekday Test
    Insights scheduled run invokes the same helper, even if Mergify's optional
    JUnit-upload credential is missing.
+   Test Insights runs checked-out code in a secret-free job. A separate
+   credential-bearing job receives only same-run JUnit artifacts through pinned
+   actions; it does not checkout candidate code or execute reports. Scheduled
+   advisory checks still run if optional report transfer fails, and test failures
+   remain failures even when publication succeeds.
 3. Existing CI, unit tests, release-boundary checks, external security scanners,
    and merge protections verify proposed updates. A version bump alone is
    not proof of remediation.
