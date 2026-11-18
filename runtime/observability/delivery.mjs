@@ -1,4 +1,4 @@
-import { stableEvidenceId } from "./evidence.mjs";
+import { hasSensitiveValue, stableEvidenceId } from "./evidence.mjs";
 /** Export errors carry only controlled fields, never raw response text. */
 export class DeliveryError extends Error {
   constructor({
@@ -58,6 +58,13 @@ export function disabledExporter(status = "disabled") {
     { configurationStatus: status },
   );
 }
+export async function discardTelemetryResponse(response) {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Body disposal must not replace an HTTP outcome with provider-controlled content.
+  }
+}
 export async function sendTelemetry(fetcher, url, options, acceptedRecords = []) {
   let response;
   try {
@@ -69,6 +76,7 @@ export async function sendTelemetry(fetcher, url, options, acceptedRecords = [])
     const httpStatus = response.status;
     const denied = httpStatus === 401 || httpStatus === 403;
     // Only an explicit rate-limit rejection proves this request was not accepted.
+    await discardTelemetryResponse(response);
     throw new DeliveryError({
       code: `HTTP_${httpStatus}`,
       httpStatus,
@@ -144,6 +152,8 @@ export function validateDeliveryRecord(record) {
   for (const name of ["run_id", "runtime"])
     if (typeof record[name] !== "string" || !/^[a-zA-Z0-9_.:-]{1,256}$/.test(record[name]))
       throw new Error("Invalid delivery reference");
+  for (const name of ["run_id", "runtime"])
+    if (hasSensitiveValue(record[name])) throw new Error("Sensitive telemetry identifier");
   for (const name of ["observed_at", "recorded_at"])
     if (
       typeof record[name] !== "string" ||

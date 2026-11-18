@@ -91,8 +91,11 @@ export function createAppsScriptObservability(platform) {
         attributes: attr(base), severityNumber: base["agent.outcome"] === "failed" ? 17 : 9 });
     }
     // Child spans exist only for explicitly instrumented operations, never guessed model calls.
+    const operationIds = new Set();
     for (const operation of options.operations || []) {
       if (!operation || !text(operation.id) || !text(operation.name)) throw new Error("Invalid observed operation");
+      if (operationIds.has(operation.id)) throw new Error("Duplicate observed operation ID");
+      operationIds.add(operation.id);
       const childId = spanId(traceId, operation.id);
       const fields = attr({ "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": operation.name,
         "agent.timing.known": timestamp(operation.startedMs) && timestamp(operation.endedMs) && operation.endedMs >= operation.startedMs });
@@ -296,6 +299,22 @@ export function createAppsScriptObservability(platform) {
     const now = clock();
     if (!timestamp(now)) throw new Error("Invalid telemetry observation time");
     let state = locked(() => {
+      const saved = properties.getProperty(key);
+      let next = saved ? JSON.parse(saved) : null;
+      if (!receiptKey && next) {
+        if (!timestamp(next.observed_at_ms) || typeof next.source_digest !== "string")
+          throw new Error("Telemetry receipt lacks input identity; reconcile existing receipt");
+        const mapped = mapGeneration(options, next.observed_at_ms, next.id);
+        if (hash(JSON.stringify(mapped)) !== next.source_digest)
+          throw new Error("Telemetry generation identity collision");
+      } else if (!next) {
+        const observed = timestamp(options.endedMs) ? options.endedMs : now;
+        const id = uuid(options.traceId, observed);
+        const mapped = mapGeneration(options, observed, id);
+        next = { id, observed_at_ms: observed, source_digest: hash(JSON.stringify(mapped)),
+          periods: {}, destinations: [], mapped, signals: {}, status: "capacity_blocked",
+          accounting: { observed: {}, blocked: {} } };
+      }
       for (const dest of config.destinations) {
         registerPeriod(dest);
         const keyForBaseline = baselineKey(dest.period, dest.name);
@@ -304,15 +323,10 @@ export function createAppsScriptObservability(platform) {
         if (dest.otherUsage > previous) properties.setProperty(keyForBaseline, String(dest.otherUsage));
         reconcileDemand(dest.period, dest.name);
       }
-      const saved = properties.getProperty(key);
-      let next = saved ? JSON.parse(saved) : null;
-      if (next?.destinations.length) return next;
-      if (!next) {
-        const observed = timestamp(options.endedMs) ? options.endedMs : now;
-        const id = uuid(options.traceId, observed);
-        const mapped = mapGeneration(options, observed, id);
-        next = { id, periods: {}, destinations: [], mapped, signals: {}, status: "capacity_blocked",
-          accounting: { observed: {}, blocked: {} } };
+      // Reconciliation can update this receipt in storage; never account using its stale snapshot.
+      if (saved) next = JSON.parse(properties.getProperty(key));
+      if (next.destinations.length) return next;
+      if (!saved) {
         if (JSON.stringify(next).length > 8500) throw new Error("Telemetry receipt exceeds Apps Script property limit");
         const keys = properties.getKeys().filter((name) => name.startsWith(APP_TELEMETRY_PREFIX));
         const telemetryBytes = keys.reduce((total, name) =>

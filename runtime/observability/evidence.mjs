@@ -86,7 +86,7 @@ function capture(value, enabled) {
   const preview = new TextDecoder("utf-8", { fatal: false }).decode(bytes.subarray(0, PREVIEW_BYTES)).replace(/\uFFFD$/u, "");
   return { preview, byte_count: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), truncated: bytes.length > PREVIEW_BYTES, omitted: false, redacted: state.redacted };
 }
-function hasSensitiveValue(value) {
+export function hasSensitiveValue(value) {
   PRIVATE_KEY_BLOCK.lastIndex = 0;
   SENSITIVE_VALUE.lastIndex = 0;
   return PRIVATE_KEY_BLOCK.test(value) || SENSITIVE_VALUE.test(value);

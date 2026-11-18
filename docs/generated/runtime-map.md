@@ -70,13 +70,11 @@ flowchart LR
     n0de2f3f4ce1a --> naf8e142b8748
     n4d8b77f09fbd --> n6d7798d3734d
     n4d8b77f09fbd --> n0de2f3f4ce1a
-    n4d8b77f09fbd --> naf8e142b8748
     nd4a41462a65e --> n6d7798d3734d
     nd4a41462a65e --> n0de2f3f4ce1a
     ne68346c600cb --> n0de2f3f4ce1a
     n2e277b9cdbe2 --> n6d7798d3734d
     n2e277b9cdbe2 --> n0de2f3f4ce1a
-    n2e277b9cdbe2 --> naf8e142b8748
     n7bb1ccf57095 --> n6d7798d3734d
     n7bb1ccf57095 --> n0de2f3f4ce1a
     n7bb1ccf57095 --> nd4a41462a65e

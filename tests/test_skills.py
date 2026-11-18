@@ -228,6 +228,47 @@ class SkillTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'explicit overlay'):
             MODULE['verify_upstream'](self.root)
 
+    def test_removing_an_entire_upstream_skill_from_lock_is_rejected(self):
+        def omit_skill(lock):
+            lock['skills'].remove('cloudflare')
+            for name in list(lock['files']):
+                if name.startswith('skills/cloudflare/'):
+                    del lock['files'][name]
+                    lock['overlays'].pop(name, None)
+
+        self.edit('skills/upstream-lock.json', omit_skill)
+        with self.assertRaisesRegex(ValueError, 'Upstream skill names must match catalog entries'):
+            MODULE['verify_upstream'](self.root)
+
+    def test_non_catalog_license_cannot_empty_upstream_inventory(self):
+        shutil.copyfile(ROOT / 'README.md', self.root / 'README.md')
+
+        def forge_lock(lock):
+            lock['license_path'] = 'README.md'
+            lock['license_sha256'] = MODULE['sha'](self.root / 'README.md')
+            lock['skills'] = []
+            lock['files'] = {}
+            lock['overlays'] = {}
+
+        self.edit('skills/upstream-lock.json', forge_lock)
+        with self.assertRaisesRegex(ValueError, 'Upstream license must identify catalog skills'):
+            MODULE['verify_upstream'](self.root)
+
+    def test_catalog_upstream_license_requires_lock_membership(self):
+        license_path = json.loads((self.root / 'skills/upstream-lock.json').read_text())['license_path']
+
+        def mark_upstream(catalog):
+            next(row for row in catalog['skills'] if row['name'] == 'q-first-pr-review')['license'] = license_path
+
+        self.edit('skills/catalog.json', mark_upstream)
+        with self.assertRaisesRegex(ValueError, 'Upstream skill names must match catalog entries'):
+            MODULE['verify_upstream'](self.root)
+
+    def test_first_party_skill_cannot_join_upstream_lock(self):
+        self.edit('skills/upstream-lock.json', lambda lock: lock['skills'].append('q-first-pr-review'))
+        with self.assertRaisesRegex(ValueError, 'Upstream skill names must match catalog entries'):
+            MODULE['verify_upstream'](self.root)
+
     def test_omitted_and_extra_files_fail(self):
         extra = self.root / 'skills/wrangler/unreviewed.md'
         extra.write_text('not in the release inventory')

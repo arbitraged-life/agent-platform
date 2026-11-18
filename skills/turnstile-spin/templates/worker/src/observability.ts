@@ -3,20 +3,32 @@
  * + log-shipping pipelines can parse + index without regex hacks.
  */
 
-import type { SiteverifyLogEntry, ErrorCode } from './types.js';
+import type { Env, SiteverifyLogEntry } from './types.js';
 
 export interface LogContext {
 	durationMs: number;
 	upstreamStatus?: number;
-	errorCodes?: ErrorCode[];
+	errorCodes?: string[];
 	cdataValue?: string;
 	remoteipPresent: boolean;
 	idempotencyKeyPresent: boolean;
 }
 
-export function logSiteverify(outcome: 'ok' | 'fail' | 'error', ctx: LogContext): void {
+const SEVERITY = { debug: 0, info: 1, warn: 2, error: 3 } as const;
+
+export function logSiteverify(outcome: 'ok' | 'fail' | 'error', ctx: LogContext, minimumLevel: Env['LOG_LEVEL'] = 'info'): void {
+	if (ctx.upstreamStatus !== undefined && (ctx.upstreamStatus < 200 || ctx.upstreamStatus >= 300)) {
+		outcome = 'error';
+	}
+	let level: SiteverifyLogEntry['level'] = 'error';
+	if (outcome === 'ok') level = 'info';
+	else if (outcome === 'fail') level = 'warn';
+	const threshold = minimumLevel === 'debug' || minimumLevel === 'warn' || minimumLevel === 'error'
+		? minimumLevel
+		: 'info';
+	if (SEVERITY[level] < SEVERITY[threshold]) return;
 	const entry: SiteverifyLogEntry = {
-		level: outcome === 'ok' ? 'info' : outcome === 'fail' ? 'warn' : 'error',
+		level,
 		event: 'siteverify',
 		outcome,
 		duration_ms: ctx.durationMs,
