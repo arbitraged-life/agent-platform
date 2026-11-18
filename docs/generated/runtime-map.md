@@ -10,7 +10,7 @@ domain-level view.
 
 ```mermaid
 flowchart LR
-    n3b3bd3ff01d6["execution-router · 2 modules"]
+    n3b3bd3ff01d6["execution-router · 3 modules"]
     n6691ff7ae175["observability · 11 modules"]
     n6b46c59d409d["purity · 1 module"]
     nbd9463690bd1["review · 5 modules"]
@@ -33,6 +33,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
+    n79914d47db7a["execution-router/codex.mjs"]
     nc6119b3e11ec["execution-router/dispatch.mjs"]
     n7d83f63c67ca["execution-router/policy.mjs"]
     ne6f1fc7d5ee6["observability/apps-script.mjs"]
@@ -60,20 +61,20 @@ flowchart LR
     nbda559628a9a["review/github.py"]
     nf4725de15231["review/policy.py"]
     n70562998125a["review/transport.py"]
+    nc6119b3e11ec --> n79914d47db7a
     nc6119b3e11ec --> n7d83f63c67ca
+    n7d83f63c67ca --> n79914d47db7a
     n6d7798d3734d --> n0de2f3f4ce1a
     n9f2a6560098a --> n0de2f3f4ce1a
     n9f2a6560098a --> naf8e142b8748
     n0de2f3f4ce1a --> naf8e142b8748
     n4d8b77f09fbd --> n6d7798d3734d
     n4d8b77f09fbd --> n0de2f3f4ce1a
-    n4d8b77f09fbd --> naf8e142b8748
     nd4a41462a65e --> n6d7798d3734d
     nd4a41462a65e --> n0de2f3f4ce1a
     ne68346c600cb --> n0de2f3f4ce1a
     n2e277b9cdbe2 --> n6d7798d3734d
     n2e277b9cdbe2 --> n0de2f3f4ce1a
-    n2e277b9cdbe2 --> naf8e142b8748
     n7bb1ccf57095 --> n6d7798d3734d
     n7bb1ccf57095 --> n0de2f3f4ce1a
     n7bb1ccf57095 --> nd4a41462a65e

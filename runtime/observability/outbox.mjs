@@ -1,11 +1,14 @@
 import { mkdir, open, readdir, rename, rm, lstat, link } from "node:fs/promises";
-import { constants, readFileSync, readlinkSync } from "node:fs";
+import { constants, closeSync, openSync, readFileSync, readlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { validateObservabilityRecord } from "./evidence.mjs";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const NO_FAILURE = Symbol("no failure");
 let cachedOwnerIdentity;
 function ownerIdentity() {
   if (cachedOwnerIdentity !== undefined) return cachedOwnerIdentity;
@@ -27,6 +30,95 @@ function ownerIdentity() {
 const settled = (row) =>
   row.state === "recorded" && row.receipt &&
   Object.values(row.receipt.destinations).every((r) => ["accepted", "disabled"].includes(r.delivery_status));
+function throwFailures(failure, cleanupErrors, message) {
+  const errors = failure !== NO_FAILURE ? [failure, ...cleanupErrors] : cleanupErrors;
+  if (errors.length > 1) throw new AggregateError(errors, message);
+  if (errors.length === 1) throw errors[0];
+}
+
+async function removeTemporary(temporary, failure, message) {
+  try {
+    await rm(temporary, { force: true });
+  } catch (error) {
+    throwFailures(failure, [error], message);
+  }
+  if (failure !== NO_FAILURE) throw failure;
+}
+
+async function admissionFile(directory) {
+  const filename = path.join(directory, "admission.sqlite");
+  let state;
+  try {
+    state = await lstat(filename);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    const temporary = path.join(directory, `admission.${randomUUID()}.new`);
+    let created = false;
+    let failure = NO_FAILURE;
+    try {
+      const descriptor = openSync(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_RDWR | constants.O_NOFOLLOW, 0o600);
+      created = true;
+      // Close before linking: closing any descriptor of a locked inode releases POSIX locks.
+      closeSync(descriptor);
+      try {
+        await link(temporary, filename);
+      } catch (linkError) {
+        if (linkError.code !== "EEXIST") throw linkError;
+      }
+    } catch (error) {
+      failure = error;
+    }
+    if (created) await removeTemporary(temporary, failure, "Outbox admission initialization and cleanup failed");
+    if (failure !== NO_FAILURE) throw failure;
+    state = await lstat(filename);
+  }
+  // Never open/close an existing inode merely for preflight: that can drop our process's lock.
+  if (!state.isFile() || state.mode & 0o077 || (process.getuid && state.uid !== process.getuid()))
+    throw new Error("Unsafe outbox admission file");
+  return filename;
+}
+
+function beginAdmission(db, deadline) {
+  if (process.hrtime.bigint() >= deadline)
+    throw new Error("Outbox admission lock timed out; event not admitted");
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    return true;
+  } catch (error) {
+    if (!Number.isInteger(error.errcode) || (error.errcode & 0xff) !== 5) throw error;
+    return false;
+  }
+}
+
+async function acquireAdmission(db) {
+  const deadline = process.hrtime.bigint() + 5_000_000_000n;
+  if (beginAdmission(db, deadline)) return;
+  await new Promise((resolve, reject) => {
+    const timer = setInterval(() => {
+      try {
+        if (beginAdmission(db, deadline)) {
+          clearInterval(timer);
+          resolve();
+        }
+      } catch (error) {
+        clearInterval(timer);
+        reject(error);
+      }
+    }, 10);
+  });
+}
+
+function finishAdmission(db, active, failure) {
+  const cleanupErrors = [];
+  if (active) {
+    try { db.exec("ROLLBACK"); }
+    catch (error) { cleanupErrors.push(error); }
+  }
+  try { db.close(); }
+  catch (error) { cleanupErrors.push(error); }
+  throwFailures(failure, cleanupErrors, "Outbox admission and cleanup failed");
+}
+
 async function releaseAfterDelivery(lock, claim, deliver) {
   const errors = [];
   let result;
@@ -91,6 +183,24 @@ export function createDurableExporter({
     if (!info.isDirectory() || info.mode & 0o077 || (process.getuid && info.uid !== process.getuid()))
       throw new Error("Unsafe outbox directory");
   }
+  async function withAdmissionLock(action) {
+    const db = new DatabaseSync(await admissionFile(directory));
+    let active = false;
+    let failure = NO_FAILURE;
+    let value;
+    try {
+      db.exec("PRAGMA busy_timeout=0");
+      await acquireAdmission(db);
+      active = true;
+      value = await action();
+      db.exec("COMMIT");
+      active = false;
+    } catch (error) {
+      failure = error;
+    }
+    finishAdmission(db, active, failure);
+    return value;
+  }
   async function read(name) {
     const handle = await open(path.join(directory, name), constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
     try {
@@ -134,15 +244,25 @@ export function createDurableExporter({
   }
   async function save(row) {
     const file = path.join(directory, `${row.event.event_id}.json`),
-      temporary = file + `.${process.pid}.tmp`;
+      temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
     const handle = await open(temporary, "wx", 0o600);
+    let failure = NO_FAILURE;
+    const cleanupErrors = [];
     try {
       await handle.writeFile(JSON.stringify(row));
       await handle.sync();
-    } finally {
-      await handle.close();
+    } catch (error) {
+      failure = error;
     }
-    await rename(temporary, file);
+    try { await handle.close(); }
+    catch (error) { cleanupErrors.push(error); }
+    if (failure === NO_FAILURE && cleanupErrors.length === 0) {
+      try { await rename(temporary, file); }
+      catch (error) { failure = error; }
+    }
+    try { await rm(temporary, { force: true }); }
+    catch (error) { cleanupErrors.push(error); }
+    throwFailures(failure, cleanupErrors, "Outbox save and temporary cleanup failed");
   }
   async function interrupt(row) {
     await onInterrupted(row.event, { receipts: row.receipt?.destinations, attempts: row.attempts });
@@ -163,7 +283,12 @@ export function createDurableExporter({
       await lock.sync();
     } catch (error) {
       if (error.code !== "EEXIST") {
-        if (lock) await lock.close();
+        if (lock) {
+          let closeError;
+          try { await lock.close(); }
+          catch (cleanupError) { closeError = cleanupError; }
+          throwFailures(error, closeError ? [closeError] : [], "Outbox claim creation and close failed");
+        }
         throw error;
       }
       // PID-only/foreign/active claims are ambiguous. Never steal or replay them.
@@ -206,21 +331,20 @@ export function createDurableExporter({
       };
     });
   }
-  async function submit(event) {
-    const snapshot = structuredClone(event);
-    validateObservabilityRecord(snapshot);
-    await prepare();
-    let row;
+  function requireSameEvent(row, snapshot) {
+    if (JSON.stringify(row.event) !== JSON.stringify(snapshot))
+      throw new Error("Outbox event identity collision");
+    return row;
+  }
+  async function existingRow(snapshot) {
     try {
-      row = await read(`${snapshot.event_id}.json`);
+      return requireSameEvent(await read(`${snapshot.event_id}.json`), snapshot);
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
+      return null;
     }
-    if (row) {
-      if (JSON.stringify(row.event) !== JSON.stringify(snapshot))
-        throw new Error("Outbox event identity collision");
-      return row;
-    }
+  }
+  async function roomForAdmission() {
     const names = (await readdir(directory)).filter(
       (name) => UUID.test(name.slice(0, -5)) && name.endsWith(".json"),
     );
@@ -234,32 +358,62 @@ export function createDurableExporter({
     }
     if (names.length - evicted >= maxEntries)
       throw new Error("Outbox capacity exhausted; unresolved evidence retained");
-    row = {
-      schema_version: 1,
-      event: snapshot,
-      state: "pending",
-      attempts: 0,
-      next_attempt_at: 0,
-      receipt: null,
-      evicted_delivered_count: evicted,
-      updated_at: new Date(now()).toISOString(),
-    };
+    return evicted;
+  }
+  async function finishInsertion(handle, temporary, created, failure) {
+    const cleanupErrors = [];
+    if (handle) {
+      try { await handle.close(); }
+      catch (error) { cleanupErrors.push(error); }
+    }
+    if (created) {
+      try { await rm(temporary, { force: true }); }
+      catch (error) { cleanupErrors.push(error); }
+    }
+    throwFailures(failure, cleanupErrors, "Outbox admission and temporary cleanup failed");
+  }
+  async function insertRow(row, snapshot) {
     // Exclusive creation prevents concurrent submitters from replacing a receipt.
+    const temporary = path.join(directory, `${snapshot.event_id}.${process.pid}.${randomUUID()}.new`);
     let handle;
-    const temporary = path.join(directory, `${snapshot.event_id}.${process.pid}.new`);
+    let created = false;
+    let failure = NO_FAILURE;
     try {
       handle = await open(temporary, "wx", 0o600);
+      created = true;
       await handle.writeFile(JSON.stringify(row));
       await handle.sync();
-      await link(temporary, path.join(directory, `${snapshot.event_id}.json`));
+      try {
+        await link(temporary, path.join(directory, `${snapshot.event_id}.json`));
+      } catch (error) {
+        if (error.code !== "EEXIST") throw error;
+        row = requireSameEvent(await read(`${snapshot.event_id}.json`), snapshot);
+      }
     } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      row = await read(`${snapshot.event_id}.json`);
-    } finally {
-      if (handle) await handle.close();
-      await rm(temporary, { force: true });
+      failure = error;
     }
+    await finishInsertion(handle, temporary, created, failure);
     return row;
+  }
+  async function submit(event) {
+    const snapshot = structuredClone(event);
+    validateObservabilityRecord(snapshot);
+    await prepare();
+    return withAdmissionLock(async () => {
+      const existing = await existingRow(snapshot);
+      if (existing) return existing;
+      const evicted = await roomForAdmission();
+      return insertRow({
+        schema_version: 1,
+        event: snapshot,
+        state: "pending",
+        attempts: 0,
+        next_attempt_at: 0,
+        receipt: null,
+        evicted_delivered_count: evicted,
+        updated_at: new Date(now()).toISOString(),
+      }, snapshot);
+    });
   }
   const send = (event) => serial(() => submit(event)).then((row) => schedule(() => deliver(row)));
   send.drain = ({ limit = 20 } = {}) =>

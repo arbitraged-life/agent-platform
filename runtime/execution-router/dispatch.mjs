@@ -1,15 +1,26 @@
-import { mkdir, rmdir, writeFile, readFile, rename, appendFile, rm, stat, realpath } from 'node:fs/promises';
+import { mkdir, mkdtemp, rmdir, writeFile, readFile, rename, appendFile, rm, stat, lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { validateTask, taskId, digest, contained, resolveProfile, workspaceFingerprint, doctorProfile, cleanEnvironment, exec, executableIdentity, VERSION } from './policy.mjs';
+import { codexAdapter } from './codex.mjs';
 const now=()=>new Date().toISOString();
 const runDir=(policy,id)=>path.join(policy.state_dir,'runs',taskId(id));
-async function json(filename,value) { const temp=filename+'.'+randomUUID()+'.tmp';await writeFile(temp,JSON.stringify(value,null,2)+'\n',{mode:0o600});await rename(temp,filename); }
+async function json(filename,value) {
+ const temp=filename+'.'+randomUUID()+'.tmp';
+ try {
+  await writeFile(temp,JSON.stringify(value,null,2)+'\n',{mode:0o600});
+  await rename(temp,filename);
+ } catch(error) {
+  try {await rm(temp,{force:true});}
+  catch(cleanupError) {throw new AggregateError([error,cleanupError],'JSON write and temporary cleanup failed');}
+  throw error;
+ }
+}
 const readJson=async filename=>JSON.parse(await readFile(filename,'utf8'));
 async function event(dir,type,metadata={}) { await appendFile(path.join(dir,'events.jsonl'),JSON.stringify({at:now(),type,...metadata})+'\n',{mode:0o600}); }
-function renderHandoff(task) { const id=task.task_id,workspace=task.workspace; return `# Handoff: ${id}\n\nProject: ${task.project}\nProfile: ${task.profile}\nWorkspace: ${workspace}\nActions: ${task.actions.join(', ')}\nReason: ${task.delegation_reason}: ${task.delegation_detail}\n\n## Objective\n${task.objective}\n\n## Acceptance criteria\n${task.acceptance_criteria.map(c=>'- '+c).join('\n')}\n\n## References\n${task.references.map(r=>'- '+r).join('\n')}\n\n## Boundaries\nWork only on this task. Do not launch another agent, install dependencies, commit, push, deploy, send messages, access unrelated personal files, change permissions, or spend additional API money. Stop and report a blocker when broader authority is needed. Read the applicable repository instructions. Return a factual summary, changed paths, commands and outcomes, and unresolved issues. Do not claim independent acceptance.\n\nThe launch adapter does not inherit ChatGPT connectors or hidden conversation context. Model-provider access is separate from task network permissions.\n`; }
+function renderHandoff(task) { const id=task.task_id,workspace=task.workspace; return `# Handoff: ${id}\n\nProject: ${task.project}\nProfile: ${task.profile}\nWorkspace: ${workspace}\nActions: ${task.actions.join(', ')}\nReason: ${task.delegation_reason}: ${task.delegation_detail}\n\n## Objective\n${task.objective}\n\n## Acceptance criteria\n${task.acceptance_criteria.map(c=>'- '+c).join('\n')}\n\n## References\n${task.references.map(r=>'- '+r).join('\n')}\n\n## Boundaries\nWork only on this task. Do not launch another agent, install dependencies, commit, push, deploy, send messages, access unrelated personal files, change permissions, or spend additional API money. Stop and report a blocker when broader authority is needed. Read the applicable repository instructions. Return a factual summary, changed paths, commands and outcomes, and unresolved issues. Do not claim independent acceptance.\n\nThe launch adapter does not inherit the originating host's connectors or hidden conversation context. Model-provider access is separate from task network permissions.\n`; }
 const qHelper=fileURLToPath(new URL('../../skills/q-first-pr-review/scripts/triage.py',import.meta.url));
 export function validateReviewSnapshot(review,snapshot) {
  if(!snapshot || typeof snapshot!=='object' || snapshot.repository!==review.repository || snapshot.pr!==review.pr
@@ -64,6 +75,36 @@ async function reviewSnapshot(policy,task) {
  try{response=JSON.parse(stdout);}catch{throw new Error('Q-first review snapshot malformed; do not dispatch another reviewer');}
  return digest({snapshot:validateReviewSnapshot(task.review_context,response),helper:digest(await readFile(qHelper))});
 }
+async function assertPreparationOwner(dir,owner,message) {
+ const current=await lstat(dir);
+ if(!owner||!current.isDirectory()||current.dev!==owner.dev||current.ino!==owner.ino)
+  throw new Error(message);
+}
+async function rollbackPreparation(dir,owner,error) {
+ let rollbackRoot,claimed=false,cleanupError;
+ try {
+  // Check the initial owned directory before creating a private quarantine.
+  await assertPreparationOwner(dir,owner,'Task preparation directory ownership changed');
+  rollbackRoot=await mkdtemp(path.join(path.dirname(dir),'.prepare-rollback-'));
+  const claimedDir=path.join(rollbackRoot,'task');
+  // Claim the public path atomically; never recursively delete that path.
+  await rename(dir,claimedDir);claimed=true;
+  await assertPreparationOwner(claimedDir,owner,'Task preparation directory ownership changed during rollback claim');
+  await rm(claimedDir,{recursive:true});claimed=false;
+ } catch(error_) {cleanupError=error_;}
+ if(rollbackRoot&&!claimed) {
+  try {await rmdir(rollbackRoot);rollbackRoot=undefined;}
+  catch(containerError) {cleanupError=cleanupError
+   ?new AggregateError([cleanupError,containerError],'Rollback container cleanup failed'):containerError;}
+ }
+ if(cleanupError) {
+  const cleanupPath=rollbackRoot??dir;
+  const combined=new AggregateError([error,cleanupError],`Task preparation and cleanup failed; inspect ${cleanupPath}`);
+  combined.cleanup_path=cleanupPath;
+  return combined;
+ }
+ return error;
+}
 export async function prepare(policy,input) {
  const task=validateTask(input);const {workspace,profile}=await resolveProfile(policy,task); task.workspace=workspace;
  const reviewSnapshotDigest=await reviewSnapshot(policy,task);
@@ -74,13 +115,20 @@ export async function prepare(policy,input) {
  await mkdir(path.join(policy.state_dir,'runs'),{recursive:true,mode:0o700});
  const dir=runDir(policy,id);
  try{await mkdir(dir,{mode:0o700});}catch(e){if(e.code==='EEXIST')throw new Error('Task already exists; inspect it or use a new task_id');throw e;}
- const prepared={router_version:VERSION,status:'prepared',task_id:id,project:task.project,created_at:now(),expires_at:new Date(Date.now()+86400000).toISOString(),policy_digest:policy.config_digest,workspace_fingerprint:fingerprint,packet_digest:digest(task),review_snapshot_digest:reviewSnapshotDigest,executable_identity:executable,profile:task.profile,verified:false};
- prepared.approval_digest=digest({router_version:VERSION,packet:task,policy:policy.config_digest,workspace:fingerprint,executable,review_snapshot_digest:reviewSnapshotDigest,expires_at:prepared.expires_at});
- await json(path.join(dir,'packet.json'),task);await json(path.join(dir,'status.json'),prepared);
- const handoff=renderHandoff(task);
- await writeFile(path.join(dir,'HANDOFF.md'),handoff,{mode:0o600});
- await event(dir,'prepared',{task_id:id,project:task.project,profile:task.profile,policy_version:policy.policy_version});
- return {...prepared,handoff_path:path.join(dir,'HANDOFF.md'),handoff_only:profile.adapter==='manual'};
+ let owner;
+ try {
+  owner=await lstat(dir);
+  if(!owner.isDirectory())throw new Error('Task preparation directory ownership changed');
+  const prepared={router_version:VERSION,status:'prepared',task_id:id,project:task.project,created_at:now(),expires_at:new Date(Date.now()+86400000).toISOString(),policy_digest:policy.config_digest,workspace_fingerprint:fingerprint,packet_digest:digest(task),review_snapshot_digest:reviewSnapshotDigest,executable_identity:executable,profile:task.profile,verified:false};
+  prepared.approval_digest=digest({router_version:VERSION,packet:task,policy:policy.config_digest,workspace:fingerprint,executable,review_snapshot_digest:reviewSnapshotDigest,expires_at:prepared.expires_at});
+  await json(path.join(dir,'packet.json'),task);await json(path.join(dir,'status.json'),prepared);
+  const handoff=renderHandoff(task);
+  await writeFile(path.join(dir,'HANDOFF.md'),handoff,{mode:0o600});
+  await event(dir,'prepared',{task_id:id,project:task.project,profile:task.profile,policy_version:policy.policy_version});
+  return {...prepared,handoff_path:path.join(dir,'HANDOFF.md'),handoff_only:profile.adapter==='manual'};
+ } catch(error) {
+  throw await rollbackPreparation(dir,owner,error);
+ }
 }
 export async function inspect(policy,id) {
  const state=await readJson(path.join(runDir(policy,id),'status.json'));
@@ -95,17 +143,40 @@ export async function requestCancel(policy,id) {
 }
 function stopChild(child) { if(!child.pid)return;try {if(process.platform==='win32')child.kill('SIGTERM');else process.kill(-child.pid,'SIGTERM');}catch(e){if(e.code!=='ESRCH')throw e;} }
 function killChild(child) { if(!child.pid)return;try {if(process.platform==='win32')child.kill('SIGKILL');else process.kill(-child.pid,'SIGKILL');}catch(e){if(e.code!=='ESRCH')throw e;} }
-function groupAlive(child) {
+async function groupAlive(child) {
  if(process.platform==='win32'||!child?.pid)return false;
- try{process.kill(-child.pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw error;}
+ try{process.kill(-child.pid,0);return true;}catch(error){
+  if(error.code==='ESRCH')return false;
+  // Detached children have no controlling terminal. Darwin ps -g without -x
+  // omits them, so an empty inspection cannot establish that the group died.
+  // Confirm both group identity and zombie state before treating EPERM as dead.
+  if(process.platform==='darwin'&&error.code==='EPERM'){
+   try{
+    const {stdout}=await exec('/bin/ps',['-x','-g',String(child.pid),'-o','pgid=,state='],{timeout:2000,maxBuffer:65536,env:{COMMAND_MODE:'unix2003'}});
+    const listing=stdout.trim();
+    if(listing&&listing.split('\n').every(line=>{
+     const member=/^\s*(\d+)\s+(\S+)\s*$/.exec(line);
+     return member&&Number(member[1])===child.pid&&member[2].startsWith('Z');
+    }))return false;
+    // Empty, malformed, mismatched or unavailable inspection is not proof.
+   }catch{}
+  }
+  throw error;
+ }
 }
 async function stopRemainingGroup(child) {
- if(!groupAlive(child))return {lingering:false,stopped:true};
- stopChild(child);
- for(let i=0;i<10&&groupAlive(child);i++)await new Promise(resolve=>setTimeout(resolve,100));
- if(groupAlive(child))killChild(child);
- for(let i=0;i<10&&groupAlive(child);i++)await new Promise(resolve=>setTimeout(resolve,100));
- return {lingering:true,stopped:!groupAlive(child)};
+ if(!await groupAlive(child))return {lingering:false,stopped:true};
+ try{stopChild(child);}catch(error){
+  if(process.platform!=='darwin'||error.code!=='EPERM'||await groupAlive(child))throw error;
+ }
+ for(let i=0;i<10&&await groupAlive(child);i++)await new Promise(resolve=>setTimeout(resolve,100));
+ if(await groupAlive(child)){
+  try{killChild(child);}catch(error){
+   if(process.platform!=='darwin'||error.code!=='EPERM'||await groupAlive(child))throw error;
+  }
+ }
+ for(let i=0;i<10&&await groupAlive(child);i++)await new Promise(resolve=>setTimeout(resolve,100));
+ return {lingering:true,stopped:!await groupAlive(child)};
 }
 export async function runPrepared(policy,id,approval={}) {
  if(process.platform==='win32')throw new Error('Windows process-tree supervision is not supported; use a manual handoff');
@@ -141,7 +212,7 @@ export async function runPrepared(policy,id,approval={}) {
   // Re-read under the exclusive workspace lock to prevent double submission.
   if((await readJson(path.join(dir,'status.json'))).status!=='prepared')throw new Error('Run is not prepared');
   const finalPath=path.join(dir,'agent-final.txt'),outputLimit=profile.max_output_bytes??10*1024*1024;
-  const args=['exec','--ignore-user-config','--sandbox',profile.sandbox,'--ephemeral','--json','--color','never','-c','approval_policy="never"','-c','sandbox_workspace_write.network_access=false','--cd',workspace,'--output-last-message',finalPath,'-'];
+  const args=codexAdapter.launchArgs(profile,workspace,finalPath);
   // Recheck the approved branch, workspace and Q evidence under the exclusive lock before recording a launch.
   await resolveProfile(policy,task);
   if((await workspaceFingerprint(workspace,policy.state_dir)).digest!==state.workspace_fingerprint.digest)throw new Error('Prepared workspace changed before launch; prepare a new handoff');

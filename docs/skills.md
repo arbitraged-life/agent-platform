@@ -14,6 +14,10 @@ license, pinned upstream revision, and declared overlays. `./scripts/validate`
 also checks frontmatter/catalog agreement and bundled Markdown references.
 Changing upstream content requires an explicit overlay with a rationale and hash;
 adding files without updating the inventory fails validation.
+The lock's license must identify a nonempty catalog skill group, and its skill
+set must match that group exactly. A non-license file cannot declare an empty
+upstream inventory. Removing a skill and its file hashes together cannot exempt
+that skill from provenance validation.
 
 The Cloudflare source revision and original file hashes are recorded in
 `skills/upstream-lock.json`; its license is retained under `licenses/`. Upstream

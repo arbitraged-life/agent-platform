@@ -97,5 +97,65 @@
       "delegate_detail": "Other client could retry"
     },
     "expected": "needs-user"
+  },
+  {
+    "name": "explicit legacy contract retains original labels",
+    "facts": {"contract_version": 1, "local_available": true, "delegate_reason": "execution-lifecycle", "delegate_detail": "Bounded local execution"},
+    "expected": "local-agent"
+  },
+  {
+    "name": "v2 owner tool",
+    "facts": {"contract_version": 2, "native_available": true, "local_available": true},
+    "expected": "owner-tool"
+  },
+  {
+    "name": "v2 direct local",
+    "facts": {"contract_version": 2, "local_available": true},
+    "expected": "direct-local"
+  },
+  {
+    "name": "v2 independent remote executor",
+    "facts": {"contract_version": 2, "native_available": true, "local_available": false, "delegate_available": true, "delegate_reason": "execution-lifecycle", "delegate_detail": "Independent cloud execution"},
+    "expected": "delegated-agent"
+  },
+  {
+    "name": "v2 local route cannot infer delegated availability",
+    "facts": {"contract_version": 2, "local_available": true, "delegate_reason": "local-harness", "delegate_detail": "Needs separate agent"},
+    "expected": "direct-local"
+  },
+  {
+    "name": "v2 host boundary blocks native fallback",
+    "facts": {"contract_version": 2, "native_available": true, "local_available": true, "delegate_available": false, "host_delegation_required": true, "delegate_reason": "execution-lifecycle", "delegate_detail": "Host-bound work"},
+    "expected": "needs-user"
+  },
+  {
+    "name": "v2 host boundary is a concrete delegation reason",
+    "facts": {"contract_version": 2, "delegate_available": true, "host_delegation_required": true, "native_available": true},
+    "expected": "delegated-agent"
+  },
+  {
+    "name": "v2 host boundary can delegate",
+    "facts": {"contract_version": 2, "delegate_available": true, "host_delegation_required": true, "delegate_reason": "execution-lifecycle", "delegate_detail": "Host-bound execution"},
+    "expected": "delegated-agent"
+  },
+  {
+    "name": "v2 denial dominates delegation",
+    "facts": {"contract_version": 2, "authority_blocked": true, "native_available": true, "delegate_available": true, "host_delegation_required": true, "delegate_reason": "execution-lifecycle", "delegate_detail": "Different executor"},
+    "expected": "needs-user"
+  },
+  {
+    "name": "legacy contract rejects v2 host-boundary fact",
+    "facts": {"contract_version": 1, "native_available": true, "host_delegation_required": false},
+    "expected_error": "requires contract_version 2"
+  },
+  {
+    "name": "unknown contract version rejected",
+    "facts": {"contract_version": 3, "native_available": true},
+    "expected_error": "Unsupported routing contract_version"
+  },
+  {
+    "name": "v2 typed delegate availability rejected",
+    "facts": {"contract_version": 2, "authority_blocked": true, "delegate_available": "false"},
+    "expected_error": "delegate_available must be boolean"
   }
 ]

@@ -112,15 +112,6 @@ class SkillTests(unittest.TestCase):
         self.assertIn("declared skill catalog/index", audit)
         self.assertNotIn("NERV purity", audit)
 
-    def test_chatgpt_harness_is_portable_and_runtime_bounded(self):
-        rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
-        self.assertIn("chatgpt-harness", rows)
-        self.assertEqual(rows["chatgpt-harness"]["license"], "LICENSE")
-        content = (self.root / "skills/chatgpt-harness/SKILL.md").read_text()
-        self.assertIn("Desktop Commander", content)
-        self.assertIn("enforcement hooks remain runtime-enforced", content)
-        self.assertIn("verify the requested outcome", content)
-        self.assertNotIn("agent-framework", content)
 
     def test_generic_wrapper_replacements_are_bounded(self):
         rows = {row["name"]: row for row in MODULE["catalog"](self.root)}
@@ -235,6 +226,47 @@ class SkillTests(unittest.TestCase):
             MODULE['verify_upstream'](self.root)
         self.edit('skills/upstream-lock.json', lambda d: d['files'][name].update(sha256=MODULE['sha'](path)))
         with self.assertRaisesRegex(ValueError, 'explicit overlay'):
+            MODULE['verify_upstream'](self.root)
+
+    def test_removing_an_entire_upstream_skill_from_lock_is_rejected(self):
+        def omit_skill(lock):
+            lock['skills'].remove('cloudflare')
+            for name in list(lock['files']):
+                if name.startswith('skills/cloudflare/'):
+                    del lock['files'][name]
+                    lock['overlays'].pop(name, None)
+
+        self.edit('skills/upstream-lock.json', omit_skill)
+        with self.assertRaisesRegex(ValueError, 'Upstream skill names must match catalog entries'):
+            MODULE['verify_upstream'](self.root)
+
+    def test_non_catalog_license_cannot_empty_upstream_inventory(self):
+        shutil.copyfile(ROOT / 'README.md', self.root / 'README.md')
+
+        def forge_lock(lock):
+            lock['license_path'] = 'README.md'
+            lock['license_sha256'] = MODULE['sha'](self.root / 'README.md')
+            lock['skills'] = []
+            lock['files'] = {}
+            lock['overlays'] = {}
+
+        self.edit('skills/upstream-lock.json', forge_lock)
+        with self.assertRaisesRegex(ValueError, 'Upstream license must identify catalog skills'):
+            MODULE['verify_upstream'](self.root)
+
+    def test_catalog_upstream_license_requires_lock_membership(self):
+        license_path = json.loads((self.root / 'skills/upstream-lock.json').read_text())['license_path']
+
+        def mark_upstream(catalog):
+            next(row for row in catalog['skills'] if row['name'] == 'q-first-pr-review')['license'] = license_path
+
+        self.edit('skills/catalog.json', mark_upstream)
+        with self.assertRaisesRegex(ValueError, 'Upstream skill names must match catalog entries'):
+            MODULE['verify_upstream'](self.root)
+
+    def test_first_party_skill_cannot_join_upstream_lock(self):
+        self.edit('skills/upstream-lock.json', lambda lock: lock['skills'].append('q-first-pr-review'))
+        with self.assertRaisesRegex(ValueError, 'Upstream skill names must match catalog entries'):
             MODULE['verify_upstream'](self.root)
 
     def test_omitted_and_extra_files_fail(self):

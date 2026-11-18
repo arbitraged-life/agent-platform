@@ -255,6 +255,9 @@ async function responseBytes(response) {
       if (size > MAX_RESPONSE_BYTES) throw new Error("Large OTLP response");
       chunks.push(value);
     }
+  } catch (error) {
+    try { await reader.cancel(); } catch { /* Preserve the original read or size failure. */ }
+    throw error;
   } finally { reader.releaseLock(); }
   return Buffer.concat(chunks);
 }

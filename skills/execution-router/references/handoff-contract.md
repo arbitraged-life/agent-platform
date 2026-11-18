@@ -21,7 +21,7 @@ Task packets are JSON. Unknown top-level fields and legacy schema v1 are rejecte
 | acceptance_criteria | Nonempty unique strings, each requiring evidence |
 | references | Relevant source/artifact references; no credentials |
 | review_context | Required typed `{"schema_version":1,"kind":"general"}` or `kind:"pr-review"` with repository, PR number, exact head SHA, and independent acceptance evidence; see below |
-| parent_run_id | Optional originating observability ID |
+| parent_run_id | Optional originating run ID, when one exists |
 
 Tests run repository code and may write caches or perform other side effects;
 `test` is not equivalent to read-only inspection. Scope and inspect the test path.
@@ -77,7 +77,7 @@ Verification JSON:
 
 ```json
 {
-  "verifier": "chatgpt-controller",
+  "verifier": "originating-controller",
   "summary": "Checks actually performed and their result.",
   "criteria": [{"criterion": "Exact criterion from packet", "passed": true,
                 "evidence": "Observed command, exit code, or inspected state"}],

@@ -47,6 +47,100 @@ const GENERATION = { traceId: "classifier-1", sessionId: "session-1", provider: 
   startedMs: 1730000000000, endedMs: 1730000000040, inputTokens: 7, outputTokens: 3,
   input: "SECRET_PROMPT", output: "SECRET_RESPONSE", error: "secret-error" };
 
+test("duplicate operation IDs reject before telemetry persistence or export", () => {
+  for (const operations of [
+    [{ id: "tool-1", name: "lookup", startedMs: 1730000000001, endedMs: 1730000000002 },
+      { id: "tool-1", name: "fetch", startedMs: 1730000000003, endedMs: 1730000000004 }],
+    [{ id: "tool-1", name: "lookup" },
+      { id: "tool-1", name: "fetch", startedMs: 1730000000003, endedMs: 1730000000004 }]
+  ]) {
+    const f = fixture(TARGET);
+    const initial = [...f.properties.entries()];
+    let writes = 0;
+    f.afterWrite(() => { writes++; });
+    assert.throws(() => f.capture({ ...GENERATION, operations }), /Duplicate observed operation ID/);
+    assert.equal(f.calls.length, 0);
+    assert.equal(writes, 0);
+    assert.deepEqual([...f.properties.entries()], initial);
+  }
+});
+
+test("same sanitized generation remains idempotent after delivery and clock advancement", () => {
+  const f = fixture(TARGET);
+  assert.equal(f.capture(GENERATION), true);
+  const [key, serialized] = [...f.properties.entries()].find(([name]) => name.startsWith("AGENT_TELEMETRY_TRACE_"));
+  const receipt = JSON.parse(serialized);
+  assert.equal(receipt.observed_at_ms, GENERATION.endedMs);
+  assert.match(receipt.source_digest, /^[a-f0-9]{64}$/);
+  assert.equal(receipt.mapped, null);
+  f.setNow(GENERATION.endedMs + 5000);
+  assert.equal(f.capture({ ...GENERATION, input: "NEW_PRIVATE_PROMPT", output: "NEW_PRIVATE_OUTPUT",
+    error: "different private error" }), true);
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.properties.get(key), serialized);
+});
+
+test("unknown-timing capture uses saved observation time for public replay", () => {
+  const f = fixture({ ...TARGET, AGENT_TELEMETRY_MODE: "split", LOGFIRE_ALLOWANCE: "0" });
+  const generation = { ...GENERATION, startedMs: undefined, endedMs: undefined };
+  assert.equal(f.capture(generation), true);
+  const receipt = JSON.parse([...f.properties.entries()].find(([name]) => name.startsWith("AGENT_TELEMETRY_TRACE_"))[1]);
+  assert.equal(receipt.observed_at_ms, 1730000000000);
+  f.setNow(1730000005000);
+  assert.equal(f.capture(generation), true);
+  assert.equal(f.calls.length, 1);
+});
+
+test("observable changes collide with an existing receipt before billing mutations", () => {
+  const f = fixture(TARGET);
+  const generation = { ...GENERATION, operations: [
+    { id: "lookup-1", name: "lookup", startedMs: 1730000000001, endedMs: 1730000000002 }
+  ] };
+  assert.equal(f.capture(generation), true);
+  const persisted = [...f.properties.entries()].filter(([key]) => key.startsWith("AGENT_TELEMETRY_"));
+  const changes = [
+    { inputTokens: 8 }, { endedMs: GENERATION.endedMs + 1 },
+    { operations: [{ ...generation.operations[0], name: "search" }] },
+    { operations: [{ ...generation.operations[0], id: "lookup-2" }] },
+    { operations: [{ ...generation.operations[0], failed: true }] }
+  ];
+  for (const change of changes) {
+    assert.throws(() => f.capture({ ...generation, ...change }), /Telemetry generation identity collision/);
+    assert.deepEqual([...f.properties.entries()].filter(([key]) => key.startsWith("AGENT_TELEMETRY_")), persisted);
+    assert.equal(f.calls.length, 2);
+  }
+});
+
+test("legacy completed receipt cannot be replayed without an input digest", () => {
+  const f = fixture(TARGET);
+  assert.equal(f.capture(GENERATION), true);
+  const key = [...f.properties.keys()].find((name) => name.startsWith("AGENT_TELEMETRY_TRACE_"));
+  const receipt = JSON.parse(f.properties.get(key));
+  delete receipt.source_digest;
+  delete receipt.observed_at_ms;
+  f.properties.set(key, JSON.stringify(receipt));
+  assert.equal(receipt.mapped, null);
+  assert.throws(() => f.capture(GENERATION), /Telemetry receipt lacks input identity; reconcile existing receipt/);
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.properties.get(key), JSON.stringify(receipt));
+});
+
+test("internal drain can resume a pending legacy receipt without public input identity", () => {
+  const f = fixture({ ...TARGET, AGENT_TELEMETRY_MODE: "split",
+    HONEYCOMB_ALLOWANCE: "0", LOGFIRE_ALLOWANCE: "0" });
+  assert.equal(f.capture(GENERATION), false);
+  const key = [...f.properties.keys()].find((name) => name.startsWith("AGENT_TELEMETRY_TRACE_"));
+  const receipt = JSON.parse(f.properties.get(key));
+  delete receipt.source_digest;
+  delete receipt.observed_at_ms;
+  f.properties.set(key, JSON.stringify(receipt));
+  assert.throws(() => f.capture(GENERATION), /Telemetry receipt lacks input identity; reconcile existing receipt/);
+  f.properties.set("HONEYCOMB_ALLOWANCE", "1");
+  assert.equal(createAppsScriptObservability(f.gas).drain(), 1);
+  assert.equal(f.calls.length, 1);
+  assert.equal(JSON.parse(f.properties.get(key)).source_digest, undefined);
+});
+
  test("complete real generation forms one root span with stable identity and sanitized aggregate usage", () => {
   const f = fixture(TARGET);
   assert.equal(f.capture(GENERATION), true);

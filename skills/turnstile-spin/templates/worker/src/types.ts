@@ -45,7 +45,7 @@ export interface SiteverifyResponse {
 	hostname?: string;
 	action?: string;
 	cdata?: string;
-	'error-codes': ErrorCode[];
+	'error-codes': string[];
 	/** Free-form metadata appended by this Worker. Not from upstream. */
 	_worker?: WorkerMetadata;
 }
@@ -72,6 +72,8 @@ export type ErrorCode =
 	// Worker-side codes (not from upstream)
 	| 'missing-token'
 	| 'invalid-content-type'
+	| 'request-too-large'
+	| 'invalid-upstream-response'
 	| 'upstream-unreachable'
 	| 'upstream-timeout'
 	| 'hostname-mismatch';
@@ -86,7 +88,7 @@ export interface SiteverifyLogEntry {
 	outcome: 'ok' | 'fail' | 'error';
 	duration_ms: number;
 	upstream_status?: number;
-	error_codes: ErrorCode[];
+	error_codes: string[];
 	cdata_present: boolean;
 	remoteip_present: boolean;
 	idempotency_key_present: boolean;

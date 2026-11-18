@@ -10,7 +10,7 @@ When updating the pin, put the exact npm CLI on `PATH` in an isolated temporary 
 
 ## Knip
 
-The root manifest and lockfile pin Knip 6.44.0. Run `npm ci --ignore-scripts` in the repository root, then `npm run lint:knip`. The strict command fails on findings; `npm run lint:knip:report` displays findings without failing for existing lint issues. Configuration/internal errors still fail. CI runs the report uncached. No automatic deletion or fix is enabled.
+The root manifest and lockfile pin Knip 6.44.1. Run `npm ci --ignore-scripts` in the repository root, then `npm run lint:knip`. The strict command fails on findings; `npm run lint:knip:report` displays findings without failing for existing lint issues. Configuration/internal errors still fail. CI runs the report uncached. No automatic deletion or fix is enabled.
 
 Knip covers every tracked JavaScript/TypeScript package manifest without consolidating independent lockfiles. It does not analyze unused Python or shell code. CLI, Worker and externally consumed runtime entrypoints are represented explicitly. Install each package's locked dependencies before interpreting unresolved tool-binary findings.
 

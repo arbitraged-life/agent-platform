@@ -59,6 +59,13 @@ token=...&remoteip=1.2.3.4
 
 `cf-turnstile-response` is accepted as an alias for `token` in both body types, so a `<form>` posting directly to the Worker works without any client-side JavaScript.
 
+JSON, URL-encoded, and multipart bodies are limited to 16 KiB, including form
+framing. The Worker counts streamed bytes before parsing, even when Content-Length
+is absent or understated. An oversized body returns HTTP 413 without calling
+Siteverify; a body exactly at the limit remains admissible.
+Supported media types are matched exactly and case-insensitively. Parameter
+values, including multipart boundary bytes, retain their original case.
+
 ### Response
 
 ```json
@@ -75,7 +82,10 @@ token=...&remoteip=1.2.3.4
 }
 ```
 
-On validation failure, `success` is `false` and `error-codes` lists the reasons. The HTTP status is `200` regardless of validation outcome (callers should check `response.success`). On Worker-level failures, the HTTP status reflects the error class (400 for bad input, 415 for unsupported content type, 500 for missing secret, 502/504 for upstream issues).
+On token rejection, `success` is the boolean `false` and `error-codes` lists the reasons. A valid upstream 2xx verification result returns HTTP `200` regardless of token outcome; callers must check `response.success`. Worker failures return 400 for bad input, 413 for an oversized body, 415 for unsupported content type, 500 for a missing secret, or 502/504 for upstream issues. Malformed upstream 2xx JSON or response fields return 502 with `invalid-upstream-response`, without retrying that malformed result. Transport interruptions retain the bounded retry policy.
+HTTP-error diagnostics always return `success: false` and string-array error
+codes. Known optional diagnostic fields are retained only when they are strings;
+other provider metadata remains available for existing callers.
 
 #### Error codes
 
@@ -87,6 +97,8 @@ On validation failure, `success` is `false` and `error-codes` lists the reasons.
 | `invalid-input-response`   | Token rejected by upstream                                          |
 | `timeout-or-duplicate`     | Token expired (>5min) or already validated                          |
 | `invalid-content-type`     | Body content-type was not JSON or form-encoded                      |
+| `request-too-large`        | Request body exceeds 16 KiB; rejected before Siteverify             |
+| `invalid-upstream-response` | Upstream 2xx response has invalid JSON or response fields          |
 | `upstream-unreachable`     | Could not reach `challenges.cloudflare.com`                         |
 | `upstream-timeout`         | Upstream timed out: 5 seconds per attempt, at most two attempts                                 |
 | `hostname-mismatch`        | `EXPECTED_HOSTNAME` is set and the response hostname did not match  |
@@ -103,6 +115,12 @@ On validation failure, `success` is `false` and `error-codes` lists the reasons.
 | `LOG_LEVEL`             | var     | `info`    | One of `debug`, `info`, `warn`, `error`. Filters structured logs.   |
 
 Set vars in `wrangler.toml` (`[vars]` block) or via `wrangler deploy --var KEY:value`. Secrets only via `wrangler secret put`.
+
+`LOG_LEVEL` is a minimum severity: `warn` suppresses successful verification logs;
+`error` retains Worker errors and non-2xx upstream HTTP failures. Ordinary token
+rejection on upstream HTTP 200 remains `warn` and is filtered at the `error`
+threshold. Missing or invalid values use `info`. Logs do not include the token,
+secret, visitor IP, idempotency key, or cdata value.
 
 ## Frontend snippet
 
@@ -136,7 +154,7 @@ After the first deploy, before pointing real traffic:
 
 | Step                                                           | Why                                                                 |
 | -------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Set `ALLOWED_ORIGIN` to your real domain in `wrangler.toml`    | Locks CORS so other sites cannot proxy through your Worker          |
+| Set `ALLOWED_ORIGIN` to your real domain in `wrangler.toml`    | Controls which browser origins may read responses; does not authenticate callers or block requests |
 | Set `EXPECTED_HOSTNAME` if your widget is single-domain        | Defends against cross-site token replay                             |
 | Configure Workers Observability alerts on error rate > 1%      | Catches upstream outages or secret-misconfig events                 |
 | Rotate `TURNSTILE_SECRET_KEY` periodically                     | Standard secret hygiene                                             |
@@ -151,6 +169,13 @@ npm run typecheck
 ./node_modules/.bin/wrangler deploy --dry-run  # build locally; does not deploy
 npm run test:integration   # optional: real siteverify, uses Cloudflare test credentials
 ```
+
+The multipart cancellation tests in `test/unit.test.ts` finish encoding
+`FormData` before presenting its bytes as an incoming request stream. This
+separates client-side encoding from Worker-side cancellation under Node 24.
+For a manual HTTP smoke check, send chunked requests without `Content-Length`
+to exercise the streamed byte limit rather than only the declared-length
+rejection path.
 
 Cloudflare's documented test secrets:
 

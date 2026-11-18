@@ -14,6 +14,33 @@ knowledge layer.
 | PR structure | `examples/pr-quality/PULL_REQUEST_TEMPLATE.md` + `scripts/pr/validate_pr_contract.py` | Validator checks structure/evidence presence, not whether semantic Why/What claims are true |
 | Code-generation budgets | `scripts/quality/codegen_budget.py` + example config | Hard size budgets fail; comment/test ratios are advisory by default |
 | Team style | `repo-style-miner` skill | Mine accepted target-repo PRs/review feedback; never invent or publish proprietary examples here |
+| Tool-free review verdict | `scripts/review/stream_verdict.py` + `scripts/review/adversarial-review-gate.sh` | PASS requires empty findings; FAIL requires nonblank findings; a valid shape does not establish factual review quality |
+
+Required PR headings and minimum content must be visible outside HTML comments.
+An unterminated comment hides the remaining body. Matched inline-code spans and
+escaped comment delimiters remain literal; code spans do not cross paragraph or
+block boundaries. Fenced examples do not create sections, and only a matching
+fence character of sufficient length closes them. Fence markers permit zero to
+three leading spaces relative to their list container. A nested fence ends when
+its list container ends; literal comments inside it do not hide later sections.
+Thematic breaks take precedence over list prefixes. An ordered list may interrupt
+a paragraph only when it starts at 1; other start numbers remain valid after
+block boundaries and for subsequent list items.
+Closed raw HTML blocks (`pre`, `script`, `style`, and `textarea`) also end the
+paragraph context. Their contents do not open Markdown lists or fences; inline
+or escaped tags are not block boundaries.
+At document level, four-space and tab-indented pseudo-closers remain code content
+and cannot expose hidden section headings.
+The purity checker rejects standard, diff3, and longer Git conflict blocks
+without an ignore-tag bypass. A standalone equals run in Markdown may be a
+Setext heading underline; opening, base, and closing conflict markers still fail.
+
+The tool-free review gate waits for the completed assistant `message_end`, not
+an intermediate `text_end` block. It validates the complete text, rejects
+duplicate JSON fields and trailing non-JSON content, and fails closed on an
+invalid completed response even if a later message contains a valid PASS.
+Error-bearing completions are rejected even when their error field is null.
+JSON decoder failures follow the same rejection and child-cleanup path.
 
 ## Intended work-repository rollout
 

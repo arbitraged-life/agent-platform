@@ -1,6 +1,5 @@
-import { validateEvent } from "./records.mjs";
-import { validateEvidence } from "./evidence.mjs";
-import { sendTelemetry, acceptedReceipt, validateDeliveryRecord } from "./delivery.mjs";
+import { validateObservabilityRecord } from "./evidence.mjs";
+import { sendTelemetry, acceptedReceipt, validateDeliveryRecord, discardTelemetryResponse } from "./delivery.mjs";
 import configSchema from "../../schemas/posthog-config.schema.json" with { type: "json" };
 
 export function validatePosthogConfig(config) {
@@ -53,8 +52,9 @@ export function posthogOperationalRecord(event) {
       },
     };
   }
+  if (event.record_type === "agent.trace") throw new Error("PostHog projection requires one record");
   if (event.record_type === "agent.evidence") {
-    validateEvidence(event);
+    validateObservabilityRecord(event);
     if (event.metrics !== null) {
       const record = posthogOperationalRecord(event.metrics);
       record.properties.evidence_event_id = event.event_id;
@@ -73,7 +73,7 @@ export function posthogOperationalRecord(event) {
       },
     };
   }
-  validateEvent(event);
+  validateObservabilityRecord(event);
   return {
     event: "personal_os_agent_turn_completed",
     properties: {
@@ -118,7 +118,7 @@ export function createPosthogExporter(configuration, { environment = process.env
       event: record.event,
       properties: record.properties,
     };
-    await sendTelemetry(fetcher, `${config.endpoint}/i/v0/e/`, {
+    const response = await sendTelemetry(fetcher, `${config.endpoint}/i/v0/e/`, {
       method: "POST",
       redirect: "error",
       headers: { "Content-Type": "application/json" },
@@ -129,6 +129,7 @@ export function createPosthogExporter(configuration, { environment = process.env
       }),
       signal: AbortSignal.timeout(5000),
     });
+    await discardTelemetryResponse(response);
     return acceptedReceipt(record.properties.event_id, [`capture:${record.properties.event_id}`]);
   };
 }
