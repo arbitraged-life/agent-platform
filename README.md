@@ -45,7 +45,9 @@ the test suite uses isolated fixtures and fake clients.
 
 Semgrep Managed Scans own automatic full-repository and pull-request diff scans.
 `.github/workflows/semgrep.yml` is a manual-only fallback (`workflow_dispatch`)
-that runs `semgrep ci` using the repository's `SEMGREP_APP_TOKEN` secret.
+that runs `semgrep ci --no-suppress-errors` using the repository's `SEMGREP_APP_TOKEN`
+secret, so authentication and scanner errors fail the fallback instead of looking
+like a clean scan.
 Run it on demand with `gh workflow run semgrep.yml --ref <branch>`.
 It is not an automatic PR check or a required merge gate.
 
