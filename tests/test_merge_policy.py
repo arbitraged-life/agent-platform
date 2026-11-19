@@ -40,41 +40,73 @@ class MergePolicyTests(unittest.TestCase):
 
     def test_high_risk_rules_take_precedence_over_general_automerge(self):
         rules = self.policy["packageRules"]
-        start = next(i for i, r in enumerate(rules) if r.get("minimumReleaseAge") == "14 days")
-        self.assertGreater(start, max(i for i, r in enumerate(rules) if r.get("automerge") is True))
-        restricted = rules[start:]
-        self.assertEqual(len(restricted), 9)
-        for rule in restricted[1:]:
+        last_automatic = max(i for i, rule in enumerate(rules) if rule.get("automerge") is True)
+        cooldown = next(i for i, rule in enumerate(rules) if rule.get("minimumReleaseAge") == "14 days")
+        self.assertGreater(cooldown, last_automatic)
+
+        def reviewed_rule(predicate):
+            matching = [(i, rule) for i, rule in enumerate(rules) if predicate(rule)]
+            self.assertTrue(matching, "Required high-risk rule is missing")
+            index, rule = matching[-1]
+            self.assertGreater(index, last_automatic)
             self.assertIs(rule["automerge"], False)
             self.assertIs(rule["dependencyDashboardApproval"], True)
-        self.assertEqual(restricted[1]["matchDatasources"], ["npm"])
-        self.assertEqual(set(restricted[1]["matchUpdateTypes"]),
-                         {"pin", "pinDigest", "digest", "lockFileMaintenance"})
-        self.assertIsNone(restricted[1]["minimumReleaseAge"])
-        managers = set(restricted[2]["matchManagers"])
-        self.assertTrue({"github-actions", "terraform", "circleci", "dockerfile",
-                         "docker-compose", "custom.regex"}.issubset(managers))
-        paths = restricted[3]["matchFileNames"]
-        self.assertTrue({"infra/**", ".github/workflows/**", ".circleci/**"}.issubset(paths))
-        self.assertEqual(restricted[4]["matchDatasources"], ["node-version", "python-version"])
-        packages = restricted[5]["matchPackageNames"]
-        self.assertTrue({"@modelcontextprotocol/**", "@cloudflare/**", "wrangler",
-                         "miniflare", "@google-cloud/**", "@azure/**", "jose",
-                         "cryptography", "google-auth", "mcp"}.issubset(packages))
-        self.assertEqual(restricted[6]["matchUpdateTypes"], ["lockFileMaintenance"])
-        self.assertIs(restricted[6]["automerge"], False)
-        self.assertIsNone(restricted[6]["minimumReleaseAge"])
-        self.assertEqual(set(restricted[7]["matchUpdateTypes"]),
-                         {"lockfileUpdate", "rollback", "bump", "replacement"})
-        self.assertIs(restricted[7]["automerge"], False)
-        self.assertIsNone(restricted[7]["minimumReleaseAge"])
-        security_patch = restricted[8]
-        self.assertEqual(security_patch["matchDatasources"], ["node-version", "python-version"])
-        self.assertEqual(security_patch["matchUpdateTypes"], ["patch"])
+            return rule
+
+        npm_unaged = reviewed_rule(lambda rule:
+            rule.get("matchDatasources") == ["npm"] and
+            set(rule.get("matchUpdateTypes", [])) == {"pin", "pinDigest", "digest", "lockFileMaintenance"})
+        self.assertIsNone(npm_unaged["minimumReleaseAge"])
+
+        managers = {"github-actions", "terraform", "circleci", "dockerfile",
+                    "docker-compose", "custom.regex"}
+        reviewed_rule(lambda rule: managers.issubset(rule.get("matchManagers", [])))
+        paths = {"infra/**", ".github/workflows/**", ".circleci/**"}
+        reviewed_rule(lambda rule: paths.issubset(rule.get("matchFileNames", [])))
+        reviewed_rule(lambda rule:
+            rule.get("matchDatasources") == ["node-version", "python-version"] and
+            "matchUpdateTypes" not in rule)
+        packages = {"@modelcontextprotocol/**", "@cloudflare/**", "wrangler",
+                    "miniflare", "@google-cloud/**", "@azure/**", "jose",
+                    "cryptography", "google-auth", "mcp"}
+        reviewed_rule(lambda rule: packages.issubset(rule.get("matchPackageNames", [])))
+
+        maintenance = reviewed_rule(lambda rule: rule.get("matchUpdateTypes") == ["lockFileMaintenance"])
+        self.assertIsNone(maintenance["minimumReleaseAge"])
+        unaged = reviewed_rule(lambda rule:
+            set(rule.get("matchUpdateTypes", [])) == {"lockfileUpdate", "rollback", "bump", "replacement"})
+        self.assertIsNone(unaged["minimumReleaseAge"])
+        security_patch = reviewed_rule(lambda rule:
+            rule.get("matchDatasources") == ["node-version", "python-version"] and
+            rule.get("matchUpdateTypes") == ["patch"])
         self.assertEqual(security_patch["schedule"], [])
-        self.assertIs(security_patch["automerge"], False)
-        self.assertIs(security_patch["dependencyDashboardApproval"], True)
         self.assertIn("security-toolchain", security_patch["addLabels"])
+
+        # This is an update-discovery exclusion, not another merge-policy rule.
+        compatibility = next(rule for rule in rules if
+            rule.get("matchDatasources") == ["python-version"] and
+            rule.get("matchFileNames") == [".github/workflows/ci.yml"])
+        self.assertIs(compatibility["enabled"], False)
+        self.assertEqual(compatibility["matchManagers"], ["github-actions"])
+        self.assertEqual(compatibility["matchDatasources"], ["python-version"])
+        self.assertEqual(compatibility["matchFileNames"], [".github/workflows/ci.yml"])
+        pattern = compatibility["matchCurrentValue"]
+        self.assertTrue(pattern.startswith("/") and pattern.endswith("/"))
+        for manager, datasource, filename, version, expected in [
+            ("github-actions", "python-version", ".github/workflows/ci.yml", "3.12", True),
+            ("github-actions", "python-version", ".github/workflows/ci.yml", "3.13", True),
+            ("github-actions", "python-version", ".github/workflows/ci.yml", "3.14", False),
+            ("github-actions", "python-version", ".github/workflows/ci.yml", "3.12.1", False),
+            ("custom.regex", "python-version", ".github/workflows/ci.yml", "3.12", False),
+            ("github-actions", "github-tags", ".github/workflows/ci.yml", "3.12", False),
+            ("github-actions", "python-version", ".github/workflows/other.yml", "3.13", False),
+        ]:
+            with self.subTest(manager=manager, datasource=datasource, filename=filename, version=version):
+                matches = (manager in compatibility["matchManagers"] and
+                           datasource in compatibility["matchDatasources"] and
+                           filename in compatibility["matchFileNames"] and
+                           re.search(pattern[1:-1], version) is not None)
+                self.assertEqual(matches, expected)
         self.assertEqual(self.policy["vulnerabilityAlerts"]["schedule"], [])
         self.assertEqual(self.policy["vulnerabilityAlerts"]["prCreation"], "immediate")
         self.assertTrue(self.policy["platformAutomerge"])

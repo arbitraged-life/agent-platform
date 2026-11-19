@@ -16,7 +16,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: ${{ matrix.os == 'ubuntu-24.04' && 30 || 15 }}
     steps:
       - name: Harden Runner
         if: ${{ github.event.repository.private == false }}
@@ -33,6 +33,8 @@ jobs:
         with:
           python-version: '3.14.9'
       - run: ./scripts/setup
+        env:
+          PIP_CACHE_DIR: ${{ runner.temp }}/pip-python-3.14
       - name: Knip report (advisory findings; tool errors fail)
         run: npm run lint:knip:report
       - name: Exercise real local report cache without caching validation
@@ -40,6 +42,38 @@ jobs:
           npm run quality:cached -- --summarize
           npm run quality:cached -- --summarize
       - run: ./scripts/validate
+      # Keep compatibility inside the existing required Linux check, not advisory
+      # jobs or another matrix dimension that would rename Mergify's checks.
+      - name: Select Python 3.12 compatibility line
+        if: matrix.os == 'ubuntu-24.04'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Validate Python 3.12 in a fresh environment
+        if: matrix.os == 'ubuntu-24.04'
+        env:
+          PIP_CACHE_DIR: ${{ runner.temp }}/pip-python-3.12
+        run: |
+          mv .venv "$RUNNER_TEMP/validation-python-3.14"
+          python3 -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+          ./scripts/setup
+          .venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3, 12), sys.version'
+          ./scripts/validate
+      - name: Select Python 3.13 compatibility line
+        if: matrix.os == 'ubuntu-24.04'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Validate Python 3.13 in a fresh environment
+        if: matrix.os == 'ubuntu-24.04'
+        env:
+          PIP_CACHE_DIR: ${{ runner.temp }}/pip-python-3.13
+        run: |
+          mv .venv "$RUNNER_TEMP/validation-python-3.12"
+          python3 -c 'import sys; assert sys.version_info[:2] == (3, 13), sys.version'
+          ./scripts/setup
+          .venv/bin/python -c 'import sys; assert sys.version_info[:2] == (3, 13), sys.version'
+          ./scripts/validate
   review-identity:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-26.04
