@@ -18,6 +18,19 @@ select `urls` entries with `packagetype == "bdist_wheel"`, collect their
 line under the exact version pin. Compare that set with the metadata when
 updating the lock; installation verifies the selected artifact with `--require-hashes`.
 
+CI keeps the required `validate (ubuntu-24.04)` and `validate (macos-15)` checks:
+both run the primary Python 3.14 validation, and the same required Linux job
+also runs `./scripts/setup` and `./scripts/validate` with Python 3.12 and 3.13.
+Each compatibility run moves the previous `.venv` to the runner's temporary
+directory before setup, uses its own pip cache, and checks both the selected
+interpreter and the new environment's minor version. A compatibility failure
+therefore fails the existing required Linux check; macOS is not multiplied.
+Linux has a 30-minute job limit for these three executions; macOS retains 15.
+The lower minor lines select their latest available patches, while a narrowly
+scoped Renovate rule prevents those two CI inputs from being upgraded to another
+minor. Renovate still owns dependency/toolchain updates, and Mergify's required
+checks and merge rules are unchanged.
+
 The platform contains the execution router, bounded review and remediation,
 portable skills, deterministic evaluations, and reusable validation, review and
 stale-item workflows. Commodity dependency updates and merge coordination are
