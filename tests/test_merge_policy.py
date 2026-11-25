@@ -50,6 +50,9 @@ class MergePolicyTests(unittest.TestCase):
             self.assertTrue(matching, "Required high-risk rule is missing")
             index, rule = matching[-1]
             self.assertGreater(index, last_automatic)
+            if "minimumReleaseAge" in rule and rule["minimumReleaseAge"] is None:
+                self.assertGreater(
+                    index, cooldown, "Age-clearing review rules must follow cooldown")
             self.assertEqual(
                 {key for key in rule if key.startswith(("match", "exclude"))}, matchers,
                 "High-risk rule matchers must not narrow its intended scope")
@@ -153,6 +156,23 @@ class MergePolicyTests(unittest.TestCase):
                     check.policy["packageRules"][index][matcher] = value
                     with self.assertRaises(AssertionError):
                         check.test_high_risk_rules_take_precedence_over_general_automerge()
+
+    def test_age_clearing_rules_cannot_precede_npm_cooldown(self):
+        for index, rule in enumerate(self.policy["packageRules"]):
+            if "minimumReleaseAge" not in rule or rule["minimumReleaseAge"] is not None:
+                continue
+            with self.subTest(rule=rule["description"]):
+                check = MergePolicyTests(
+                    "test_high_risk_rules_take_precedence_over_general_automerge")
+                check.policy = copy.deepcopy(self.policy)
+                rules = check.policy["packageRules"]
+                moved = rules.pop(index)
+                cooldown = next(i for i, candidate in enumerate(rules)
+                                if candidate.get("minimumReleaseAge") == "14 days")
+                rules.insert(cooldown, moved)
+                with self.assertRaisesRegex(
+                        AssertionError, "Age-clearing review rules must follow cooldown"):
+                    check.test_high_risk_rules_take_precedence_over_general_automerge()
 
     def test_mergify_does_not_queue_or_housekeep_renovate(self):
         # auto_merge_conditions triggers autoqueue, not just a required check.

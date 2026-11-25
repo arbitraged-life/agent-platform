@@ -63,6 +63,9 @@ including the major-update approval rule, and reject exclusion keys and negated
 patterns. Mutation regressions reject added branch restrictions, patch-only
 update scopes, and exclusions so updates cannot silently escape review or
 inherit an earlier generic automerge rule.
+Rules that clear `minimumReleaseAge` must also follow the npm cooldown so the
+later rule merge preserves the explicit null age. Reordering regressions cover
+the npm pin/digest, global lock-file maintenance, and other unaged-update rules.
 
 A minimum age is not a malware guarantee: `pin`, lockfile maintenance, and
 some digest updates do not carry enforceable publication timestamps. These
