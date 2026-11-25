@@ -1,4 +1,5 @@
 """Public dependency merge ownership and eligibility contract."""
+import copy
 import json
 import re
 from pathlib import Path
@@ -44,41 +45,52 @@ class MergePolicyTests(unittest.TestCase):
         cooldown = next(i for i, rule in enumerate(rules) if rule.get("minimumReleaseAge") == "14 days")
         self.assertGreater(cooldown, last_automatic)
 
-        def reviewed_rule(predicate):
+        def reviewed_rule(predicate, matchers):
             matching = [(i, rule) for i, rule in enumerate(rules) if predicate(rule)]
             self.assertTrue(matching, "Required high-risk rule is missing")
             index, rule = matching[-1]
             self.assertGreater(index, last_automatic)
+            self.assertEqual(
+                {key for key in rule if key.startswith("match")}, matchers,
+                "High-risk rule matchers must not narrow its intended scope")
             self.assertIs(rule["automerge"], False)
             self.assertIs(rule["dependencyDashboardApproval"], True)
             return rule
 
         npm_unaged = reviewed_rule(lambda rule:
             rule.get("matchDatasources") == ["npm"] and
-            set(rule.get("matchUpdateTypes", [])) == {"pin", "pinDigest", "digest", "lockFileMaintenance"})
+            set(rule.get("matchUpdateTypes", [])) == {"pin", "pinDigest", "digest", "lockFileMaintenance"},
+            {"matchDatasources", "matchUpdateTypes"})
         self.assertIsNone(npm_unaged["minimumReleaseAge"])
 
         managers = {"github-actions", "terraform", "circleci", "dockerfile",
                     "docker-compose", "custom.regex"}
-        reviewed_rule(lambda rule: managers.issubset(rule.get("matchManagers", [])))
+        reviewed_rule(lambda rule: managers.issubset(rule.get("matchManagers", [])),
+                      {"matchManagers"})
         paths = {"infra/**", ".github/workflows/**", ".circleci/**"}
-        reviewed_rule(lambda rule: paths.issubset(rule.get("matchFileNames", [])))
+        reviewed_rule(lambda rule: paths.issubset(rule.get("matchFileNames", [])),
+                      {"matchFileNames"})
         reviewed_rule(lambda rule:
             rule.get("matchDatasources") == ["node-version", "python-version"] and
-            "matchUpdateTypes" not in rule)
+            "matchUpdateTypes" not in rule, {"matchDatasources"})
         packages = {"@modelcontextprotocol/**", "@cloudflare/**", "wrangler",
                     "miniflare", "@google-cloud/**", "@azure/**", "jose",
                     "cryptography", "google-auth", "mcp"}
-        reviewed_rule(lambda rule: packages.issubset(rule.get("matchPackageNames", [])))
+        reviewed_rule(lambda rule: packages.issubset(rule.get("matchPackageNames", [])),
+                      {"matchPackageNames"})
 
-        maintenance = reviewed_rule(lambda rule: rule.get("matchUpdateTypes") == ["lockFileMaintenance"])
+        maintenance = reviewed_rule(
+            lambda rule: rule.get("matchUpdateTypes") == ["lockFileMaintenance"],
+            {"matchUpdateTypes"})
         self.assertIsNone(maintenance["minimumReleaseAge"])
         unaged = reviewed_rule(lambda rule:
-            set(rule.get("matchUpdateTypes", [])) == {"lockfileUpdate", "rollback", "bump", "replacement"})
+            set(rule.get("matchUpdateTypes", [])) == {"lockfileUpdate", "rollback", "bump", "replacement"},
+            {"matchUpdateTypes"})
         self.assertIsNone(unaged["minimumReleaseAge"])
         security_patch = reviewed_rule(lambda rule:
             rule.get("matchDatasources") == ["node-version", "python-version"] and
-            rule.get("matchUpdateTypes") == ["patch"])
+            rule.get("matchUpdateTypes") == ["patch"],
+            {"matchDatasources", "matchUpdateTypes"})
         self.assertEqual(security_patch["schedule"], [])
         self.assertIn("security-toolchain", security_patch["addLabels"])
 
@@ -111,6 +123,26 @@ class MergePolicyTests(unittest.TestCase):
         self.assertEqual(self.policy["vulnerabilityAlerts"]["prCreation"], "immediate")
         self.assertTrue(self.policy["platformAutomerge"])
         self.assertFalse(self.policy["ignoreTests"])
+
+    def test_narrowed_high_risk_review_rules_are_rejected(self):
+        for index, rule in enumerate(self.policy["packageRules"]):
+            if (rule.get("automerge") is not False or
+                    rule.get("dependencyDashboardApproval") is not True or
+                    rule.get("matchUpdateTypes") == ["major"]):
+                continue
+            for matcher, value in [
+                ("matchBaseBranches", ["main"]),
+                ("matchUpdateTypes", ["patch"]),
+            ]:
+                if rule.get(matcher) == value:
+                    continue
+                with self.subTest(rule=rule["description"], matcher=matcher):
+                    check = MergePolicyTests(
+                        "test_high_risk_rules_take_precedence_over_general_automerge")
+                    check.policy = copy.deepcopy(self.policy)
+                    check.policy["packageRules"][index][matcher] = value
+                    with self.assertRaises(AssertionError):
+                        check.test_high_risk_rules_take_precedence_over_general_automerge()
 
     def test_mergify_does_not_queue_or_housekeep_renovate(self):
         # auto_merge_conditions triggers autoqueue, not just a required check.

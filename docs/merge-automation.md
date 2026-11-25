@@ -58,6 +58,11 @@ alerts retain their existing immediate-PR exception and are never considered
 approved merely because an alert or the `security` label exists. Apply
 verified risk-based approval to those PRs explicitly.
 
+The merge-policy tests assert each required review rule's complete matcher set,
+not just its package names, managers, or paths. Mutation regressions verify that
+adding a branch restriction or narrowing update types to patches is rejected,
+so minor updates cannot silently inherit the earlier generic automerge rule.
+
 A minimum age is not a malware guarantee: `pin`, lockfile maintenance, and
 some digest updates do not carry enforceable publication timestamps. These
 **npm-sourced pin and digest updates are now review-only, and all lockfile maintenance in every ecosystem is review-only**,
