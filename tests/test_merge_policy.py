@@ -51,11 +51,17 @@ class MergePolicyTests(unittest.TestCase):
             index, rule = matching[-1]
             self.assertGreater(index, last_automatic)
             self.assertEqual(
-                {key for key in rule if key.startswith("match")}, matchers,
+                {key for key in rule if key.startswith(("match", "exclude"))}, matchers,
                 "High-risk rule matchers must not narrow its intended scope")
+            self.assertFalse(
+                any(value.startswith("!") for key in matchers for value in rule[key]),
+                "High-risk review scope must not exclude dependencies")
             self.assertIs(rule["automerge"], False)
             self.assertIs(rule["dependencyDashboardApproval"], True)
             return rule
+
+        reviewed_rule(lambda rule: rule.get("matchUpdateTypes") == ["major"],
+                      {"matchUpdateTypes"})
 
         npm_unaged = reviewed_rule(lambda rule:
             rule.get("matchDatasources") == ["npm"] and
@@ -127,13 +133,17 @@ class MergePolicyTests(unittest.TestCase):
     def test_narrowed_high_risk_review_rules_are_rejected(self):
         for index, rule in enumerate(self.policy["packageRules"]):
             if (rule.get("automerge") is not False or
-                    rule.get("dependencyDashboardApproval") is not True or
-                    rule.get("matchUpdateTypes") == ["major"]):
+                    rule.get("dependencyDashboardApproval") is not True):
                 continue
-            for matcher, value in [
+            mutations = [
                 ("matchBaseBranches", ["main"]),
                 ("matchUpdateTypes", ["patch"]),
-            ]:
+                ("excludePackageNames", ["jose"]),
+            ]
+            for matcher in ("matchPackageNames", "matchManagers", "matchFileNames"):
+                if matcher in rule:
+                    mutations.append((matcher, [*rule[matcher], "!" + rule[matcher][0]]))
+            for matcher, value in mutations:
                 if rule.get(matcher) == value:
                     continue
                 with self.subTest(rule=rule["description"], matcher=matcher):

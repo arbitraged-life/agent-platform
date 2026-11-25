@@ -59,9 +59,10 @@ approved merely because an alert or the `security` label exists. Apply
 verified risk-based approval to those PRs explicitly.
 
 The merge-policy tests assert each required review rule's complete matcher set,
-not just its package names, managers, or paths. Mutation regressions verify that
-adding a branch restriction or narrowing update types to patches is rejected,
-so minor updates cannot silently inherit the earlier generic automerge rule.
+including the major-update approval rule, and reject exclusion keys and negated
+patterns. Mutation regressions reject added branch restrictions, patch-only
+update scopes, and exclusions so updates cannot silently escape review or
+inherit an earlier generic automerge rule.
 
 A minimum age is not a malware guarantee: `pin`, lockfile maintenance, and
 some digest updates do not carry enforceable publication timestamps. These
