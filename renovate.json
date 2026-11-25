@@ -265,6 +265,20 @@
         "security-toolchain"
       ],
       "dependencyDashboardApproval": true
+    },
+    {
+      "description": "Keep CI compatibility on the supported Python 3.12 and 3.13 minor lines; setup-python selects their latest patches",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchDatasources": [
+        "python-version"
+      ],
+      "matchFileNames": [
+        ".github/workflows/ci.yml"
+      ],
+      "matchCurrentValue": "/^3\\.(12|13)$/",
+      "enabled": false
     }
   ],
   "customManagers": [

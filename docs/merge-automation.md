@@ -58,6 +58,15 @@ alerts retain their existing immediate-PR exception and are never considered
 approved merely because an alert or the `security` label exists. Apply
 verified risk-based approval to those PRs explicitly.
 
+The merge-policy tests assert each required review rule's complete matcher set,
+including the major-update approval rule, and reject exclusion keys and negated
+patterns. Mutation regressions reject added branch restrictions, patch-only
+update scopes, and exclusions so updates cannot silently escape review or
+inherit an earlier generic automerge rule.
+Rules that clear `minimumReleaseAge` must also follow the npm cooldown so the
+later rule merge preserves the explicit null age. Reordering regressions cover
+the npm pin/digest, global lock-file maintenance, and other unaged-update rules.
+
 A minimum age is not a malware guarantee: `pin`, lockfile maintenance, and
 some digest updates do not carry enforceable publication timestamps. These
 **npm-sourced pin and digest updates are now review-only, and all lockfile maintenance in every ecosystem is review-only**,
