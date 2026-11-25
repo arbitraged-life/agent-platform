@@ -9,7 +9,12 @@ and its tests; it does not include the surrounding deployment skill or scripts.
 Choose the target account and an unused Worker name, configure the allowed origin
 and optional expected hostname, then use an approved Wrangler installation.
 
-This template requires Node 24 (or Node 26+); Vitest 5.1 requires Node 22.12+ and Wrangler 4.156 requires Node 22+. The pinned Node 24 typings and TypeScript 7 remain unchanged. The Undici 7.30.2 override carries the 7.x security fixes without switching to Undici 8. Approve an absolute, preinstalled Wrangler executable outside this project and verify its version before any credential-bearing command.
+This template requires Node 24 (or Node 26+); Vitest 5.1 requires Node 22.12+ and Wrangler 4.156 requires Node 22+. The pinned Node 24 typings and TypeScript 7 remain unchanged. The Undici 7.30.2 override carries the 7.x security fixes without switching to Undici 8. Approve an absolute, preinstalled Wrangler executable outside this project and verify that it is version 4.156.1 or a newer security-reviewed release before any credential-bearing command. The local devDependency does not upgrade that external executable; do not use the vulnerable 4.156.0 release for deployment.
+
+The local development toolchain pins
+[Wrangler 4.156.1](https://github.com/cloudflare/workers-sdk/releases/tag/wrangler%404.156.1),
+which fixes Pages sibling-path traversal, unintended source-directory upload,
+repeated-slash middleware bypass, and OAuth error-state callback validation.
 
 ```sh
 npm ci --ignore-scripts --include=dev   # needed for local tests, not for Wrangler deployment
